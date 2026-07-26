@@ -4,6 +4,7 @@
 // …) map 1:1 to future React components.
 
 import { h, mount } from "./lib.js";
+import { highlightCSharp } from "./highlight.js";
 
 export const baseName = (p) => (p ? p.split(/[\\/]/).pop() : "");
 
@@ -69,15 +70,19 @@ function SourceBody(d) {
   if (d.origin === "unavailable" || !d.lines.length)
     return [head, h("div", { class: "srcmsg" }, `source unavailable: ${d.reason || "no text"}`)];
   const width = String(d.lines[d.lines.length - 1].number).length;
+  // Highlight the slice as ONE stream (not line by line): block comments and verbatim/raw strings span
+  // lines, so the tokenizer carries its state across them. Tokens become text nodes / classed spans via
+  // h(), never markup — the source's `<`, `>` and `&` stay literal text with no escaping step to get wrong.
+  const hl = highlightCSharp(d.lines.map((l) => l.text));
   const code = h(
     "pre",
     { class: "srccode" },
-    d.lines.map((l) =>
+    d.lines.map((l, i) =>
       h(
         "div",
         { class: "srcline" },
         h("span", { class: "srcnum", style: `min-width:${width}ch` }, String(l.number)),
-        l.text,
+        hl[i].map((t) => (t.cls ? h("span", { class: t.cls }, t.text) : t.text)),
       ),
     ),
     d.truncatedCount > 0

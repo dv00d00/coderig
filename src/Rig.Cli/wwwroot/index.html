@@ -698,6 +698,67 @@
         font-size: 12px;
         line-height: 1.45;
       }
+      /* C# syntax palette (highlight.js emits the .sx-* classes) — theme-scoped, kept next to the panel it
+         serves rather than in the global token block, same as --add. Editor-familiar hues on purpose; the
+         highlighter is a READABILITY aid, so unclassified punctuation/operators keep var(--fg). */
+      :root,
+      :root[data-theme="dark"] {
+        --sx-comment: #6a9955;
+        --sx-keyword: #569cd6;
+        --sx-type: #4ec9b0;
+        --sx-string: #ce9178;
+        --sx-number: #b5cea8;
+        --sx-attr: #c586c0;
+        --sx-pre: #9b9b9b;
+      }
+      :root[data-theme="light"] {
+        --sx-comment: #008000;
+        --sx-keyword: #0000ff;
+        --sx-type: #267f99;
+        --sx-string: #a31515;
+        --sx-number: #098658;
+        --sx-attr: #af00db;
+        --sx-pre: #808080;
+      }
+      @media (prefers-color-scheme: light) {
+        :root:not([data-theme]) {
+          --sx-comment: #008000;
+          --sx-keyword: #0000ff;
+          --sx-type: #267f99;
+          --sx-string: #a31515;
+          --sx-number: #098658;
+          --sx-attr: #af00db;
+          --sx-pre: #808080;
+        }
+      }
+      .sx-comment,
+      .sx-doc {
+        color: var(--sx-comment);
+      }
+      /* XML doc (`///`) is a comment that is also API prose — same hue, dimmed a touch so it recedes */
+      .sx-doc {
+        opacity: 0.85;
+      }
+      .sx-keyword {
+        color: var(--sx-keyword);
+      }
+      .sx-type {
+        color: var(--sx-type);
+      }
+      /* chars share the string hue: same literal family, and two near-identical colors read as noise */
+      .sx-string,
+      .sx-char {
+        color: var(--sx-string);
+      }
+      .sx-number {
+        color: var(--sx-number);
+      }
+      .sx-attr {
+        color: var(--sx-attr);
+      }
+      .sx-pre {
+        color: var(--sx-pre);
+      }
       .srcline {
         white-space: pre;
       }
