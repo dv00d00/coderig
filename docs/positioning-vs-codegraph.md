@@ -86,17 +86,54 @@ does not refute that headline in general; it refutes it for this repo and questi
 
 ## Result 2 — call-graph fidelity (the load-bearing test)
 
-Seven targets, ground truth from source:
+Eight targets, ground truth from source:
 
 | target | call idiom | truth | CodeGraph | `rig` |
 |---|---|---|---|---|
-| `Argument.CheckNull` | static on concrete type | many | ✅ 20 callers | — |
-| `ProvideHealthcodeSettings` | same-class private | 3 | ✅ exactly 3 | — |
+| `Argument.CheckNull` | static on concrete type | ~99 sites / 48 files | ✅ 88 caller methods | ✅ 96 sites |
+| `Master.ProvideHealthcodeSettings` | same-class private **+ 1 cross-type** | 4 callers | ❌ 3 — missed the cross-type call | ✅ 4 |
+| `ConfigurationPane.ProvideHealthcodeSettings` | called from **property accessor bodies** | 12 callers | ❌ **0** | ✅ 12 |
 | `SetInvoiceSettings` | interface recv **in lambda** | `InvoiceMain.cs:706` | ❌ missed | ✅ |
 | `SetSiteSettings` | interface recv `srv?.` | `EditSite.cs:251` | ❌ missed | ✅ |
 | `SetCompanySettings` | interface recv `srv?.` | `Company/Edit.cs:736` | ❌ missed | ✅ |
 | `SetMedicalPersonSettings` | 1 direct **+** 1 lambda | `EditLive.cs:569`, `SaveClinicians.cs:298` | ❌ missed **both** | ✅ both |
 | `Save(optionalTransaction)` | inherited base method | `WorkflowMasterBase.cs:158` | ❌ **wrong target** | ✅ exact overload |
+
+### Correction to the first published version of this table
+
+The first two rows originally read `✅ 20 callers` and `✅ exactly 3`, with `—` for `rig`
+(meaning *not measured*, which was too easily misread as *rig found nothing*). Both were wrong,
+and the errors ran in CodeGraph's favour:
+
+- **`--limit` defaults to 20.** "20 callers" was a display cap, not recall. Re-run at
+  `--limit 500`, CodeGraph reports **88**. The original cell measured nothing.
+- **CodeGraph's own output was used as ground truth for row 2** — the exact methodological sin
+  this document warns about elsewhere. Read from source, `Master.ProvideHealthcodeSettings` has
+  **four** callers: the three sibling setters plus an expression-bodied method in another type
+  (`ConfigurationPane.cs:31` → `GetMaster().ProvideHealthcodeSettings()`). CodeGraph reports 3.
+- Worse, the *name* `ProvideHealthcodeSettings` belongs to **two** methods. The sibling on
+  `ConfigurationPane` is called 12 times, every one of them from inside a property accessor body:
+
+  ```csharp
+  // ConfigurationPane.cs:80-85
+  return ProvideHealthcodeSettings().UserName;    // get
+  ProvideHealthcodeSettings().UserName = value;   // set
+  ```
+
+  CodeGraph attributes **none** of them. That is a fourth blind-spot class — **property accessor
+  bodies** — in the same family as lambda bodies: a call is missed because of the *syntactic
+  construct enclosing it*.
+
+**Metric caveat, stated because the two tools do not count the same thing.** CodeGraph `callers`
+counts calling *methods*; `rig refs --kind invocation` counts *call sites*. One method calling a
+target twice is 1 vs 2. So `CheckNull` at 88-vs-96 is **not** evidence of under-reporting — it is
+consistent with several methods calling it more than once, and that row should be read as *both
+tools substantially complete*. The `ProvideHealthcodeSettings` rows are unaffected by the mismatch:
+0-vs-12 and 3-vs-4 are misses under either metric.
+
+Noted without irony: rig shipped exactly this accessor-body bug and fixed it (2026-06-16 —
+1,280 of ~22k effects were keyed to `P:` ids and invisible to reachability). The difference is
+that the fix was available, because the enclosing-symbol attribution is a fact rig controls.
 
 ### The controlled case
 
@@ -144,8 +181,11 @@ method names in .NET; this failure mode is not rare here.
 
 ### `rig` is the better tool for
 
-- **Correct call graphs on legacy .NET idioms.** Interface DI, lambdas, inheritance,
-  delegate/event handoffs — verified above; these are pervasive in this codebase.
+- **Correct call graphs on legacy .NET idioms.** Interface DI, lambdas, **property accessor
+  bodies**, inheritance, delegate/event handoffs — verified above; these are pervasive in this
+  codebase. Note the shared shape of the misses: a call is dropped because of the *syntactic
+  construct enclosing it* (lambda, accessor) or because binding it needs a *type* (interface
+  receiver, base-class overload). Neither is reachable from a syntax tree alone.
 - **Cross-project binding that survives the build system.** Because `rig` runs a real MSBuild
   design-time build, it binds across `ProjectReference`, paket, and binary references, and picks a
   concrete TFM (`--framework`) on multi-targeted projects. CodeGraph has no project model at all:
@@ -205,6 +245,9 @@ distributed. It is concentrated exactly where a 20-year-old FP-flavoured .NET mo
 - The cost A/B is a **single question** of the needle-lookup class, which favours grep. CodeGraph's
   exploratory-question benchmark (`explore`, its primary MCP tool) was **not** exercised.
 - CodeGraph's re-sync/incremental path — its actual headline claim — was not measured.
-- Seven fidelity targets is enough to characterise a boundary, not enough to quantify a rate.
-  The two false-negative classes (interface receivers, lambda bodies) reproduced on every instance
-  tried; the false-positive class was observed once.
+- Eight fidelity targets is enough to characterise a boundary, not enough to quantify a rate.
+  The three false-negative classes (interface receivers, lambda bodies, property accessor bodies)
+  reproduced on every instance tried; the false-positive class was observed once.
+- The first published version of this table scored two rows from CodeGraph's default-capped output
+  and, in one case, treated that output as ground truth. Both are corrected above. Any figure here
+  that was not re-derived from source should be treated as provisional.
