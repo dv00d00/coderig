@@ -11,6 +11,7 @@ moved to [archive/](archive/) (not deleted).
 
 ## Reference (current system)
 - **[ubiquitous-language.md](ubiquitous-language.md)** — shared vocabulary / glossary. Read first if a term is unclear.
+- **[contributing.md](contributing.md)** — delivery convention: contract-first TDD slices, rule-first extraction, slice template, build/test/ship commands.
 - **[fact-layer-refactor.md](fact-layer-refactor.md)** — the staged fact-layer pipeline; the **current architecture direction** (immutable facts → derived tables, no JSON blobs).
 - **[effect-capture-validation.md](effect-capture-validation.md)** — effect-capture validation method + the gap inventory (ground-truth findings).
 - **[async-model.md](async-model.md)** — background-processor surface + the async/handoff model + phased roadmap (phases 0–3 shipped; 4 partial; 5 open).
