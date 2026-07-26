@@ -662,6 +662,66 @@
         font-size: 11px;
         margin-left: 6px;
       }
+      /* the location chip doubles as the source toggle — click to expand `.srcpanel` beneath the node */
+      .loc-src {
+        cursor: pointer;
+        border-bottom: 1px dotted var(--border);
+      }
+      .loc-src:hover,
+      .loc-src.on {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+      }
+      /* inline source panel: the web render of `rig show` — file:line header + provenance, then a gutter'd
+         slice. Scrolls horizontally on its own so a long line never widens the tree. */
+      .srcpanel {
+        margin: 2px 0 5px 19px;
+        padding: 5px 8px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-left: 2px solid var(--accent);
+        border-radius: 4px;
+        overflow-x: auto;
+      }
+      .srchead {
+        color: var(--muted);
+        font-size: 11px;
+        margin-bottom: 4px;
+      }
+      /* git-blob provenance: the reader is NOT looking at their working tree — say so, loudly enough to notice */
+      .srcgit {
+        color: var(--warn);
+      }
+      .srccode {
+        margin: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .srcline {
+        white-space: pre;
+      }
+      .srcnum {
+        display: inline-block;
+        text-align: right;
+        color: var(--muted);
+        user-select: none;
+        padding-right: 8px;
+        margin-right: 8px;
+        border-right: 1px solid var(--border);
+      }
+      .srctrunc {
+        color: var(--muted);
+        font-style: italic;
+      }
+      .srcmsg {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .srcerr {
+        color: var(--danger);
+        font-size: 12px;
+      }
       /* subtree effect rollup — shown only when the branch is collapsed, so a folded node discloses what it touches */
       .rollup {
         display: none;

@@ -157,4 +157,10 @@ export const api = {
     getJson("/api/refs/unused" + qs({ store: explicitStore, filter })),
   refsUsage: (explicitStore, filter) =>
     getJson("/api/refs/usage" + qs({ store: explicitStore, filter })),
+  // Declaration source for ONE symbol id (`rig show`, web slice). UNCACHED (getJson, not cached): the text
+  // is read from the working tree / git, whose state the `derivationVersion` cache key does NOT capture —
+  // caching under that key could serve stale code after an edit. Keyed by symbol id only; the server
+  // resolves the file path from the store (never a client-supplied path).
+  source: (explicitStore, id, context) =>
+    getJson("/api/source" + qs({ id, store: explicitStore, context })),
 };

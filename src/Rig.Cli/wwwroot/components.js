@@ -41,10 +41,84 @@ function EffectGlyphs(effects) {
     ),
   );
 }
-function Loc(node) {
-  return node.file
-    ? h("span", { class: "loc" }, `${baseName(node.file)}:${node.line}`)
-    : null;
+// ---- the location chip, doubling as the SOURCE toggle ----------------------------------------------------
+// The rendered body of a /api/source response: a file:line header carrying the PROVENANCE marker, then the
+// gutter'd code — or, for a refusal, the one-line reason instead of code. Mirrors the CLI's `rig show` shape
+// (SourceRenderer.Render + OriginMarker); the gutter arrives as data (line numbers) and is right-aligned here.
+// Never renders an empty panel: every origin has something to say.
+function SourceBody(d) {
+  // git origin = NOT the reader's working tree, so the revision must be disclosed; a DIRTY store means even
+  // that blob may differ from what was indexed (same disclosure SourceRenderer.OriginMarker writes).
+  const marker =
+    d.origin === "git"
+      ? h(
+          "span",
+          { class: "srcgit" },
+          d.storeDirty
+            ? ` (from git ${d.commit}; store indexed a DIRTY tree — source may differ)`
+            : ` (from git ${d.commit})`,
+        )
+      : null;
+  const range = d.endLine > d.line ? `${d.line}-${d.endLine}` : `${d.line}`;
+  const head = h(
+    "div",
+    { class: "srchead", title: d.file },
+    `${baseName(d.file)}:${range}`,
+    marker,
+  );
+  if (d.origin === "unavailable" || !d.lines.length)
+    return [head, h("div", { class: "srcmsg" }, `source unavailable: ${d.reason || "no text"}`)];
+  const width = String(d.lines[d.lines.length - 1].number).length;
+  const code = h(
+    "pre",
+    { class: "srccode" },
+    d.lines.map((l) =>
+      h(
+        "div",
+        { class: "srcline" },
+        h("span", { class: "srcnum", style: `min-width:${width}ch` }, String(l.number)),
+        l.text,
+      ),
+    ),
+    d.truncatedCount > 0
+      ? h("div", { class: "srctrunc" }, `… truncated ${d.truncatedCount} lines`)
+      : null,
+  );
+  return [head, code];
+}
+// Loc(node, actions): the `file.cs:123` chip. With `actions.loadSource` wired it becomes a toggle — click to
+// fetch + expand an inline source panel directly beneath the node's row, click again to collapse. A fetch
+// error renders INSIDE the panel (the tree is never blanked). A node with no file has no chip at all, as before.
+function Loc(node, actions) {
+  if (!node.file) return null;
+  const chip = h("span", { class: "loc" }, `${baseName(node.file)}:${node.line}`);
+  if (!actions || !actions.loadSource) return chip;
+  chip.classList.add("loc-src");
+  chip.title = "show source";
+  let panel = null;
+  chip.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (panel) {
+      panel.remove();
+      panel = null;
+      chip.classList.remove("on");
+      return;
+    }
+    panel = h("div", { class: "srcpanel" }, h("div", { class: "srcmsg" }, "loading source…"));
+    chip.classList.add("on");
+    // Insert as the row's SIBLING: in the tree that lands between the row and its `.children`, so the code
+    // sits under its own node and above the subtree; in the flat/path lists it lands under the row.
+    const row = chip.closest(".row, .frow, .callers-ep") || chip.parentElement;
+    row.insertAdjacentElement("afterend", panel);
+    const mine = panel; // a second click may have removed it while the fetch was in flight
+    try {
+      const d = await actions.loadSource(node.id);
+      if (mine.isConnected) mount(mine, SourceBody(d));
+    } catch (err) {
+      if (mine.isConnected) mount(mine, h("div", { class: "srcerr" }, "source: " + err.message));
+    }
+  });
+  return chip;
 }
 // Opaque/collapse seam badge: a folded node is a labelled leaf (its subtree hidden server-side). A collapse
 // badge shows the hidden node count; the union of effects it hides rides on node.effects (rendered as glyphs).
@@ -244,7 +318,7 @@ function TreeNode(node, depth, ctx) {
       : null,
     ctx.hazards ? HazardMark(ctx.hazById.get(node.id)) : null,
     Trunc(node),
-    Loc(node),
+    Loc(node, ctx.actions),
     hasKids ? Rollup(agg) : null, // shown only when this branch is collapsed (CSS)
   );
   const wrap = h("div", { class: "node" }, row);
@@ -417,7 +491,7 @@ export function TreeView(s, actions) {
           " ",
           EffectGlyphs(fe),
           " ",
-          Loc(n),
+          Loc(n, ctx.actions),
         ),
       ),
     );
@@ -967,7 +1041,7 @@ export function CallersPanel(s, actions) {
           "div",
           { class: "callers-ep path-node", title: n.id, onClick: () => actions.openTree(n.id) },
           h("span", { class: "ep-route" }, n.name),
-          n.file ? h("span", { class: "loc" }, `${baseName(n.file)}:${n.line}`) : null,
+          Loc(n, actions),
         ),
       ),
     );

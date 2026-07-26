@@ -314,6 +314,10 @@ const actions = {
   closeCallers() {
     set({ callers: null });
   },
+  // Declaration source for one symbol id — backs the location-chip expander (components.js `Loc`). Returns
+  // the raw DTO and stays OUT of app state: the panel is transient DOM owned by the node that opened it (same
+  // treatment as the search dropdown), so expanding source never re-renders — or blanks — the tree.
+  loadSource: (id) => api.source(explicit(), id),
   async openReaches(node, { recordHistory = true } = {}) {
     const from = node.id;
     set({ callers: { target: from, mode: "reaches", loading: true } });
