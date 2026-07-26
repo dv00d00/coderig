@@ -78,6 +78,7 @@ Stores are **per-commit** — `--at <sha>` reads any previously indexed commit. 
 | `rig serve` | The interactive web explorer (`--port`, default 5050) |
 | `rig refs <pat>` | References to a symbol; or `--unused` / `--usage` for declared-but-unused assembly references |
 | `rig symbols <pat>` | FTS-accelerated symbol search |
+| `rig show <pat>` | The **source** of a matched declaration. `--context <n>` for surrounding lines · `--limit <n>` for how many matches. Reads the working tree only when it is provably the indexed revision (clean store, `SourceCommit` == HEAD, that file unmodified); otherwise reads the blob out of git and marks it `(from git <sha>)`. Never renders lines it cannot attribute — it prints the reason instead |
 | `rig di` | MS DI registrations: service → implementation, lifetime, source |
 | `rig dispatch-fans` | Diagnostic: dispatch hubs whose receiver failed to narrow the CHA fan-out, ranked by cause |
 | `rig files --skipped` | Files excluded from analysis, and the rule that excluded them |

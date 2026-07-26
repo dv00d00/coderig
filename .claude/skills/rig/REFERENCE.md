@@ -19,6 +19,7 @@
 | `rig dead [--lib] [--include-dispatch] [--all] [--root pat…] [--rules p…] [--format tsv]` | Unreachable first-party methods. Report-only. ⚠️ **Currently DISABLED** (unwired in Root.cs — errors "not matched"). See SKILL.md. |
 | `rig refs <pat> [--first-party] [--kind <refkind>] [--limit n]` | Reference facts to a symbol (invocation/methodGroup/ctor/typeUse/throw/attributeUse). |
 | `rig symbols <pat> [--kind <k>] [--limit n] [--no-lambdas]` | Declared symbols (method/type/property/field/event). `--no-lambdas` drops compiler `~λ`/`<>c` noise; when truncated prints "showing N of TOTAL". |
+| `rig show <pat> [--context n] [--limit n]` | Source text of a matched declaration (`Line`..`EndLine`), with a line-number gutter. **Attribution is enforced:** the working tree is read only when the store is clean, `SourceCommit` == HEAD, and that file is unmodified; otherwise the indexed revision is read from git and marked `(from git <sha>)`. If neither is possible it prints `file:line` plus a one-line reason rather than lines it cannot attribute. Declarations over 400 lines are truncated with an explicit marker. |
 | `rig di` | DI registrations (code + XML service descriptors + static rule mappings), run-agnostic. |
 | `rig files --skipped` | Source files skipped during indexing + why (diagnostic). |
 | `rig profile validate` | Validate the rules config for the working solution. |

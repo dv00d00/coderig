@@ -36,6 +36,7 @@ rig path "From" "To" [--async]               # one concrete path
 rig derive [--list-providers] [--exclude-namespace <ns>]   # ALL effects + EPs; --list-providers = the valid --only/--exclude token set
 rig entrypoints                              # rule-detected EPs by kind (--format tsv)
 rig refs "IFoo"  |  rig symbols "Foo" --kind method [--limit n] [--no-lambdas]
+rig show "Type.Method" [--context n] [--limit n]   # the SOURCE of a declaration — use this instead of Read when you have a rig location; it renders the INDEXED revision (marked "(from git <sha>)" when the working tree has moved) and refuses rather than render unattributable lines
 rig impact --base <ref> --head <ref> [--structural] [--format tsv]   # blast radius + behavioral delta (both refs REQUIRED; per-EP diff is the default)
 rig reaches "X" --store <id|sha>             # query a SPECIFIC commit's store
 ```

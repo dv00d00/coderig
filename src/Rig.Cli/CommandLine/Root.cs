@@ -30,6 +30,7 @@ internal static class Root
             FactCommands.BuildDi(output, error, workingDirectory),
             FactCommands.BuildSymbols(output, error, workingDirectory),
             FactCommands.BuildRefs(output, error, workingDirectory),
+            ShowCommand.Build(output, error, workingDirectory),
             PathCommand.Build(output, error, workingDirectory),
             TreeCommand.Build(output, error, workingDirectory),
             CallersCommand.Build(output, error, workingDirectory),
