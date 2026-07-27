@@ -44,6 +44,18 @@ internal static class CommonOptions
 
     internal static Option<string[]> Exclude() => FilterList(name: "--exclude", description: "Drop these effects (e.g. --exclude throw).");
 
+    // --intrinsic: restore the language-intrinsic providers (alloc, throw) that are hidden by default.
+    // They scale with code VOLUME rather than with behaviour and are ~91% of all effects on a large
+    // monorepo, so they are noise for review and signal only for low-level perf/robustness work.
+    // See EffectDerivation.IntrinsicProviders for why the set is closed at two.
+    internal static Option<bool> Intrinsic() =>
+        new("--intrinsic")
+        {
+            Description =
+                "Include language-intrinsic effects (alloc, throw) — every `new`/`throw`, proportional to code volume "
+                + "rather than behaviour, and hidden by default. Naming one in --only (e.g. --only alloc) implies this.",
+        };
+
     // --exclude-namespace <prefix>... (repeatable): drop hazard findings whose enclosing DocID namespace
     // starts with the given prefix (case-insensitive). Filters HAZARD output only — effects are unaffected.
     // Useful to suppress framework/vendored noise (e.g. --exclude-namespace Echo.Process --exclude-namespace System.).

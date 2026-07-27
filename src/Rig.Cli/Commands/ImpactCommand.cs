@@ -60,6 +60,9 @@ internal static class ImpactCommand
         var noCache = CommonOptions.NoCache();
         var noGate = CommonOptions.NoGate();
         var time = CommonOptions.Time();
+        var only = CommonOptions.Only();
+        var exclude = CommonOptions.Exclude();
+        var intrinsic = CommonOptions.Intrinsic();
         var structural = new Option<bool>("--structural")
         {
             Description =
@@ -93,6 +96,9 @@ internal static class ImpactCommand
             noGate,
             time,
             structural,
+            only,
+            exclude,
+            intrinsic,
             expectNoEffectChange,
         };
         // Both stores are mandatory — impact is a pure two-store diff, there is no working-tree/git fallback
@@ -126,6 +132,9 @@ internal static class ImpactCommand
                             Gate: !pr.GetValue(noGate),
                             Time: pr.GetValue(time),
                             Structural: pr.GetValue(structural),
+                            Only: CommonOptions.FilterSet(pr.GetValue(only)),
+                            Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            Intrinsic: pr.GetValue(intrinsic),
                             ExpectNoEffectChange: pr.GetValue(expectNoEffectChange)
                         ),
                         new CommandIo(
@@ -152,6 +161,9 @@ internal static class ImpactCommand
         bool Gate,
         bool Time,
         bool Structural,
+        HashSet<string> Only,
+        HashSet<string> Exclude,
+        bool Intrinsic,
         bool ExpectNoEffectChange
     );
 
@@ -202,9 +214,34 @@ internal static class ImpactCommand
                 : null
         );
 
+        // --only / --exclude / the default intrinsic hiding, applied to the per-EP behavioral deltas. Done on
+        // the RENDER side (the cached diff artifact stays complete and filter-independent, so no ImpactSchema
+        // bump and no cache fragmentation across filter combos — same contract as reaches/tree/derive).
+        var (filteredPerEp, hiddenIntrinsic) = ImpactEngine.FilterPerEpEffects(
+            art.Diff.PerEp,
+            only: opts.Only,
+            exclude: opts.Exclude,
+            includeIntrinsic: opts.Intrinsic
+        );
+        var diff = art.Diff with { PerEp = filteredPerEp };
+        WriteIntrinsicNote(hiddenIntrinsic, io.TextOutput.Error);
+
+        // Validate the filter tokens against the effective rule set. Worth the extra rules load (json parse,
+        // trivial next to a two-store diff): a typo'd `--only llbgen:write` would otherwise filter everything
+        // out and read as "no behavioural change" — the exact silent-false-negative this filter exists to fix.
+        if (opts.Only.Count > 0 || opts.Exclude.Count > 0)
+        {
+            var ruleSet = RuleSetLoader.Load(
+                workingDirectory: io.WorkspaceLocation.WorkingDirectory,
+                extraRules: opts.ExtraRules,
+                loadedPaths: out _
+            );
+            WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: ruleSet, errorWriter: io.TextOutput.Error);
+        }
+
         RenderImpact(
             output: io.TextOutput.Output,
-            impactDiff: art.Diff,
+            impactDiff: diff,
             baseProv: art.BaseProvenance,
             headProv: art.HeadProvenance,
             mode: mode,
@@ -212,9 +249,12 @@ internal static class ImpactCommand
             fqnSites: art.FqnSites,
             tsv: tsv,
             structural: opts.Structural,
-            max: max
+            max: max,
+            hiddenIntrinsic: hiddenIntrinsic
         );
-        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, ImpactEngine.EffectChangedEpCount(art.Diff), io.TextOutput.Error);
+        // The gate counts the FILTERED set so output and CI verdict can never disagree; impact_summary's
+        // intrinsic_hidden column is what keeps that from being a silent loosening.
+        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, ImpactEngine.EffectChangedEpCount(diff), io.TextOutput.Error);
     }
 
     // The `--expect-no-effect-change` CI gate. Behavioral change = an entry point present in BOTH commits whose
@@ -254,12 +294,13 @@ internal static class ImpactCommand
         Dictionary<(string, int), string> fqnSites,
         bool tsv,
         bool structural,
-        int max
+        int max,
+        int hiddenIntrinsic = 0
     )
     {
         if (tsv)
         {
-            EmitTsv(output, impactDiff, fqnSites, max);
+            EmitTsv(output, impactDiff, fqnSites, max, structural, hiddenIntrinsic);
             return;
         }
 
@@ -673,7 +714,14 @@ internal static class ImpactCommand
         }
     }
 
-    private static void EmitTsv(TextWriter output, ImpactDiff diff, Dictionary<(string, int), string> fqnSites, int max)
+    private static void EmitTsv(
+        TextWriter output,
+        ImpactDiff diff,
+        Dictionary<(string, int), string> fqnSites,
+        int max,
+        bool structural,
+        int hiddenIntrinsic = 0
+    )
     {
         // One stream of typed rows for CI/tooling. First column is the row kind. Every row here is the
         // STORE-vs-STORE derived-facts diff: the EP set diff + the per-EP footprint/reach diff between the two
@@ -696,6 +744,24 @@ internal static class ImpactCommand
         //  ep_guard_delta  <kind>  <route>  <+guards>  <-guards>   (FR-1e: a lock/async_lock acquire/release ADDED (+, comma-joined provider:operation) or REMOVED (-) on a path whose branch reach STILL carries a shared_state mutation — the concurrency guard around an inherently-shared cell changed. A REVIEW flag covering both the lost-guard race and the guard-adding fix.)
         //  ep_hazard_added    <kind>  <route>  <type>  <confidence>  <cell>  <enclosing>   (a hazard finding — race_window / lazy_init_race / n_plus_1 / unserializable_payload, see HazardKinds — newly present on the EP's reach: a refactor opened it. cell = the observation Context, enclosing = the param-free producing method. A REVIEW flag, not a verdict.)
         //  ep_hazard_removed  <kind>  <route>  <type>  <confidence>  <cell>  <enclosing>   (a hazard finding that DROPPED from the EP's reach base->head: a fix closed it. Same columns as ep_hazard_added.)
+
+        //  impact_summary  eps=<n>  behavioral_eps=<n>  effect_added=<n>  effect_removed=<n>  effect_amplified=<n>  guard_delta=<n>  intrinsic_hidden=<n>
+        //     (ALWAYS FIRST, and never capped by --limit. A reviewer or agent that truncates the stream still
+        //     reads the true totals: the original failure this fixes was a `Select-Object -First 300` capture
+        //     whose 300 lines were all ep_reach_+ rows for ONE entry point, so the diff read as "no behavioural
+        //     change" while 190 EPs newly wrote a table. intrinsic_hidden discloses what the default alloc/throw
+        //     filter withheld — and, because the --expect-no-effect-change gate counts the FILTERED set, it is
+        //     also the audit trail for why a gate that would once have tripped now passes.)
+        output.WriteLine(
+            "impact_summary\t"
+                + $"eps={diff.AffectedEps.Count}\t"
+                + $"behavioral_eps={diff.PerEp.Count}\t"
+                + $"effect_added={diff.PerEp.Sum(d => d.Added.Count)}\t"
+                + $"effect_removed={diff.PerEp.Sum(d => d.Removed.Count)}\t"
+                + $"effect_amplified={diff.PerEp.Sum(d => d.Amplified.Count)}\t"
+                + $"guard_delta={diff.PerEp.Count(ImpactEngine.HasGuardDeltaOnSharedMutation)}\t"
+                + $"intrinsic_hidden={hiddenIntrinsic}"
+        );
 
         // Cause per EP: behavioral when its effect set changed (it's in PerEp), else the structural sub-cause.
         var behavioralKeys = diff.PerEp.Select(d => (d.Kind, d.Route)).ToHashSet();
@@ -720,12 +786,30 @@ internal static class ImpactCommand
             $"structural_summary\t{diff.AffectedEps.Count}\t{CC("behavioral")}\t{CC("record-shape")}\t{CC("ctor-sig")}\t{CC("in-place")}\t{CC("other")}"
         );
 
+        // ORDER IS THE TRUNCATION CONTRACT: summaries, then the BEHAVIOURAL deltas, then the bulky structural
+        // roster. A capped or head-ed read therefore loses the least-important rows first. Previously the
+        // per-EP effect deltas were emitted LAST, behind up to 49k ep_reach_* rows — which is precisely how a
+        // 300-line capture of a real MR ended up containing zero effect deltas and reading as "no change".
+        EmitEpDiffTsv(output, diff.Ep);
+        EmitPerEpTsv(output, diff.PerEp, fqnSites);
+
         foreach (var e in diff.AffectedEps.Take(max))
         {
             var fqn = ImpactEngine.FqnForCard(route: e.Route, filePath: e.FilePath, line: e.Line, idBySite: fqnSites);
             output.WriteLine(
                 $"affected_ep\t{e.Kind}\t{e.Route}\t{fqn}\t{CauseTag(e)}\t{e.FilePath}\t{e.Line}\t+{e.AddedStems.Count}\t-{e.RemovedStems.Count}\t~{e.ChangedStems.Count}\t{e.InPlaceCount}"
             );
+
+            // The PER-SYMBOL reach lists are the structural layer and are ~86% of all output (49,328 of 57,624
+            // rows on a real 33-file MR) — overwhelmingly data-shape ripple, since a record gaining a field
+            // relights every reaching EP. `affected_ep` above already carries the AGGREGATE counts, so the
+            // default keeps the roster and drops the enumeration; --structural restores it. (Before this,
+            // --structural affected only the human renderer and was a no-op for --format tsv.)
+            if (!structural)
+            {
+                continue;
+            }
+
             foreach (var s in e.Added)
             {
                 output.WriteLine($"ep_reach_+\t{e.Kind}\t{e.Route}\t{s}");
@@ -746,8 +830,5 @@ internal static class ImpactCommand
                 output.WriteLine($"ep_reach_inplace\t{e.Kind}\t{e.Route}\t{s}");
             }
         }
-
-        EmitEpDiffTsv(output, diff.Ep);
-        EmitPerEpTsv(output, diff.PerEp, fqnSites);
     }
 }

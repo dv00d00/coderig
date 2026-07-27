@@ -142,11 +142,18 @@ internal static class QueryCacheKeys
     // lowercased so token order/casing don't fragment it, empty in the common no-filter case. The seam
     // summaries in the sidecar are a function of the FILTERED effects, so two queries that differ only by
     // these flags must get distinct sidecars (the forest itself is filter-independent and is not affected).
-    internal static string EffectFilterSignature(IReadOnlyCollection<string> only, IReadOnlyCollection<string> exclude)
+    // `intrinsic` participates for the same reason --only/--exclude do: the seam summaries are a function of
+    // the FILTERED effects, and hiding alloc/throw by default changes them. Omitting it would let a default
+    // run serve a sidecar built with --intrinsic (or vice versa) off an otherwise-identical key.
+    internal static string EffectFilterSignature(
+        IReadOnlyCollection<string> only,
+        IReadOnlyCollection<string> exclude,
+        bool intrinsic = false
+    )
     {
         var o = string.Join(',', only.Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
         var e = string.Join(',', exclude.Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
-        return $"only={o};exclude={e}";
+        return $"only={o};exclude={e};intrinsic={(intrinsic ? "1" : "0")}";
     }
 
     // The render-sidecar cache keys (locations + seam) derived off a forest TreeCacheKey. Encapsulated as a

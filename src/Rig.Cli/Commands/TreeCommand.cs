@@ -70,6 +70,7 @@ internal static class TreeCommand
         );
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
+        var intrinsic = CommonOptions.Intrinsic();
         var excludeNamespace = CommonOptions.ExcludeNamespace();
         var noCache = CommonOptions.NoCache();
         var noGate = CommonOptions.NoGate();
@@ -100,6 +101,7 @@ internal static class TreeCommand
             limit,
             only,
             exclude,
+            intrinsic,
             excludeNamespace,
             noCache,
             noGate,
@@ -191,6 +193,7 @@ internal static class TreeCommand
                             Limit: pr.GetValue(limit),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            Intrinsic: pr.GetValue(intrinsic),
                             ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
                             NoCache: pr.GetValue(noCache),
                             Gate: !pr.GetValue(noGate),
@@ -226,6 +229,7 @@ internal static class TreeCommand
         int? Limit,
         HashSet<string> Only,
         HashSet<string> Exclude,
+        bool Intrinsic,
         IReadOnlyList<string> ExcludeNamespaces,
         bool NoCache,
         bool Gate,
@@ -300,7 +304,7 @@ internal static class TreeCommand
         //     key alone (`:loc`);
         //   - seam summaries are derived from the FILTERED effects → keyed by the forest key + the filter
         //     signature (`:seam:<sig>`), since filters are absent from the forest key.
-        var filterSig = EffectFilterSignature(only: opts.Only, exclude: opts.Exclude);
+        var filterSig = EffectFilterSignature(only: opts.Only, exclude: opts.Exclude, intrinsic: opts.Intrinsic);
         RenderSidecarKey? sidecar = cacheKey is { } sk ? new RenderSidecarKey(sk, filterSig, Hazards: hazards, Gate: opts.Gate) : null;
         var locKey = sidecar?.Locations();
         var seamKey = sidecar?.Seam();
@@ -469,8 +473,10 @@ internal static class TreeCommand
         // the deployment map nor the seam computation.
         if (tsv)
         {
-            var tsvEffects = ApplyEffectFilters(effects, only: opts.Only, exclude: opts.Exclude)
-                .Where(e => e.EnclosingSymbolId is not null)
+            var tsvSelection = SelectEffects(effects, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
+            WriteIntrinsicNote(tsvSelection.HiddenIntrinsic, io.TextOutput.Error);
+            var tsvEffects = tsvSelection
+                .Effects.Where(e => e.EnclosingSymbolId is not null)
                 .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
                 .ToDictionary(
                     keySelector: g => g.Key,
@@ -514,7 +520,10 @@ internal static class TreeCommand
             );
         timer.Lap("deployment map + entry-point derivation");
 
-        effects = ApplyEffectFilters(effects, only: opts.Only, exclude: opts.Exclude); // --only / --exclude (e.g. --exclude throw)
+        // --only / --exclude (e.g. --exclude throw), plus the default hiding of intrinsic providers.
+        var selection = SelectEffects(effects, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
+        effects = selection.Effects;
+        WriteIntrinsicNote(selection.HiddenIntrinsic, io.TextOutput.Error);
 
         // --format llm / --format llm-ids: compact flat TSV for LLM consumption. Emitted before the
         // normal render path (skips the deployment map, seam, and box-drawing chrome — those are token

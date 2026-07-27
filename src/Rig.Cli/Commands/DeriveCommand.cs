@@ -26,6 +26,7 @@ internal static class DeriveCommand
         var limit = CommonOptions.Limit(40);
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
+        var intrinsic = CommonOptions.Intrinsic();
         var excludeNamespace = CommonOptions.ExcludeNamespace();
         var format = CommonOptions.Format();
         var store = CommonOptions.Store();
@@ -40,6 +41,7 @@ internal static class DeriveCommand
             limit,
             only,
             exclude,
+            intrinsic,
             excludeNamespace,
             format,
             store,
@@ -57,6 +59,7 @@ internal static class DeriveCommand
                             Limit: pr.GetValue(limit),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            Intrinsic: pr.GetValue(intrinsic),
                             ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
                             Format: pr.GetValue(format),
                             Gate: !pr.GetValue(noGate),
@@ -77,6 +80,7 @@ internal static class DeriveCommand
         int Limit,
         HashSet<string> Only,
         HashSet<string> Exclude,
+        bool Intrinsic,
         IReadOnlyList<string> ExcludeNamespaces,
         string? Format,
         bool Gate = true,
@@ -170,8 +174,12 @@ internal static class DeriveCommand
         // cache_coherence (below) MUST see the PRE-filter effects: --exclude cache would otherwise hide the
         // cache:invalidate companions and manufacture false missing-invalidation findings. Capture the
         // unfiltered list before --only/--exclude is applied, and feed THAT to the correlation deriver.
+        // The same reasoning covers the DEFAULT hiding of intrinsic providers (alloc/throw): it is applied
+        // here, on the presentation side only, so no detector's input is narrowed by it.
         var unfilteredEffects = effects;
-        effects = ApplyEffectFilters(effects: effects, only: opts.Only, exclude: opts.Exclude); // --only / --exclude (e.g. --exclude throw)
+        var selection = SelectEffects(effects, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
+        effects = selection.Effects;
+        WriteIntrinsicNote(selection.HiddenIntrinsic, io.TextOutput.Error);
 
         // --- The GRAPH-TIER hazard sources (event_cycle + cache_coherence + static_init_capture): the three
         //     hazards that are NOT effect-attached observations — each is a property of the SHAPED call graph

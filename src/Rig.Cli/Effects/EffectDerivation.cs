@@ -302,23 +302,116 @@ internal static class EffectDerivation
         return derived;
     }
 
-    // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops
-    // them (exclude wins on overlap). Tokens match an effect's `provider` (e.g. "throw") or the precise
-    // `provider:operation` (e.g. "llblgen:read"). Returns the input unchanged when neither set is given.
-    internal static IReadOnlyList<DerivedEffect> ApplyEffectFilters(
-        IReadOnlyList<DerivedEffect> effects,
-        HashSet<string> only,
-        HashSet<string> exclude
-    )
+    // LANGUAGE-INTRINSIC effect providers, hidden by DEFAULT and restored by --intrinsic.
+    //
+    // These two scale with CODE VOLUME — every `new`, every `throw` — whereas all ~49 other providers scale
+    // with what the code actually TALKS TO (a db, a cache, an http endpoint). On the MedDBase store that is
+    // 243,391 alloc + 79,508 throw against ~30,619 of everything else: 91.3% of all effects, a ~1:10
+    // signal-to-noise ratio on exactly the commands whose job is "show me what this reaches". Hiding them by
+    // default is the single biggest usability lever in the effect surface.
+    //
+    // The membership is a DELIBERATE, CLOSED set of two — NOT a computed category. There is no clean
+    // predicate: "derived from syntax rather than from a rule" would also capture `shared_state`, which is
+    // load-bearing for the concurrency hazard detectors and must always stay visible. Resist growing this
+    // set; a second default-hidden group is how a CLI grows a profile system, which was explicitly rejected
+    // (a named tier's contents drift silently and every consumer has to re-learn them).
+    //
+    // NEVER silent: callers MUST disclose the suppressed count (EffectSelection.HiddenIntrinsic) so the
+    // hidden state is impossible to encounter without also being told the flag that undoes it. That
+    // disclosure is what pays for the terse flag name.
+    internal static readonly HashSet<string> IntrinsicProviders = new(["alloc", "throw"], StringComparer.OrdinalIgnoreCase);
+
+    // The result of effect selection: the surviving effects plus how many were withheld SOLELY because they
+    // were intrinsic (i.e. they passed --only/--exclude and were dropped only by the default hiding). Zero
+    // when --intrinsic was passed, when --only named an intrinsic provider, or when there were none.
+    internal readonly record struct EffectSelection(IReadOnlyList<DerivedEffect> Effects, int HiddenIntrinsic);
+
+    internal static bool IsIntrinsic(DerivedEffect e) => IntrinsicProviders.Contains(e.Provider);
+
+    // True when a filter set explicitly names an intrinsic provider ("throw") or one of its operations
+    // ("alloc:boxing"). Naming one in --only is an unambiguous request FOR it, so it implies --intrinsic —
+    // `rig reaches X --only alloc` must do the obvious thing rather than return an empty list.
+    internal static bool NamesIntrinsic(HashSet<string> tokens)
     {
-        if (only.Count == 0 && exclude.Count == 0)
+        foreach (var token in tokens)
         {
-            return effects;
+            var provider = token.Contains(':', StringComparison.Ordinal) ? token[..token.IndexOf(':', StringComparison.Ordinal)] : token;
+            if (IntrinsicProviders.Contains(provider))
+            {
+                return true;
+            }
         }
 
-        return effects.Where(e => (only.Count == 0 || InSet(e, only)) && !InSet(e, exclude)).ToList();
+        return false;
+    }
+
+    // Effect selection for reaches/tree/derive/impact: --only keeps just the listed effects, --exclude drops
+    // them (exclude wins on overlap). Tokens match an effect's `provider` (e.g. "throw") or the precise
+    // `provider:operation` (e.g. "llblgen:read").
+    //
+    // On top of that, language-intrinsic providers (see IntrinsicProviders) are withheld unless
+    // includeIntrinsic is set OR --only explicitly named one. HiddenIntrinsic reports what that withholding
+    // cost so the caller can disclose it.
+    internal static EffectSelection SelectEffects(
+        IReadOnlyList<DerivedEffect> effects,
+        HashSet<string> only,
+        HashSet<string> exclude,
+        bool includeIntrinsic
+    )
+    {
+        var hideIntrinsic = !includeIntrinsic && !NamesIntrinsic(only);
+        if (only.Count == 0 && exclude.Count == 0 && !hideIntrinsic)
+        {
+            return new EffectSelection(effects, HiddenIntrinsic: 0);
+        }
+
+        var kept = new List<DerivedEffect>(effects.Count);
+        var hidden = 0;
+        foreach (var e in effects)
+        {
+            if ((only.Count > 0 && !InSet(e, only)) || InSet(e, exclude))
+            {
+                continue; // dropped by an EXPLICIT filter — not an intrinsic suppression, so not disclosed
+            }
+
+            if (hideIntrinsic && IsIntrinsic(e))
+            {
+                hidden++;
+                continue;
+            }
+
+            kept.Add(e);
+        }
+
+        return new EffectSelection(kept, hidden);
 
         static bool InSet(DerivedEffect e, HashSet<string> set) => set.Contains(e.Provider) || set.Contains($"{e.Provider}:{e.Operation}");
+    }
+
+    // The one-line disclosure for withheld intrinsic effects, or "" when nothing was withheld.
+    // Names the providers AND the flag, so the hidden state always teaches its own escape hatch.
+    //
+    // DELIBERATELY UNQUANTIFIED. It once carried the withheld COUNT, but that count is taken over the derived
+    // effect set while reaches/tree display only the effects surviving a REACHABILITY JOIN — on a real seed it
+    // read "57,513 hidden" next to a visible drop of 6,654, an 8x overstatement. Since this note is the entire
+    // justification for the terse flag name, an inflated number is a defect in the safety mechanism itself.
+    // An exact figure would need per-command join logic in four places; the machine-readable count lives in
+    // `impact_summary`'s intrinsic_hidden instead, where it is exact (per-EP delta entries, no join involved).
+    internal static string IntrinsicNote(int hiddenIntrinsic) =>
+        hiddenIntrinsic <= 0
+            ? ""
+            : $"note: intrinsic effects ({string.Join(", ", IntrinsicProviders.OrderBy(p => p, StringComparer.Ordinal))}) are hidden by default — pass --intrinsic to include.";
+
+    // Emit the disclosure to STDERR. Stderr (not stdout) so it never corrupts tsv/llm parsing while staying
+    // visible to a human on every format — the same channel WarnUnknownFilterTokens uses. No-op when nothing
+    // was withheld. Callers MUST call this wherever effects are rendered; see IntrinsicProviders on why.
+    internal static void WriteIntrinsicNote(int hiddenIntrinsic, TextWriter errorWriter)
+    {
+        var note = IntrinsicNote(hiddenIntrinsic);
+        if (note.Length > 0)
+        {
+            errorWriter.WriteLine(note);
+        }
     }
 
     // The distinct provider strings (e.g. "http", "throw") known from the effective rule set.

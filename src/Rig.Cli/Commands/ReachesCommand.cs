@@ -30,6 +30,7 @@ internal static class ReachesCommand
         var format = CommonOptions.Format();
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
+        var intrinsic = CommonOptions.Intrinsic();
         var limit = CommonOptions.Limit();
         var time = CommonOptions.Time();
         var store = CommonOptions.Store();
@@ -44,6 +45,7 @@ internal static class ReachesCommand
             format,
             only,
             exclude,
+            intrinsic,
             limit,
             time,
             store,
@@ -64,6 +66,7 @@ internal static class ReachesCommand
                             Format: pr.GetValue(format),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            Intrinsic: pr.GetValue(intrinsic),
                             Limit: pr.GetValue(limit),
                             Time: pr.GetValue(time)
                         ),
@@ -89,6 +92,7 @@ internal static class ReachesCommand
         string? Format,
         HashSet<string> Only,
         HashSet<string> Exclude,
+        bool Intrinsic,
         int? Limit,
         bool Time
     );
@@ -138,7 +142,10 @@ internal static class ReachesCommand
             throwRefs: inputs.ThrowRefs,
             allocationFacts: inputs.AllocationFacts
         );
-        effects = ApplyEffectFilters(effects, only: opts.Only, exclude: opts.Exclude); // --only / --exclude (e.g. --exclude throw)
+        // --only / --exclude (e.g. --exclude throw), plus the default hiding of intrinsic providers
+        // (alloc/throw) restored by --intrinsic. The withheld count is disclosed after the results below.
+        var selection = SelectEffects(effects, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
+        effects = selection.Effects;
         traversalWatch.Stop();
         timing.Record("traversal", traversalWatch.Elapsed);
 
@@ -231,6 +238,8 @@ internal static class ReachesCommand
         {
             io.TextOutput.Output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
         }
+
+        WriteIntrinsicNote(selection.HiddenIntrinsic, io.TextOutput.Error);
 
         io.TextOutput.Output.WriteLine("--- nearest direct effects (depth  provider op  resource  <- method  [loop]) ---");
         foreach (var h in direct.Take(max))

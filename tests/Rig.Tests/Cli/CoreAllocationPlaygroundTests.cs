@@ -20,8 +20,17 @@ public sealed class CoreAllocationPlaygroundTests
 
         (await CliApplication.RunAsync(["index", playground.SolutionPath], output, error, workingDirectory)).ShouldBe(0);
 
+        // `alloc` is a language-INTRINSIC provider, hidden by default (see EffectDerivation.IntrinsicProviders).
+        // This test's subject IS those effects, so it asks for them explicitly. Negative control first: the
+        // DEFAULT must withhold them, which is what makes the --intrinsic assertions below meaningful.
         output.GetStringBuilder().Clear();
         (await CliApplication.RunAsync(["derive", "--format", "tsv"], output, error, workingDirectory)).ShouldBe(0);
+        TsvRows(output.ToString())
+            .Where(row => row[0] == "effect")
+            .ShouldNotContain(row => row[1].StartsWith("alloc", StringComparison.OrdinalIgnoreCase));
+
+        output.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["derive", "--format", "tsv", "--intrinsic"], output, error, workingDirectory)).ShouldBe(0);
 
         var effects = TsvRows(output.ToString()).Where(row => row[0] == "effect").ToList();
         effects.Count(row => row[3] == "CoreAllocations.Payload" && row[4].Contains("CreateReferenceObjects")).ShouldBe(2);

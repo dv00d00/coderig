@@ -324,6 +324,69 @@ internal static class ImpactEngine
     internal static int EffectChangedEpCount(ImpactDiff diff) =>
         diff.PerEp.Count(d => d.Added.Count > 0 || d.Removed.Count > 0 || d.Amplified.Count > 0);
 
+    // Effect-filter the per-EP behavioral deltas for `impact`, mirroring reaches/tree/derive: --only keeps
+    // just the listed effects, --exclude drops them, and the language-intrinsic providers (alloc/throw) are
+    // withheld unless --intrinsic is set or --only names one. See IntrinsicProviders — on a
+    // real 33-file MR, alloc:* alone was ~80% of impact's 68k rows and never changed a review verdict.
+    //
+    // An EP whose Added/Removed/Amplified lists ALL become empty is dropped entirely, so the output has no
+    // `ep_delta … +0 -0 ~0` rows left behind by filtering. HiddenIntrinsic is the total number of withheld
+    // effect entries across every EP, for the mandatory disclosure.
+    //
+    // The gate (--expect-no-effect-change) counts the FILTERED set, so what you READ and what CI DECIDES can
+    // never disagree — the deliberate consequence is that with the default filter an alloc-only MR no longer
+    // trips the gate, which is why `impact_summary` always reports intrinsic_hidden.
+    internal static (IReadOnlyList<EpFootprintDelta> PerEp, int HiddenIntrinsic) FilterPerEpEffects(
+        IReadOnlyList<EpFootprintDelta> perEp,
+        HashSet<string> only,
+        HashSet<string> exclude,
+        bool includeIntrinsic
+    )
+    {
+        var hideIntrinsic = !includeIntrinsic && !NamesIntrinsic(only);
+        if (only.Count == 0 && exclude.Count == 0 && !hideIntrinsic)
+        {
+            return (perEp, 0);
+        }
+
+        var hidden = 0;
+        var kept = new List<EpFootprintDelta>(perEp.Count);
+        foreach (var d in perEp)
+        {
+            var added = d.Added.Where(x => Keep(x.Provider, x.Operation)).ToList();
+            var removed = d.Removed.Where(x => Keep(x.Provider, x.Operation)).ToList();
+            var amplified = d.Amplified.Where(x => Keep(x.Provider, x.Operation)).ToList();
+
+            if (added.Count == 0 && removed.Count == 0 && amplified.Count == 0)
+            {
+                continue; // nothing behavioral survives the filter for this EP
+            }
+
+            kept.Add(d with { Added = added, Removed = removed, Amplified = amplified });
+        }
+
+        return (kept, hidden);
+
+        bool Keep(string provider, string operation)
+        {
+            if ((only.Count > 0 && !InSet(provider, operation, only)) || InSet(provider, operation, exclude))
+            {
+                return false; // dropped by an EXPLICIT filter — not an intrinsic suppression, so not disclosed
+            }
+
+            if (hideIntrinsic && IntrinsicProviders.Contains(provider))
+            {
+                hidden++;
+                return false;
+            }
+
+            return true;
+        }
+
+        static bool InSet(string provider, string operation, HashSet<string> set) =>
+            set.Contains(provider) || set.Contains($"{provider}:{operation}");
+    }
+
     // Read a store's provenance from its own run row (the run with the most symbols — the primary index).
     // Short sha = first 12 chars, matching `rig runs`. Fallback is the store-ref the user passed.
     private static async Task<StoreProvenance> ReadProvenanceAsync(RigDbContext context, string storeRef)
