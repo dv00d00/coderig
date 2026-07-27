@@ -74,3 +74,26 @@ on nothing, so their transitive set is empty too). If/when a consumer needs the 
 2. a structured encoding (conjunction-of-disjunctions) so `||`-sets stay distinguishable from `∧`-ancestors;
 3. re-index MedDBase + a fixture pinning the 3-guard `PerformanceLogger.Factory` shape.
 Until then this stays a documented model boundary of [[branch-aware-effects-shipped]].
+
+## Update 2026-07-27 — two corrections, both lowering the cost
+
+**1. The "blocker" in the section above is largely stale.** It assumes the flat set encodes disjunction by
+CARDINALITY (`a || b` → `{a=T, b=T}`). That is no longer what is stored: `EncodedGuardsFor` widens each raw
+branch guard to its FULL enclosing source condition and dedups, so `if (a || b)` collapses to ONE entry
+(`"a || b"`, T) and multiple entries now mean **distinct decisions that AND-join correctly**. The
+conjunction/disjunction ambiguity that made a structured encoding mandatory is therefore already resolved
+inside each entry's text; a transitive closure can union ancestor entries into the same flat set without
+becoming ambiguous. Step 2 of the recommendation (structured conjunction-of-disjunctions) can likely be
+dropped — verify against the `a||b` else-arm De Morgan case (`{a=F,b=F}` → one entry `"a || b"`=F) before
+committing to that.
+
+**2. Item 6 of [[cli-surface-and-help-refresh-2026-07]] was reassigned here on partly wrong grounds.** That
+item (guarded edges pruned away by `tree --only`) was closed against this one as needing cross-method
+composition. Its actual dominant cause was
+[[guards-missing-on-lambda-and-method-group-edges]] — the guarded edge into an argument lambda carried no
+guard at all, so no amount of composition would have found it. That is now fixed. Re-check item 6 against a
+re-indexed store before assuming any of it still belongs here.
+
+Still genuinely owned here: the intra-method early-return/guard-clause CHAIN (the `PerformanceLogger.Factory`
+shape above), and the inter-procedural AND along a root→effect path that
+[[impact-guard-delta-for-predicate-only-changes]] deliberately routes around by keying on edges instead.

@@ -69,8 +69,7 @@ public sealed class SourceEndpointTests
         // right-align it. Same slice `rig show` renders for lines 5-8.
         var lines = root.GetProperty("lines").EnumerateArray().ToList();
         lines.Select(l => l.GetProperty("number").GetInt32()).ShouldBe([5, 6, 7, 8]);
-        lines.Select(l => l.GetProperty("text").GetString())
-            .ShouldBe(["    public int Answer()", "    {", "        return 42;", "    }"]);
+        lines.Select(l => l.GetProperty("text").GetString()).ShouldBe(["    public int Answer()", "    {", "        return 42;", "    }"]);
     }
 
     // Path 2 — the correctness case the whole feature exists for. HEAD still equals the store's commit, but
@@ -152,9 +151,7 @@ public sealed class SourceEndpointTests
     {
         using var fixture = await Fixture.CreateAsync();
 
-        var (status, body) = await fixture.GetAsync(
-            "/api/source?file=" + Uri.EscapeDataString(@"C:\Windows\System32\drivers\etc\hosts")
-        );
+        var (status, body) = await fixture.GetAsync("/api/source?file=" + Uri.EscapeDataString(@"C:\Windows\System32\drivers\etc\hosts"));
 
         status.ShouldBe(HttpStatusCode.BadRequest);
         using var doc = JsonDocument.Parse(body);
@@ -184,7 +181,10 @@ public sealed class SourceEndpointTests
         var (status, body) = await fixture.GetAsync($"/api/source?id={Uri.EscapeDataString(AnswerId)}");
 
         status.ShouldBe(HttpStatusCode.OK);
-        foreach (var name in (string[])["symbolId", "file", "line", "endLine", "origin", "commit", "truncatedCount", "reason", "lines", "storeDirty"])
+        foreach (
+            var name in (string[])
+                ["symbolId", "file", "line", "endLine", "origin", "commit", "truncatedCount", "reason", "lines", "storeDirty"]
+        )
         {
             body.ShouldContain($"\"{name}\":");
         }

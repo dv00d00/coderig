@@ -188,9 +188,24 @@ internal static class FactExtractor
                 : refKind is RefKinds.Write or RefKinds.Read ? name
                 : null;
             var structural = StructuralContextOf(structuralRoot, model, symbolCache);
-            // Control-dependence guard set of this effect-bearing call-site within its method (CFG-derived,
-            // frozen here — see branch-aware-effects). Same nodes that carry structural context.
-            var enclosingGuards = structuralRoot is null ? null : EncodedGuardsFor(structuralRoot, model, cfgGuardCache);
+            // Control-dependence guard set of this call-site within its method (CFG-derived, frozen here —
+            // see branch-aware-effects). Deliberately a WIDER root than structuralRoot: a METHOD GROUP
+            // (`Foo.Bar` passed as a delegate) carries no structural context — no effect consumes it — but it
+            // IS a call-graph edge, so its guard is consumed by every tree/reaches walk. Sharing
+            // structuralRoot left all 71,690 methodGroup edges in the MedDBase store unguarded, i.e. claiming
+            // must-run for a conditionally-created delegate. Widen to the member access (`Foo.Bar`, mirroring
+            // AddDelegateAllocation below) because BlockOf needs an EXACT operation-syntax match and the bare
+            // `Bar` identifier is not itself an operation node — the delegate-creation operation is.
+            SyntaxNode? guardRoot =
+                structuralRoot
+                ?? (
+                    refKind == RefKinds.MethodGroup
+                        ? name.Parent is MemberAccessExpressionSyntax guardMember && guardMember.Name == name
+                            ? guardMember
+                            : name
+                        : null
+                );
+            var enclosingGuards = guardRoot is null ? null : EncodedGuardsFor(guardRoot, model, cfgGuardCache);
             var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;
             if (refKind == RefKinds.MethodGroup)
             {
@@ -823,7 +838,8 @@ internal static class FactExtractor
                         tree: tree,
                         fileText: fileText,
                         enclosingCache: enclosingCache,
-                        symbolCache: symbolCache
+                        symbolCache: symbolCache,
+                        cfgGuardCache: cfgGuardCache
                     );
                     AddDelegateAllocation(lambda);
                     break;
@@ -2317,7 +2333,8 @@ internal static class FactExtractor
         SyntaxTree tree,
         string fileText,
         Dictionary<SyntaxNode, string?> enclosingCache,
-        SymbolStringCache symbolCache
+        SymbolStringCache symbolCache,
+        Dictionary<SyntaxNode, IReadOnlyList<(ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)>> cfgGuardCache
     )
     {
         var consumer = LambdaConsumerOf(lambda, model);
@@ -2371,7 +2388,15 @@ internal static class FactExtractor
                 TargetInSource: true,
                 FilePath: tree.FilePath,
                 Line: line,
-                DelegateConsumer: consumer
+                DelegateConsumer: consumer,
+                // The guard set of the lambda's CREATION SITE. This edge IS a call-graph edge, so if the
+                // `() => …` literal sits inside an `if`, everything the lambda body reaches is conditional —
+                // omitting this made every effect under an argument-lambda read as MUST-RUN (0 of 65,450
+                // lambda edges in the MedDBase store carried a guard, vs 10.8% of invocation edges).
+                // Resolved in the CFG that CONTAINS the literal: for a lambda nested in another lambda that
+                // is the outer lambda's sub-CFG, so the inner one is correctly unguarded relative to its own
+                // body. BuildGuardGraphs collects pre-order, so the enclosing CFG always matches first.
+                EnclosingGuards: EncodedGuardsFor(lambda, model, cfgGuardCache)
             )
         );
 

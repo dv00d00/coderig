@@ -506,7 +506,9 @@ internal static class CallersCommand
             return graph
                 .Methods.Where(m => reachable.Contains(m.SymbolId) && !hasCaller.Contains(m.SymbolId))
                 .GroupBy(m => m.SymbolId, StringComparer.Ordinal)
-                .Select(g => (SymbolId: g.Key, g.First().FilePath, g.First().Line))
+                // FilePath is nullable on a method fact (a synthesized/metadata node has no source); the
+                // renderer already treats "" as "unlocated", so normalize here rather than widen the tuple.
+                .Select(g => (SymbolId: g.Key, FilePath: g.First().FilePath ?? "", g.First().Line))
                 .OrderBy(m => m.SymbolId, StringComparer.Ordinal)
                 .ToList();
         }

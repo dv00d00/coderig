@@ -238,6 +238,15 @@ a CFG control-dependence analysis frozen at INDEX onto each call site (`Referenc
 - **INTRA-METHOD only (don't over-read it).** A guard says the call is gated WITHIN its direct caller — NOT
   whether that caller itself always runs from the entry point. The cross-method "always-runs-from-EP"
   composition (AND-folding guards along the EP→…→call chain) is a DERIVE-side follow-up, not yet built.
+- **Lambda and method-group edges carry guards too, but only since 2026-07-27.** `Call(() => …)` and
+  `Call(Helper.Do)` are call-graph edges; before that fix they carried NO guard (0 of 65,450 lambda edges on
+  the MedDBase store), so every effect inside a lambda created in an `if` read as **must-run**. On an older
+  store the spine is over-inclusive — it silently includes conditional work. **Re-index before trusting the
+  spine/shell partition.**
+- **The guard is on the EDGE, not on the effect.** An effect inside a lambda body is unconditional *within
+  that body*; the condition gating whether the lambda runs at all sits on the edge into it, which may be
+  several frames up. So "this effect's guard set is empty" does NOT mean "this effect always fires" — compose
+  along the path.
 - Built always-on at index (scoped to bodies with references); ~no measurable extraction cost (MedDBase
   extract held ~29s with it on). A store indexed by a pre-guards `rig` shows no guards until re-indexed.
 

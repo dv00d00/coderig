@@ -70,6 +70,41 @@ Design notes:
 - Also depends on [[guard-set-direct-vs-transitive-control-dependence]] for completeness: a narrowing in an
   *outer* frame is invisible while only the innermost condition is recorded.
 
+## Design settled 2026-07-27 (read before building — two of the notes above are now wrong)
+
+Calibrated against the real store before writing any code. Three findings changed the shape:
+
+**1. The prerequisite was a soundness bug, now fixed: [[guards-missing-on-lambda-and-method-group-edges]].**
+0 of 65,450 argument-lambda edges carried any guard. The MR !11025 condition was captured faithfully — but on
+the `Save → TransactionDependency.Call` edge, while the audit rides `Save → Save~λ3`, a *sibling*. Fixed;
+**re-index before building on guard facts.**
+
+**2. Key the diff on call EDGES, not on (EP, effect) pairs.** Even post-fix the audit effect's *own* guard set
+is empty — the condition is an ancestor edge's. Effect-keyed therefore needs full transitive guard composition
+(the expensive open item); edge-keyed needs only "which reviewable effects are reachable from this callee",
+which the per-EP footprints already give. Edge-keyed reports *"the condition gating this edge narrowed, and
+this edge leads to `audit:write`"* — the review headline, without the composition dependency. Sketch:
+
+- per store, map guarded edge `(caller, callee)` → condition text (ignore the line, so a pure line shift is
+  not a change);
+- diff by that key; for each changed edge compute the reviewable effects reachable from `callee`;
+- classify, then attribute to the EPs reaching `caller`.
+
+**3. Classify by CONJUNCT SET, not syntactic containment.** The stored text is raw source — newlines, original
+indentation, and the interleaved `// no auditing for documents anymore, …` comment (230 chars for this guard).
+String containment on that is fragile and a comment-only edit reads as a condition change. Split the top-level
+`&&` conjuncts and normalise each (strip trivia, collapse whitespace), then compare as sets:
+
+```
+base {!IsPersonMerge}  ⊂  head {!IsPersonMerge, (!FkDocument.HasValue || !…StopPersonEventAudits)}  →  NARROWED
+```
+
+Still syntactic and over-approximate — disclose it as such; `CHANGED` stays the honest fallback.
+
+**Validation cost:** both MR stores are `-dirty` and predate the polarity fix, so they cannot be reused or
+reproduced by checkout alone. End-to-end validation needs two fresh indexes. FP-calibrate the row volume on
+the real store before `--expect-no-guard-narrowing` goes on by default.
+
 ## Why this is the priority item for the "useful tool" phase
 
 The existing model answers *"can this EP still reach effect E?"*. Review needs
