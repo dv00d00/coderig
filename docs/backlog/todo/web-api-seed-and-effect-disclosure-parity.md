@@ -41,6 +41,20 @@ Needs a decision rather than a patch:
 Recommendation: match the CLI. A tool whose two front ends report different effect sets for one store is the
 kind of inconsistency that manufactures false bug reports — three of today's four HIGH items were exactly that.
 
+## 3. Guard-condition deltas are CLI-only (added 2026-07-27)
+
+`impact` gained a fourth signal — `guard_condition_delta` rows plus `guard_narrowed`/`guard_widened`/
+`guard_changed` in `impact_summary` — for call edges whose gating predicate moved while the call and its
+effects stayed put. The deltas ARE computed in `ImpactEngine` and DO ride in the cache artifact
+(`ImpactCachePayload.GuardConditions`), so `/api/impact` already has the data; only the payload mapping and
+the UI are missing. This is the same renderer-vs-engine split as #1 and #2, and the note in `ImpactCommand`
+about the two surfaces being unable to diverge is wrong for exactly this reason.
+
+Worth doing because this signal is the *only* output a predicate-only change produces: a web reviewer looking
+at an audit-suppression MR currently sees a completely empty impact view. It is also the most naturally
+web-shaped of the three — a narrowed/widened/changed verdict with base→head conditions side by side is a diff
+view, which is what a browser is good at.
+
 ## Acceptance
 
 - A pattern matching nothing renders as an explicit "no symbol matches" state in the web UI, never as 0 results.
@@ -50,3 +64,5 @@ kind of inconsistency that manufactures false bug reports — three of today's f
   discloses the difference.
 - Whichever way #2 goes, a toggle cannot serve a payload cached under the other setting (server disk cache AND
   client IndexedDB).
+- `/api/impact` surfaces guard-condition deltas with the same verdicts and base→head conditions as
+  `rig impact`, so a predicate-only MR is not an empty view in the browser.

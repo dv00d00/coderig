@@ -81,7 +81,24 @@ internal static class ImpactCacheCodec
             PerEp: diff.PerEp.Select(MapFootprint).ToArray(),
             BaseProvenance: MapProv(baseProvenance),
             HeadProvenance: MapProv(headProvenance),
-            FqnSites: fqnSites
+            FqnSites: fqnSites,
+            GuardConditions: diff.GuardConditionsOrEmpty.Select(g => new GuardConditionDeltaDto(
+                    Caller: g.Caller,
+                    Callee: g.Callee,
+                    BaseCondition: g.BaseCondition,
+                    HeadCondition: g.HeadCondition,
+                    Verdict: g.Verdict.ToString(),
+                    Effects: g.Effects,
+                    EpCount: g.EpCount,
+                    SampleRoutes: g.SampleRoutes
+                ))
+                .ToArray(),
+            GuardCoverage: diff.GuardCoverage is null
+                ? null
+                : new GuardCoverageDto(
+                    BaseLambdaGuards: diff.GuardCoverage.BaseLambdaGuards,
+                    HeadLambdaGuards: diff.GuardCoverage.HeadLambdaGuards
+                )
         );
 
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.ImpactCachePayload);
@@ -114,7 +131,27 @@ internal static class ImpactCacheCodec
                     ? null
                     : new EpDiff(Added: UnmapKindRoutes(payload.Ep.Added), Removed: UnmapKindRoutes(payload.Ep.Removed)),
                 AffectedEps: payload.AffectedEps.Select(UnmapReach).ToArray(),
-                PerEp: payload.PerEp.Select(UnmapFootprint).ToArray()
+                PerEp: payload.PerEp.Select(UnmapFootprint).ToArray(),
+                GuardConditions: (payload.GuardConditions ?? [])
+                    .Select(g => new GuardConditionDelta(
+                        Caller: g.Caller,
+                        Callee: g.Callee,
+                        BaseCondition: g.BaseCondition,
+                        HeadCondition: g.HeadCondition,
+                        // An unparseable verdict (a future name read by an older rig) degrades to the honest
+                        // fallback rather than throwing away the whole blob.
+                        Verdict: Enum.TryParse<GuardVerdict>(g.Verdict, out var v) ? v : GuardVerdict.Changed,
+                        Effects: g.Effects,
+                        EpCount: g.EpCount,
+                        SampleRoutes: g.SampleRoutes
+                    ))
+                    .ToArray(),
+                GuardCoverage: payload.GuardCoverage is null
+                    ? null
+                    : new GuardCoverage(
+                        BaseLambdaGuards: payload.GuardCoverage.BaseLambdaGuards,
+                        HeadLambdaGuards: payload.GuardCoverage.HeadLambdaGuards
+                    )
             );
 
             var fqnSites = new Dictionary<(string File, int Line), string>();
@@ -259,7 +296,29 @@ internal sealed record ImpactCachePayload(
     IReadOnlyList<FootprintDeltaDto> PerEp,
     ProvenanceDto BaseProvenance,
     ProvenanceDto HeadProvenance,
-    IReadOnlyList<SiteFqnDto> FqnSites
+    IReadOnlyList<SiteFqnDto> FqnSites,
+    // Nullable so a blob written before the guard-condition signal existed still decodes (as no guard
+    // deltas) rather than failing the whole read. ImpactSchema was bumped alongside, so such a blob is a
+    // miss anyway — this is belt-and-braces for a hand-rolled or cross-version cache dir.
+    IReadOnlyList<GuardConditionDeltaDto>? GuardConditions = null,
+    // The guarded-lambda-edge counts per side (the pre/post-2026-07-27 version fingerprint). Nullable for the
+    // same old-blob reason; absent means the skew warning simply cannot fire.
+    GuardCoverageDto? GuardCoverage = null
+);
+
+internal sealed record GuardCoverageDto(int BaseLambdaGuards, int HeadLambdaGuards);
+
+// Verdict travels as its STRING name, not the enum ordinal: reordering GuardVerdict (whose members are
+// declared in review-priority order) must not silently re-label cached rows.
+internal sealed record GuardConditionDeltaDto(
+    string Caller,
+    string Callee,
+    string BaseCondition,
+    string HeadCondition,
+    string Verdict,
+    IReadOnlyList<string> Effects,
+    int EpCount,
+    IReadOnlyList<string> SampleRoutes
 );
 
 internal sealed record ProvenanceDto(string? Branch, string? ShortCommit, string Fallback);

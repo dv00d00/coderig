@@ -1,6 +1,7 @@
 # `impact` is blind to predicate-only changes — a guard tightened around an unchanged effect shows ZERO delta
 
-**Status:** todo · **Priority: HIGH** (this is the single most reviewable class of change in a real MR, and the flagship diff command reports nothing) · **Found:** 2026-07-27 (MedDBase MR !11025 — audit suppression for document rows) · **Family:** impact / behavioral-diff
+**Status:** ✅ SHIPPED 2026-07-27 — `guard_condition_delta` rows + `--expect-no-guard-narrowing`. Scroll to
+"What shipped" for the delivered design and the residual limits. · **Priority: was HIGH** (this is the single most reviewable class of change in a real MR, and the flagship diff command reports nothing) · **Found:** 2026-07-27 (MedDBase MR !11025 — audit suppression for document rows) · **Family:** impact / behavioral-diff
 **Related:** [[design-impact-behavioral-diff]], [[guard-condition-renderer-divergence-tsv-llm]], [[impact-usability-parity-filter-and-alloc-noise]]
 
 ## The case
@@ -111,3 +112,55 @@ The existing model answers *"can this EP still reach effect E?"*. Review needs
 *"under what conditions does E fire, and did those conditions change?"*. Adding/removing effects is the easy
 half and already covered; conditions are where audit suppression, permission bypasses, feature-flag gating,
 and kill-switch regressions all live — and all four are currently invisible to `impact`.
+
+## What shipped (2026-07-27)
+
+`GuardConditionDiff` (`src/Rig.Cli/Impact/GuardConditionDiff.cs`) + wiring in `ImpactEngine` / `ImpactCommand`.
+
+**Output.** One `guard_condition_delta` row per call edge whose gating condition moved:
+
+```
+guard_condition_delta  <verdict>  <caller>  <callee>  <effects>  <eps>  <baseCondition>  <headCondition>
+```
+
+`impact_summary` gained `guard_narrowed` / `guard_widened` / `guard_changed`. The human renderer prints the
+section BEFORE the per-EP cards — a predicate-only change produces no cards, so a reviewer scanning top-down
+would otherwise read "no behavioural change" and stop. `--expect-no-guard-narrowing` gates on `narrowed` only.
+
+**The three design calls, as built:**
+
+1. **Edge-keyed, not (EP, effect)-keyed.** An effect's own guard set is usually empty — the gating condition
+   belongs to an ancestor edge — so effect-keying would need full transitive guard composition. Edge-keying
+   needs only "what effects are reachable from the callee", one bounded BFS per CHANGED edge.
+2. **Conjunct-set containment**, not string containment. base ⊂ head → `NARROWED`, head ⊂ base → `WIDENED`,
+   incomparable → `CHANGED`, equal → no row. An unguarded edge is the EMPTY set, so a guard appearing or
+   vanishing classifies through the same rule with no special case.
+3. **No hardcoded provider policy.** Intrinsics (`alloc`/`throw`) are excluded — a condition moved around a
+   `new` is noise — but which of the remaining providers are review-relevant is repo DOMAIN policy, so
+   `--only`/`--exclude` scope these rows with the same token grammar as the effect rows (mirroring the
+   `@parity` decision: domain policy lives in the skill, not the CLI).
+
+**Residual limits, deliberately disclosed rather than fixed:**
+
+- Classification is SYNTACTIC. It recognises "AND another clause onto the existing guard" and falls back to
+  `CHANGED` otherwise. It never claims a direction it cannot establish by containment. A semantically
+  narrowing rewrite (`a && b` → `a && (b || false)`) reads as `CHANGED`, not `NARROWED`.
+- A polarity flip (`WhenTrue` false) is kept as one opaque `!(P)` clause, because `!(a && b)` is a
+  DISJUNCTION by De Morgan and splitting it would permit a false containment. Such a change reads `CHANGED`.
+- Multiple call sites from one caller to one callee under DIFFERENT conditions collapse into a union on the
+  `(caller, callee)` key, biasing toward `CHANGED`. Per-site keying was rejected: a moved call would read as
+  remove+add.
+- An edge present on only ONE side is skipped — that is an added/removed call, owned by the effect-set and
+  reach diffs, not a predicate change. This is what keeps the signal specific.
+- **The web `/api/impact` does not carry this signal** — same renderer-vs-engine split as the other two
+  disclosures. Folded into [[web-api-seed-and-effect-disclosure-parity]].
+
+**Cache:** `ImpactSchema` 3 -> 4 (payload gained the deltas); `GuardConditions` is nullable in the DTO so an
+older blob decodes as "no deltas" rather than failing the read. Filtering is render-side, so `--only`
+combinations do not fragment the cache.
+
+**Tests:** `GuardConditionDiffTests` (7, pure — classification, normalization, `&&`-splitting inside
+parens/strings/comments, the real 230-char MR condition) and `ImpactGuardConditionTests` (6, end-to-end
+two-store through `CliApplication` — narrowed/widened/unchanged, the gate pair, `--only` scoping, human
+ordering). The reformat-immunity test is the one that matters for CI safety: a comment-only edit must NOT
+produce a row.

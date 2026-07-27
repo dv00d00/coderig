@@ -31,7 +31,40 @@ internal sealed record EntryPointRef(string Kind, string Route, string FilePath,
 // The PROVEN store-vs-store diff: the entry-point set diff, the entry points whose reachable EFFECT set
 // changed (PerEp — the behavioral signal), and the entry points whose reachable TREE changed (AffectedEps —
 // structural). All three are derived purely from the two indexed stores.
-internal sealed record ImpactDiff(EpDiff? Ep, IReadOnlyList<EpReachDelta> AffectedEps, IReadOnlyList<EpFootprintDelta> PerEp);
+//
+// GuardConditions is the fourth, orthogonal signal: call edges whose control-dependence CONDITION moved
+// while the call and its effects stayed put. The other three are structurally blind to it (nothing was
+// added or removed), which is why a predicate-only audit suppression passed --expect-no-effect-change.
+// Defaulted empty so existing constructions and OLD cache blobs decode unaffected.
+internal sealed record ImpactDiff(
+    EpDiff? Ep,
+    IReadOnlyList<EpReachDelta> AffectedEps,
+    IReadOnlyList<EpFootprintDelta> PerEp,
+    IReadOnlyList<GuardConditionDelta>? GuardConditions = null,
+    GuardCoverage? GuardCoverage = null
+)
+{
+    public IReadOnlyList<GuardConditionDelta> GuardConditionsOrEmpty => GuardConditions ?? [];
+}
+
+// How many GUARDED lambda edges each store carries — a version fingerprint, not a result.
+//
+// Guards on lambda/method-group edges did not exist before 2026-07-27
+// ([[guards-missing-on-lambda-and-method-group-edges]]): every such edge was recorded as must-run. Diffing a
+// store indexed BEFORE that fix against one indexed after therefore makes thousands of lambda edges look
+// freshly guarded, i.e. a flood of bogus NARROWED rows and a failed --expect-no-guard-narrowing — a false
+// alarm indistinguishable from a real audit suppression.
+//
+// The counts make that detectable: a real MR never takes one side from zero guarded lambda edges to thousands.
+// SkewSuspected is the disclosure trigger; the numbers are reported so the user can confirm the diagnosis
+// rather than take a bare warning on faith.
+internal sealed record GuardCoverage(int BaseLambdaGuards, int HeadLambdaGuards)
+{
+    // One side has NO guarded lambda edges while the other has a substantial number. The threshold is
+    // deliberately blunt: on a store indexed post-fix the count is in the thousands (7,091 on MedDBase), and a
+    // genuine MR moves a handful, so anything in between is far more likely to be version skew than a change.
+    public bool SkewSuspected => (BaseLambdaGuards == 0 && HeadLambdaGuards >= 50) || (HeadLambdaGuards == 0 && BaseLambdaGuards >= 50);
+}
 
 internal sealed record EpDiff(IReadOnlyList<(string Kind, string Route)> Added, IReadOnlyList<(string Kind, string Route)> Removed);
 

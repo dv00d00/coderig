@@ -22,7 +22,7 @@ internal static class QueryCacheKeys
     internal const int TreeSchema = 2; // v1->v2: TraceNode gained TruncationCause (no stale conflated seen flags)
     internal const int HazardEffectsSchema = 3; // v1->v2 EnclosingGuards; v2->v3 lazy_init_race lock-enclosed tier
     internal const int GraphHazSchema = 1;
-    internal const int ImpactSchema = 3; // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped
+    internal const int ImpactSchema = 4; // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition deltas added to the payload
 
     // The composite token the CLIENT keys its cache by (hashed with the rules fingerprint in /api/meta). It
     // folds in EVERY per-artifact schema version, so bumping ANY one above also moves the client's derivation

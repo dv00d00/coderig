@@ -267,7 +267,14 @@ internal static class ImpactEngine
         bool gate = true
     )
     {
-        var baseSide = await ComputeBaseSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode, gate: gate);
+        var headGuarded = GuardConditionDiff.GuardedEdges(headData.Graph);
+        var baseSide = await ComputeBaseSideAsync(
+            baseDbPath: baseDbPath,
+            rules: rules,
+            mode: mode,
+            headGuardedKeys: headGuarded.Keys,
+            gate: gate
+        );
 
         // The symbols whose declaration BODY changed base↔branch (differing/one-sided hash). An EP whose reach
         // intersects this set is affected IN-PLACE even when its structural reach-set diff is empty. Both maps
@@ -287,7 +294,153 @@ internal static class ImpactEngine
             branchHazards: branchSide.Hazards,
             baseHazards: baseSide.Hazards
         );
-        return new ImpactDiff(Ep: branchSide.EpDiff, AffectedEps: affectedEntryPoints, PerEp: perEpDeltas);
+        var guardConditions = ComputeGuardConditionDeltas(
+            headData: headData,
+            branchSide: branchSide,
+            headGuarded: headGuarded,
+            baseGuarded: baseSide.Guarded,
+            basePresent: baseSide.PairsPresent,
+            mode: mode
+        );
+        return new ImpactDiff(
+            Ep: branchSide.EpDiff,
+            AffectedEps: affectedEntryPoints,
+            PerEp: perEpDeltas,
+            GuardConditions: guardConditions,
+            GuardCoverage: new GuardCoverage(
+                BaseLambdaGuards: GuardConditionDiff.LambdaGuardCount(baseSide.Guarded),
+                HeadLambdaGuards: GuardConditionDiff.LambdaGuardCount(headGuarded)
+            )
+        );
+    }
+
+    // The guard-condition diff: edges whose gating predicate moved, what they gate, and which EPs reach them.
+    //
+    // Cost is bounded by the CHANGED-edge count, not the graph: classification is a set comparison over
+    // already-decoded conjuncts, and only the survivors seed a forward walk. The walk is what answers "what
+    // does this condition gate" — the effect keys reachable FROM the callee. This is deliberately NOT the
+    // effect's own guard set: post-fix the audit in MR !11025 is reached through a guarded lambda edge but is
+    // itself unconditional within that lambda's body, so an effect-keyed diff still reports UNCHANGED. Keying
+    // on the EDGE is what makes the predicate-only change visible without full transitive guard composition.
+    private static IReadOnlyList<GuardConditionDelta> ComputeGuardConditionDeltas(
+        HeadSideData headData,
+        BranchSideData branchSide,
+        Dictionary<(string Caller, string Callee), SortedSet<string>> headGuarded,
+        Dictionary<(string Caller, string Callee), SortedSet<string>> baseGuarded,
+        HashSet<(string Caller, string Callee)> basePresent,
+        FactPathFinder.TraversalMode mode
+    )
+    {
+        var candidates = new HashSet<(string Caller, string Callee)>(headGuarded.Keys);
+        candidates.UnionWith(baseGuarded.Keys);
+        var headPresent = GuardConditionDiff.PairsPresent(headData.Graph, candidates);
+
+        // Pre-classify to find the callees actually worth a reach walk: the edges present on both sides whose
+        // conjunct sets differ. Without this the walk would run for every guarded edge in the graph.
+        var changedCallees = new List<string>();
+        foreach (var key in candidates)
+        {
+            if (!basePresent.Contains(key) || !headPresent.Contains(key))
+            {
+                continue;
+            }
+
+            var b = baseGuarded.TryGetValue(key, out var bs) ? bs : [];
+            var h = headGuarded.TryGetValue(key, out var hs) ? hs : [];
+            if (GuardConditionDiff.Classify(b, h) is not null)
+            {
+                changedCallees.Add(key.Callee);
+            }
+        }
+
+        var effectsByCallee = EffectsReachableFrom(
+            graph: headData.Graph,
+            seeds: changedCallees.Distinct(StringComparer.Ordinal).ToList(),
+            effectsByEnclosing: EffectKeysByEnclosing(headData.Effects),
+            mode: mode
+        );
+
+        // EP attribution: an EP is attributed an edge when its reach contains the CALLER (the frame whose
+        // branch moved). A count plus a few sample routes, not a row per EP — one changed edge in a shared
+        // utility is reachable from hundreds of EPs.
+        var epsByCaller = new Dictionary<string, (int Count, IReadOnlyList<string> Samples)>(StringComparer.Ordinal);
+        (int, IReadOnlyList<string>) EpsReaching(string caller)
+        {
+            if (epsByCaller.TryGetValue(caller, out var cached))
+            {
+                return cached;
+            }
+
+            var routes = new List<string>();
+            var count = 0;
+            foreach (var (key, reach) in branchSide.ReachSets)
+            {
+                if (!reach.Contains(caller))
+                {
+                    continue;
+                }
+
+                count++;
+                if (routes.Count < 3)
+                {
+                    routes.Add($"{key.Kind} {key.Route}");
+                }
+            }
+
+            routes.Sort(StringComparer.Ordinal);
+            var result = (count, (IReadOnlyList<string>)routes);
+            epsByCaller[caller] = result;
+            return result;
+        }
+
+        return GuardConditionDiff.Diff(
+            baseGuarded: baseGuarded,
+            headGuarded: headGuarded,
+            basePresent: basePresent,
+            headPresent: headPresent,
+            effectsFromCallee: callee => effectsByCallee.TryGetValue(callee, out var e) ? e : [],
+            epsReaching: EpsReaching
+        );
+    }
+
+    // `provider:operation` labels reachable from each seed node. One BFS per seed over the already-loaded
+    // graph — the seeds are the callees of CHANGED guarded edges, so this is a handful of walks on a real MR,
+    // not a per-edge cost. Unbounded depth/nodes to match ComputeFootprints: a truncated walk would silently
+    // drop the very effect that makes a guard change reviewable, reading as "this gates nothing".
+    private static Dictionary<string, IReadOnlyList<string>> EffectsReachableFrom(
+        FactGraphData graph,
+        IReadOnlyList<string> seeds,
+        Dictionary<string, List<(string, string, string, string)>> effectsByEnclosing,
+        FactPathFinder.TraversalMode mode
+    )
+    {
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        if (seeds.Count == 0)
+        {
+            return result;
+        }
+
+        var reached = FactPathFinder.ReachesInfoFromEachSeed(graph, seeds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
+        for (var i = 0; i < seeds.Count; i++)
+        {
+            var labels = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var (node, _) in reached[i])
+            {
+                if (!effectsByEnclosing.TryGetValue(node, out var keys))
+                {
+                    continue;
+                }
+
+                foreach (var (provider, operation, _, _) in keys)
+                {
+                    labels.Add($"{provider}:{operation}");
+                }
+            }
+
+            result[seeds[i]] = [.. labels.Order(StringComparer.Ordinal)];
+        }
+
+        return result;
     }
 
     // Write the proven diff + both sides' provenance + the diff-site FQN subset to the cache (best-effort).
@@ -386,6 +539,54 @@ internal static class ImpactEngine
         static bool InSet(string provider, string operation, HashSet<string> set) =>
             set.Contains(provider) || set.Contains($"{provider}:{operation}");
     }
+
+    // Effect-filter the guard-condition deltas with the SAME --only/--exclude grammar as the effect rows, so
+    // `--only audit` narrows this signal to "guard changes that gate an audit" instead of leaving it as an
+    // unfiltered wall. A row whose whole effect list is filtered out is dropped: the condition still moved,
+    // but not around anything the reviewer asked about.
+    //
+    // Intrinsic providers are already excluded when the deltas are built (a guard moved around a `new` is not
+    // review material), so there is nothing extra to disclose here — hence no HiddenIntrinsic counterpart.
+    internal static IReadOnlyList<GuardConditionDelta> FilterGuardConditions(
+        IReadOnlyList<GuardConditionDelta> deltas,
+        HashSet<string> only,
+        HashSet<string> exclude
+    )
+    {
+        if (only.Count == 0 && exclude.Count == 0)
+        {
+            return deltas;
+        }
+
+        var kept = new List<GuardConditionDelta>(deltas.Count);
+        foreach (var d in deltas)
+        {
+            var effects = d.Effects.Where(Keep).ToList();
+            if (effects.Count == 0)
+            {
+                continue;
+            }
+
+            kept.Add(d with { Effects = effects });
+        }
+
+        return kept;
+
+        bool Keep(string label)
+        {
+            // Labels are already `provider:operation`; match either the bare provider or the full pair.
+            var provider = label.Split(':')[0];
+            var inOnly = only.Contains(provider) || only.Contains(label);
+            var inExclude = exclude.Contains(provider) || exclude.Contains(label);
+            return (only.Count == 0 || inOnly) && !inExclude;
+        }
+    }
+
+    // The number of edges whose guard NARROWED — the `--expect-no-guard-narrowing` gate count. Widened and
+    // Changed are reported but do NOT gate: only narrowing is the "an effect silently stopped firing" shape,
+    // and a gate that also tripped on relaxations would be unusable on ordinary feature work.
+    internal static int NarrowedGuardCount(IReadOnlyList<GuardConditionDelta> deltas) =>
+        deltas.Count(d => d.Verdict == GuardVerdict.Narrowed);
 
     // Read a store's provenance from its own run row (the run with the most symbols — the primary index).
     // Short sha = first 12 chars, matching `rig runs`. Fallback is the store-ref the user passed.
@@ -828,8 +1029,20 @@ internal static class ImpactEngine
         Dictionary<(string Kind, string Route), HashSet<string>> ReachSets,
         Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Footprints,
         Dictionary<(string Kind, string Route), HashSet<HazardFinding>> Hazards,
-        IReadOnlyDictionary<string, string> BodyHashes
-    )> ComputeBaseSideAsync(string baseDbPath, RuleSet rules, FactPathFinder.TraversalMode mode, bool gate = true)
+        IReadOnlyDictionary<string, string> BodyHashes,
+        Dictionary<(string Caller, string Callee), SortedSet<string>> Guarded,
+        HashSet<(string Caller, string Callee)> PairsPresent
+    )> ComputeBaseSideAsync(
+        string baseDbPath,
+        RuleSet rules,
+        FactPathFinder.TraversalMode mode,
+        // The HEAD store's guarded-edge keys. Passed IN because the guard-condition diff needs, for every
+        // candidate edge, whether it exists on the BASE side — and the base graph only exists inside this
+        // method. Union with the base's own guarded keys here so one pass over the base edges answers
+        // presence for the whole candidate set; the HEAD half is answered by the caller, which holds that graph.
+        IReadOnlyCollection<(string Caller, string Callee)> headGuardedKeys,
+        bool gate = true
+    )
     {
         await using var context = new RigDbContext(baseDbPath, readOnly: true);
         var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
@@ -881,7 +1094,13 @@ internal static class ImpactEngine
         // against the branch's WITHOUT a second base load.
         var bodyHashes = await Reads.LoadSymbolBodyHashesAsync(context);
 
-        return (reachSets, footprints, hazards, bodyHashes);
+        // Guard-condition diff inputs, computed while the base graph is still open.
+        var baseGuarded = GuardConditionDiff.GuardedEdges(graph);
+        var candidates = new HashSet<(string Caller, string Callee)>(headGuardedKeys);
+        candidates.UnionWith(baseGuarded.Keys);
+        var basePairs = GuardConditionDiff.PairsPresent(graph, candidates);
+
+        return (reachSets, footprints, hazards, bodyHashes, baseGuarded, basePairs);
     }
 
     // Diff two stores' per-EP footprints: for every EP present in BOTH (paired on Kind+Route), the effects its

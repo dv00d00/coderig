@@ -80,6 +80,17 @@ internal static class ImpactCommand
         {
             Description = "CI gate: exit 1 if any entry point's reachable effect set changed (for behavior-preserving MRs).",
         };
+        // The gate --expect-no-effect-change structurally CANNOT provide: a guard tightened around an
+        // unchanged effect adds no call and no effect, so the effect-set gate passes while the effect silently
+        // stops firing for a subset of inputs. Separate flag rather than folded in, because NARROWED is a
+        // syntactic over-approximation (conjunct containment, no solver) and must not be able to fail a CI job
+        // that opted only into the deterministic effect-set gate.
+        var expectNoGuardNarrowing = new Option<bool>("--expect-no-guard-narrowing")
+        {
+            Description =
+                "CI gate: exit 1 if any call edge's guard NARROWED (an effect now fires on strictly fewer paths) — "
+                + "catches audit suppression / permission tightening that --expect-no-effect-change cannot see.",
+        };
         var cmd = new Command(
             name: "impact",
             description: "Two-store diff: the entry-point + per-EP effect/reach changes between two indexed commits (--base <store> --head <store>)."
@@ -100,6 +111,7 @@ internal static class ImpactCommand
             exclude,
             intrinsic,
             expectNoEffectChange,
+            expectNoGuardNarrowing,
         };
         // Both stores are mandatory — impact is a pure two-store diff, there is no working-tree/git fallback
         // and no LATEST default. Error clearly (before opening anything) if either ref is missing.
@@ -135,7 +147,8 @@ internal static class ImpactCommand
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
                             Intrinsic: pr.GetValue(intrinsic),
-                            ExpectNoEffectChange: pr.GetValue(expectNoEffectChange)
+                            ExpectNoEffectChange: pr.GetValue(expectNoEffectChange),
+                            ExpectNoGuardNarrowing: pr.GetValue(expectNoGuardNarrowing)
                         ),
                         new CommandIo(
                             new TextOutput(Output: output, Error: error),
@@ -164,7 +177,8 @@ internal static class ImpactCommand
         HashSet<string> Only,
         HashSet<string> Exclude,
         bool Intrinsic,
-        bool ExpectNoEffectChange
+        bool ExpectNoEffectChange,
+        bool ExpectNoGuardNarrowing
     );
 
     private static async Task<int> RunAsync(Options opts, CommandIo io)
@@ -223,8 +237,15 @@ internal static class ImpactCommand
             exclude: opts.Exclude,
             includeIntrinsic: opts.Intrinsic
         );
-        var diff = art.Diff with { PerEp = filteredPerEp };
+        var diff = art.Diff with
+        {
+            PerEp = filteredPerEp,
+            // Same filter grammar as the effect rows — see FilterGuardConditions. Also render-side, so the
+            // cached artifact stays filter-independent.
+            GuardConditions = ImpactEngine.FilterGuardConditions(art.Diff.GuardConditionsOrEmpty, only: opts.Only, exclude: opts.Exclude),
+        };
         WriteIntrinsicNote(hiddenIntrinsic, io.TextOutput.Error);
+        WriteGuardSkewWarning(diff, io.TextOutput.Error);
 
         // Validate the filter tokens against the effective rule set. Worth the extra rules load (json parse,
         // trivial next to a two-store diff): a typo'd `--only llbgen:write` would otherwise filter everything
@@ -252,9 +273,76 @@ internal static class ImpactCommand
             max: max,
             hiddenIntrinsic: hiddenIntrinsic
         );
-        // The gate counts the FILTERED set so output and CI verdict can never disagree; impact_summary's
-        // intrinsic_hidden column is what keeps that from being a silent loosening.
-        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, ImpactEngine.EffectChangedEpCount(diff), io.TextOutput.Error);
+        // The gates count the FILTERED sets so output and CI verdict can never disagree; impact_summary's
+        // intrinsic_hidden column is what keeps that from being a silent loosening. Both gates are evaluated
+        // (so a run opting into both sees both verdicts) and the exit code is the OR — either failing fails CI.
+        var effectExit = ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, ImpactEngine.EffectChangedEpCount(diff), io.TextOutput.Error);
+        var guardExit = ExpectNoGuardNarrowingExit(
+            opts.ExpectNoGuardNarrowing,
+            ImpactEngine.NarrowedGuardCount(diff.GuardConditionsOrEmpty),
+            io.TextOutput.Error
+        );
+        return effectExit != 0 ? effectExit : guardExit;
+    }
+
+    // Display label for a guard-delta endpoint. ShortName truncates at the first `(`, which silently DROPS the
+    // `~λN` lambda marker that lives after the parameter list — so the four separately-guarded lambdas of one
+    // method all rendered as the same `PersonEventEntity.Save`, making four distinct edges look like duplicate
+    // rows. Re-append the marker so the rows are distinguishable and each one can be found in `tree --guards`.
+    internal static string GuardEndpointLabel(string symbolId)
+    {
+        var marker = symbolId.IndexOf("~λ", StringComparison.Ordinal);
+        return marker < 0 ? ShortName(symbolId) : ShortName(symbolId) + symbolId[marker..];
+    }
+
+    // Disclose a VERSION-SKEWED pair of stores before the guard rows are believed.
+    //
+    // Guards on lambda edges did not exist before 2026-07-27, so diffing a store indexed by an older `rig`
+    // against a newer one makes thousands of lambda edges look freshly guarded — a flood of NARROWED rows and a
+    // failed --expect-no-guard-narrowing that is indistinguishable, row by row, from a real audit suppression.
+    // Left silent this would manufacture exactly the kind of false report that cost a full session on
+    // 2026-07-27, so it warns loudly and names the fix rather than quietly suppressing the rows (suppression
+    // would hide a genuine narrowing that happened to be in the same diff).
+    internal static void WriteGuardSkewWarning(ImpactDiff diff, TextWriter error)
+    {
+        if (diff.GuardCoverage is not { SkewSuspected: true } c)
+        {
+            return;
+        }
+
+        error.WriteLine(
+            $"WARNING: the two stores disagree on guarded lambda edges ({c.BaseLambdaGuards} base vs {c.HeadLambdaGuards} head). "
+                + "Guards on lambda/method-group edges did not exist before 2026-07-27, so one of these stores predates that "
+                + "fix and EVERY guard_condition_delta row below is suspect — a pre-fix store reports must-run for edges the "
+                + "post-fix one reports as guarded. Re-index BOTH commits with the current rig before trusting these rows or "
+                + "the --expect-no-guard-narrowing verdict."
+        );
+    }
+
+    // The `--expect-no-guard-narrowing` CI gate. Narrowing = a call edge whose gating condition gained
+    // conjuncts, so an effect it leads to now fires on strictly fewer paths. This is the class
+    // --expect-no-effect-change structurally cannot catch: no call and no effect changed, only the predicate.
+    //
+    // Only NARROWED gates. Widened/Changed rows are reported for review but a gate tripping on them would fire
+    // on ordinary feature work. The verdict goes to STDERR so a --format tsv stdout stays machine-clean.
+    internal static int ExpectNoGuardNarrowingExit(bool expect, int narrowedCount, TextWriter error)
+    {
+        if (!expect)
+        {
+            return 0;
+        }
+
+        if (narrowedCount > 0)
+        {
+            error.WriteLine(
+                $"--expect-no-guard-narrowing FAILED: {narrowedCount} call edge(s) had their guard NARROWED — an effect now "
+                    + "fires on strictly fewer paths (see the guard_condition_delta rows). exit 1."
+            );
+            return 1;
+        }
+
+        error.WriteLine("--expect-no-guard-narrowing OK: no call edge's guard narrowed.");
+        return 0;
     }
 
     // The `--expect-no-effect-change` CI gate. Behavioral change = an entry point present in BOTH commits whose
@@ -306,6 +394,9 @@ internal static class ImpactCommand
 
         WriteHeader(output, baseProv, headProv, mode, impactDiff);
         WriteEpDiffHuman(output, baseProv, impactDiff.Ep, max);
+        // Before the per-EP cards: a predicate-only change produces NO per-EP effect delta, so if this section
+        // came after the effect section a reviewer scanning top-down would read "no behavioural change" and stop.
+        WriteGuardConditionsHuman(output, impactDiff.GuardConditionsOrEmpty, max);
         // PRIMARY signal: the entry points whose reachable EFFECT set changed (the behavioral handful). Always
         // shown — this is the "what actually does something different" answer.
         WritePerEpHuman(output, baseProv, impactDiff.PerEp, fqnSites, max);
@@ -337,6 +428,76 @@ internal static class ImpactCommand
         foreach (var (kind, route) in diff.Removed)
         {
             output.WriteLine($"ep_removed\t{kind}\t{route}");
+        }
+    }
+
+    // The guard-condition section: call edges whose gating predicate moved. Silent when nothing moved, so it
+    // costs nothing on the common case. A NARROWED row is the highest-signal line `impact` can print — it is
+    // the ONLY output a predicate-only change produces — so it leads, and the base→head conditions are shown
+    // in full rather than summarized: the whole point is to read what the condition became.
+    private static void WriteGuardConditionsHuman(TextWriter output, IReadOnlyList<GuardConditionDelta> deltas, int max)
+    {
+        if (deltas.Count == 0)
+        {
+            return;
+        }
+
+        var narrowed = deltas.Count(d => d.Verdict == GuardVerdict.Narrowed);
+        output.WriteLine();
+        output.WriteLine(
+            $"Guard conditions changed on {deltas.Count} call edge(s): {narrowed} narrowed, "
+                + $"{deltas.Count(d => d.Verdict == GuardVerdict.Widened)} widened, "
+                + $"{deltas.Count(d => d.Verdict == GuardVerdict.Changed)} changed"
+        );
+        if (narrowed > 0)
+        {
+            output.WriteLine($"{Indent.L1}NARROWED = the effect now fires on strictly FEWER paths — audit suppression, permission");
+            output.WriteLine($"{Indent.L1}tightening and feature-flag gating all have this shape, and NONE of them change the effect set.");
+        }
+
+        // GROUPED BY THE CONDITION, not per edge. One source-level `if` typically gates several edges — the MR
+        // !11025 change produced FOUR (the method's separately-guarded argument lambdas), which as four rows
+        // carrying identical conditions read as duplicates and invited the reader to distrust the output. The
+        // reviewable unit is the predicate that moved; the edges it gates are its detail. TSV stays per-edge —
+        // that is the machine contract, and there the labels are distinct.
+        var groups = deltas
+            .GroupBy(d => (d.Verdict, d.Caller, d.BaseCondition, d.HeadCondition))
+            .Select(g => new
+            {
+                g.Key,
+                Callees = g.Select(x => x.Callee).ToList(),
+                Effects = g.SelectMany(x => x.Effects).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
+                EpCount = g.Max(x => x.EpCount),
+                Samples = g.First().SampleRoutes,
+            })
+            .ToList();
+
+        foreach (var g in groups.Take(max))
+        {
+            var verdict = g.Key.Verdict.ToString().ToUpperInvariant();
+            output.WriteLine($"{Indent.L1}{verdict}  in {ShortName(g.Key.Caller)}");
+            output.WriteLine($"{Indent.L2}base:  {(g.Key.BaseCondition.Length == 0 ? "(unconditional)" : g.Key.BaseCondition)}");
+            output.WriteLine($"{Indent.L2}head:  {(g.Key.HeadCondition.Length == 0 ? "(unconditional)" : g.Key.HeadCondition)}");
+            output.WriteLine(
+                $"{Indent.L2}gates {g.Callees.Count} edge(s): {string.Join(", ", g.Callees.Take(4).Select(GuardEndpointLabel))}"
+                    + (g.Callees.Count > 4 ? $", +{g.Callees.Count - 4} more" : "")
+            );
+            // Effects are capped for readability — a lambda that reaches half the solution legitimately lists
+            // 20+ providers, which buries the one that matters. Scope with --only to see a specific provider.
+            output.WriteLine(
+                $"{Indent.L2}reaching: {string.Join(", ", g.Effects.Take(8))}"
+                    + (g.Effects.Count > 8 ? $", +{g.Effects.Count - 8} more (use --only to scope)" : "")
+            );
+            if (g.EpCount > 0)
+            {
+                var samples = g.Samples.Count > 0 ? $" — e.g. {string.Join("; ", g.Samples)}" : "";
+                output.WriteLine($"{Indent.L2}reached by {g.EpCount} entry point(s){samples}");
+            }
+        }
+
+        if (groups.Count > max)
+        {
+            output.WriteLine($"{Indent.L1}… +{groups.Count - max} more (raise --limit, or --format tsv for all)");
         }
     }
 
@@ -745,13 +906,26 @@ internal static class ImpactCommand
         //  ep_hazard_added    <kind>  <route>  <type>  <confidence>  <cell>  <enclosing>   (a hazard finding — race_window / lazy_init_race / n_plus_1 / unserializable_payload, see HazardKinds — newly present on the EP's reach: a refactor opened it. cell = the observation Context, enclosing = the param-free producing method. A REVIEW flag, not a verdict.)
         //  ep_hazard_removed  <kind>  <route>  <type>  <confidence>  <cell>  <enclosing>   (a hazard finding that DROPPED from the EP's reach base->head: a fix closed it. Same columns as ep_hazard_added.)
 
-        //  impact_summary  eps=<n>  behavioral_eps=<n>  effect_added=<n>  effect_removed=<n>  effect_amplified=<n>  guard_delta=<n>  intrinsic_hidden=<n>
+        //  guard_condition_delta  <verdict>  <caller>  <callee>  <effects>  <eps>  <baseCondition>  <headCondition>
+        //     (A call edge whose CONTROL-DEPENDENCE CONDITION moved while the call and its effects stayed put —
+        //     the predicate-only change class ep_effect_* is structurally blind to, and the reason a MedDBase
+        //     audit suppression passed --expect-no-effect-change. <verdict> is narrowed (base conjuncts ⊂ head:
+        //     fires on strictly FEWER paths — the review headline, and what --expect-no-guard-narrowing gates on),
+        //     widened (⊃: fires on MORE), or changed (incomparable — deliberately not sub-classified, since
+        //     without a solver we cannot say which way the truth set moved). <effects> = comma-joined
+        //     provider:operation reachable FROM the callee, i.e. what this condition gates (intrinsics excluded;
+        //     --only/--exclude filter these rows too). <eps> = how many entry points reach the caller. Conditions
+        //     are comment- and whitespace-normalized so they are single-line and greppable. Classification is
+        //     SYNTACTIC conjunct containment, an over-approximation: it recognises "AND another clause onto the
+        //     existing guard" and falls back to `changed` otherwise.)
+        //  impact_summary  eps=<n>  behavioral_eps=<n>  effect_added=<n>  effect_removed=<n>  effect_amplified=<n>  guard_delta=<n>  guard_narrowed=<n>  guard_widened=<n>  guard_changed=<n>  intrinsic_hidden=<n>
         //     (ALWAYS FIRST, and never capped by --limit. A reviewer or agent that truncates the stream still
         //     reads the true totals: the original failure this fixes was a `Select-Object -First 300` capture
         //     whose 300 lines were all ep_reach_+ rows for ONE entry point, so the diff read as "no behavioural
         //     change" while 190 EPs newly wrote a table. intrinsic_hidden discloses what the default alloc/throw
         //     filter withheld — and, because the --expect-no-effect-change gate counts the FILTERED set, it is
         //     also the audit trail for why a gate that would once have tripped now passes.)
+        var guardConditions = diff.GuardConditionsOrEmpty;
         output.WriteLine(
             "impact_summary\t"
                 + $"eps={diff.AffectedEps.Count}\t"
@@ -760,8 +934,23 @@ internal static class ImpactCommand
                 + $"effect_removed={diff.PerEp.Sum(d => d.Removed.Count)}\t"
                 + $"effect_amplified={diff.PerEp.Sum(d => d.Amplified.Count)}\t"
                 + $"guard_delta={diff.PerEp.Count(ImpactEngine.HasGuardDeltaOnSharedMutation)}\t"
+                + $"guard_narrowed={guardConditions.Count(g => g.Verdict == GuardVerdict.Narrowed)}\t"
+                + $"guard_widened={guardConditions.Count(g => g.Verdict == GuardVerdict.Widened)}\t"
+                + $"guard_changed={guardConditions.Count(g => g.Verdict == GuardVerdict.Changed)}\t"
                 + $"intrinsic_hidden={hiddenIntrinsic}"
         );
+
+        // GUARD-CONDITION DELTA: one row per call edge whose gating predicate moved. Emitted right after the
+        // summary and BEFORE the bulky per-EP rows, because a NARROWED row is the highest-signal line in the
+        // whole stream — it is the only signal that survives a predicate-only change — and a truncated capture
+        // must not lose it.
+        foreach (var g in guardConditions)
+        {
+            output.WriteLine(
+                $"guard_condition_delta\t{g.Verdict.ToString().ToLowerInvariant()}\t{GuardEndpointLabel(g.Caller)}\t{GuardEndpointLabel(g.Callee)}\t"
+                    + $"{string.Join(',', g.Effects)}\t{g.EpCount}\t{g.BaseCondition}\t{g.HeadCondition}"
+            );
+        }
 
         // Cause per EP: behavioral when its effect set changed (it's in PerEp), else the structural sub-cause.
         var behavioralKeys = diff.PerEp.Select(d => (d.Kind, d.Route)).ToHashSet();
