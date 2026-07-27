@@ -4,6 +4,7 @@ using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
 using Rig.Cli.Services;
+using Rig.Storage;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using static Rig.Cli.Graph.TraversalGraphLoader;
@@ -40,16 +41,44 @@ internal static class FactCommands
 
                     var latest = StoreLayout.LatestStoreId(workingDirectory);
                     output.WriteLine($"Runs ({storeIds.Count} store(s) in {StoreLayout.RigDir(workingDirectory)})");
+                    var unreadable = new List<string>();
                     foreach (var storeId in storeIds)
                     {
                         var marker = string.Equals(storeId, latest, StringComparison.OrdinalIgnoreCase) ? "  ← LATEST (read default)" : "";
                         output.WriteLine($"{Indent.L1}store {storeId}{marker}");
-                        await using var context = await OpenReadContextGatedAsync(
-                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeId)
-                        );
-                        await RenderRunsAsync(context: context, output: output, idIndent: Indent.L2, detailIndent: Indent.L3);
+
+                        // RESILIENT PER STORE. Stores are per-commit and ACCUMULATE, so an old one lying
+                        // around is normal — but the schema gate throws on open, and one throw used to abort
+                        // the whole listing mid-stream (exit 2, remaining stores never printed). `runs` is the
+                        // documented health-check and step 1 of the review workflow, so a single stale store
+                        // made the first step of the workflow unusable. Mark it and carry on: an unreadable
+                        // store is INFORMATION this command exists to report, not a failure of the command.
+                        try
+                        {
+                            await using var context = await OpenReadContextGatedAsync(
+                                new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeId)
+                            );
+                            await RenderRunsAsync(context: context, output: output, idIndent: Indent.L2, detailIndent: Indent.L3);
+                        }
+                        catch (RigStoreException ex)
+                        {
+                            unreadable.Add(storeId);
+                            output.WriteLine($"{Indent.L2}⚠ unreadable — {ex.Message}");
+                        }
                     }
 
+                    // Trailing summary so the condition is visible even when the per-store lines scroll away,
+                    // and so a caller that greps the tail still learns the store set is partly stale.
+                    if (unreadable.Count > 0)
+                    {
+                        output.WriteLine(
+                            $"{Indent.L1}{unreadable.Count} of {storeIds.Count} store(s) unreadable: {string.Join(", ", unreadable)}"
+                                + " — re-index those commits (`rig index <sln>` with that commit checked out), or delete the store dirs."
+                        );
+                    }
+
+                    // Exit 0 even with stale stores present: the listing SUCCEEDED and reported them. A
+                    // non-zero exit here is what broke the health check.
                     return 0;
                 }
             )

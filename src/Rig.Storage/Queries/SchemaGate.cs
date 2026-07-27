@@ -25,18 +25,25 @@ public static class SchemaGate
 
     public static async Task AssertReadableAsync(DbConnection connection, CancellationToken cancellationToken = default)
     {
+        // NAME THE STORE in every failure. `impact` opens TWO stores (--base and --head) and the web/query
+        // paths resolve one implicitly from `.rig/LATEST`, so a bare "store schema v1, expects v3" left the
+        // user guessing WHICH store to re-index — and CommandGuard's fallback attribution reported the
+        // DEFAULT store path rather than the one actually opened. connection.DataSource is the opened db, so
+        // it is always right. (The EnclosingGuards probe below already did this; the version gate did not.)
         var (index, _) = await SchemaMeta.ReadAsync(connection, cancellationToken);
         if (index is null)
         {
             throw new RigStoreException(
-                $"Not an initialized rig store (schema v{SchemaVersion.Index} expected, none found) — run `rig index`."
+                $"The store at {connection.DataSource} is not an initialized rig store "
+                    + $"(schema v{SchemaVersion.Index} expected, none found) — run `rig index`."
             );
         }
 
         if (index != SchemaVersion.Index)
         {
             throw new RigStoreException(
-                $"Store schema v{index}, this rig expects v{SchemaVersion.Index} — re-index (the .rig store is disposable; rebuild it with `rig index`)."
+                $"The store at {connection.DataSource} is schema v{index}, this rig expects v{SchemaVersion.Index} "
+                    + "— re-index that commit (the .rig store is disposable; rebuild it with `rig index`)."
             );
         }
 

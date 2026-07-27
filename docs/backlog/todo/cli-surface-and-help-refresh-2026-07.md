@@ -15,7 +15,7 @@ rig symbols "DocumentPreviewBuilder" --kind method --rules ./rig.rules.json
 `index`/`derive`/`reaches`/`tree`/`callers`/`impact` accept it; `symbols` does not. Either make it global or
 document per-command support. Same audit needed for `--store`, `--format`, `--no-cache`.
 
-## 2. `rig runs` aborts on the FIRST stale-schema store instead of listing the healthy ones
+## 2. `rig runs` aborts on the FIRST stale-schema store instead of listing the healthy ones — ✅ FIXED 2026-07-27
 
 ```bash
 rig runs
@@ -27,11 +27,39 @@ rig runs
 One old store makes the **health-check command** unusable — and health-check is step 1 of the documented
 workflow. It should mark stale stores (`⚠ schema v1 — re-index`) and continue. Consider `rig runs --prune`.
 
-## 3. Stale stores silently poison `impact` selection
+## 3. Stale stores silently poison `impact` selection — ✅ FIXED 2026-07-27
 
 `rig impact --base 57d16d0afc4f …` failed the same way. Since `impact` is the review command and old base
 stores accumulate, surface schema compatibility **in the store listing** and fail with the fix
 ("`rig index <sln>` at that commit") rather than a generic message.
+
+### Fix for 2 + 3
+
+Both were one root cause with two symptoms: the schema gate throws at store-open, and `runs` had the open
+inside its enumeration loop with no per-store recovery, so the first stale store aborted the listing (exit 2)
+and the healthy stores past it were never printed.
+
+- **`runs` is resilient per store** (`FactCommands.BuildRuns`): `RigStoreException` is caught per store, the
+  store is marked `⚠ unreadable — <message>`, and enumeration continues. A trailing summary reports the
+  scale (`5 of 9 store(s) unreadable: …`) for a reader who only sees the tail. **Exit 0** even with stale
+  stores present — the listing succeeded and reported them; the non-zero exit is what broke the health check.
+- **Every schema failure now NAMES the store** (`SchemaGate.AssertReadableAsync`) via `connection.DataSource`.
+  This is item 3: `impact` opens TWO stores and other paths resolve one implicitly from `.rig/LATEST`, so a
+  bare "store schema v1, expects v3" left the user guessing which to re-index — and CommandGuard's fallback
+  attribution reported the DEFAULT store path rather than the one actually opened. The `EnclosingGuards` drift
+  probe already named its store; the version gate did not.
+
+**Verified on the real MedDBase workspace** (which has 5 genuine v1 stores): pre-fix `rig runs` died after 2
+stores; now all 9 list, the 5 stale ones are marked with their exact db path, exit 0 — and it reveals the 4
+usable stores, including both MR stores, which the abort had been hiding.
+
+**Regression tests:** `tests/Rig.Tests/Cli/RunsStaleStoreTests.cs` — playground index + synthetic unreadable
+stores whose ids sort FIRST (the ordering that killed the listing). Verified red→green: the resilience and
+store-naming tests fail pre-fix; a third negative-control test asserts a fully-healthy set emits NO warning,
+so the marker can't decay into noise.
+
+Not done: `rig runs --prune`. Deleting store dirs is destructive and the summary now tells you exactly which
+ones, so the manual `rm` is a one-liner — left as a deliberate non-goal rather than an oversight.
 
 ## 4. `--format llm` is undocumented and has no legend
 
