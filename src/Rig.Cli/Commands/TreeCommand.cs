@@ -525,6 +525,27 @@ internal static class TreeCommand
         effects = selection.Effects;
         WriteIntrinsicNote(selection.HiddenIntrinsic, io.TextOutput.Error);
 
+        // --guards + an effect filter INTERACT, and badly enough to warrant its own disclosure. `--view paths`
+        // keeps only paths that reach a surviving effect, so an edge whose own effect was filtered out is
+        // PRUNED — taking its ⎇ guard annotation with it. The guard-hunting user asked for guards and the
+        // filter silently removed some of them.
+        //
+        // Measured on MedDBase `PersonEventEntity.Save`: 73 guarded edges with --intrinsic, 42 without — the
+        // default hiding of alloc/throw costs 31 of them, because a call whose only effect is `alloc:object`
+        // (a delegate/closure allocation) is exactly the kind of edge that carries an interesting guard.
+        //
+        // No count is given: computing it honestly means building the forest twice. Naming the interaction and
+        // the escape hatch is the part that prevents a wrong conclusion — same reasoning as the deliberately
+        // unquantified intrinsic note (see EffectDerivation.IntrinsicNote).
+        var effectFilterActive = selection.HiddenIntrinsic > 0 || opts.Only.Count > 0 || opts.Exclude.Count > 0;
+        if (opts.Guards && effectFilterActive)
+        {
+            io.TextOutput.Error.WriteLine(
+                "note: --guards with an effect filter — paths whose only effect is filtered out are pruned, so "
+                    + "some guarded edges are NOT shown. Add --intrinsic (and/or drop --only/--exclude) to see every guard."
+            );
+        }
+
         // --format llm / --format llm-ids: compact flat TSV for LLM consumption. Emitted before the
         // normal render path (skips the deployment map, seam, and box-drawing chrome — those are token
         // waste for a model). Projection determined by --view: paths (default) → EffectfulPaths; full →

@@ -41,8 +41,20 @@ internal static class Root
             EntryPointsCommand.Build(output, error, workingDirectory),
             ImpactCommand.Build(output, error, workingDirectory),
             ServeCommand.Build(output, error, workingDirectory),
-            // DeadCommand.Build(output, error, workingDirectory),
-
+            // `dead` is DISABLED, but registered as an explaining STUB rather than simply absent. It ran on
+            // the all-hops dispatch superset that the one-hop engine no longer matches (see the two-stage
+            // dispatch notes in CLAUDE.md), so its answers would now be wrong. Left unregistered, it failed
+            // with System.CommandLine's "'dead' was not matched", which reads like a typo or a broken install
+            // — and it is still referenced by older docs and by anyone's muscle memory, so that error was
+            // actively misleading. The stub states WHY and gives the workaround. Re-enable by restoring
+            // DeadCommand.Build once `dead` is moved onto the one-hop engine.
+            DisabledCommand.Build(
+                name: "dead",
+                reason: "`dead` is temporarily disabled: it ran on the all-hops dispatch superset, which the one-hop "
+                    + "traversal engine no longer matches, so its results would be unsound.",
+                workaround: "Approximate it with `rig callers <method> --roots` (empty result => no in-solution caller).",
+                error: error
+            ),
             FactCommands.BuildFiles(output, error, workingDirectory),
             FactCommands.BuildProfile(output, error, workingDirectory),
         };

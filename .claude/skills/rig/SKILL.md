@@ -137,7 +137,7 @@ bound); refine to "active-in" via rule-declared `provides`∩`requires` tokens. 
 - Results are only as good as the rules + what's in scope — see the fundamental static-analysis limits in REFERENCE before trusting a count.
 
 ## Agent-facing output + traps (verified 2026-07-27, MedDBase MR !11025 review; open backlog items linked)
-- **Prefer `--format llm` for `tree`** — compact, columnar, greppable; `llm-ids` when you need node ids. Far cheaper than `--view paths` pretty output (deep ASCII indentation + `⋯elided` make grep-based reading fragile). **No header row is emitted and the column contract is undocumented** (`docs/backlog/todo/cli-surface-and-help-refresh-2026-07.md`); with `--guards` the **trailing** column is the condition.
+- **Prefer `--format llm` for `tree`** — compact, columnar, greppable; `llm-ids` when you need node ids. Far cheaper than `--view paths` pretty output (deep ASCII indentation + `⋯elided` make grep-based reading fragile). A TSV **header row IS emitted** naming every column (6-col for `--view paths|full`, 7-col for `--view effects`, 8-col for `llm-ids`, plus a trailing `guards` column under `--guards`) — parse it rather than assuming positions. Full column contract, `seen`/`depth-capped`/`budget-capped` semantics and the `effect*N` multiplicity marker: REFERENCE.md § "exact column contract".
 - **NEVER truncate `impact` output** (`head`, `Select-Object -First N`). On a 33-file MR it emitted **68,261 rows**, of which the first 300 were 297 `ep_reach_+` rows for a SINGLE EP — a truncated capture contains zero effect deltas and reads as "no behavioural change". Write the full TSV to a file, then filter:
   ```bash
   rig impact --base <sha>-dirty --head <sha>-dirty --format tsv > impact.tsv   # minutes

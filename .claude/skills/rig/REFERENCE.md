@@ -29,6 +29,27 @@ There is no longer a separate "legacy" command model: everything is computed fro
 DocID-joined, with no per-run stitching. The old `entrypoints`/`effects`/`trace`/`callgraph(s)` commands
 were removed — use `derive` (effects + entry points), `reaches`/`tree`/`callers`/`path` (call graph).
 
+### Which commands accept which "global" options (there is no true global set)
+
+`--rules` is **not** a universal flag, and this is deliberate rather than an oversight: it is accepted only by
+commands whose OUTPUT IS A FUNCTION OF THE RULES. Raw fact readers ignore rules entirely, so accepting a
+no-op `--rules` there would be worse than rejecting it — it would imply the rules shaped a result they did
+not touch.
+
+| option | accepted by | rejected by |
+|---|---|---|
+| `--rules` | `index`, `derive`, `reaches`, `tree`, `callers`, `path`, `impact`, `entrypoints`, `dispatch-fans` | `symbols`, `refs`, `files`, `runs`, `show`, `di`, `profile` |
+| `--store` | every read command | `runs` (enumerates ALL stores by design), `profile` |
+| `--format` | `derive`, `reaches`, `tree`, `callers`, `path`, `impact`, `entrypoints`, `effects-diff`, `show` | `symbols`, `refs`, `files`, `runs`, `di`, `profile` |
+
+So `rig symbols "Foo" --rules ./rig.rules.json` fails with `Unrecognized command or argument '--rules'`, and
+that is correct — drop the flag. Rule of thumb: **if the command derives, it takes `--rules`; if it just
+reads stored facts, it does not.**
+
+Known gap (not a bug, but worth knowing): the fact readers `symbols`/`refs`/`files`/`di` have **no
+`--format`**, so there is no TSV mode for them — parse their human output, or use `derive --format tsv` if
+what you need is derivable.
+
 ### `--format llm` / `llm-ids` — exact column contract (read before parsing it programmatically)
 
 The column SCHEMA depends on `--view`, which trips up a parser told a fixed width:
@@ -234,6 +255,14 @@ a CFG control-dependence analysis frozen at INDEX onto each call site (`Referenc
 
 ## Env gotchas
 
+- **`dtb-cache` is keyed by ABSOLUTE PATH — index base and head from the SAME checkout path.** The
+  design-time-build cache (`.rig/dtb-cache`, on by default) does most of the work of an index, and a different
+  checkout path gets **0% reuse**. Measured on MedDBase: a fresh `git worktree` at `C:\Git\mdb-wt-4702` took
+  **10m33s**, versus **3m58s** for the same commit range re-indexed from the original clone path — a ~2.7×
+  penalty. This is a trap because "use a worktree so you don't disturb your checkout" is otherwise good
+  advice: for indexing it is the expensive choice. Index in the primary checkout (switch commits there) unless
+  the working tree genuinely must stay put, and expect the full cost when it must.
+  Also check `rig runs` first — stores are commit-scoped, so an already-indexed commit needs no build at all.
 - **`rig index` builds internally — no external pre-build.** One bare `rig index <sln>` call runs a
   parallel, cached design-time build itself then extracts (defaults are sane; `--parallelism`/
   `--reuse-build-cache` are tuning knobs, not required); the old "MSBuild first" step is obsolete. `index`
