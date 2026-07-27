@@ -1,8 +1,10 @@
 # CLI surface + help/docs refresh — inconsistent globals, fatal-on-stale-store, undocumented `llm` format
 
-**Status:** 🟡 IN PROGRESS — **6 of 9 resolved 2026-07-27** (2, 3, 8 fixed; 1, 9 documented; 4, 7 found NOT
-REAL; 6 partially fixed). **Remaining: 5** (frontier reporting) **and the stronger half of 6** (retain guarded
-edges rather than prune). See the per-item headings and *Resolutions* below.
+**Status:** ✅ COMPLETE 2026-07-27 — all 9 items resolved: **2, 3, 5, 8 fixed** · **1, 9 documented** (both
+deliberately not code changes) · **4, 7 found NOT REAL** (already implemented; item 4's real defect was a SKILL
+doc asserting the opposite) · **6 closed at a shipped warning**, its stronger half correctly reassigned to
+[[guard-set-direct-vs-transitive-control-dependence]] — it needs cross-method guard composition, not a pruning
+tweak. See the per-item headings and *Resolutions* below.
 **Original status:** todo · **Priority: MEDIUM** (each item is small; together they are most of the friction in a real review session) · **Found:** 2026-07-27 (MedDBase MR !11025 review session) · **Family:** CLI / docs
 **Related:** [[cli-ux-file-paths-and-boundaries]], [[pattern-resolution-divergence-tree-vs-reaches]], [[impact-usability-parity-filter-and-alloc-noise]]
 
@@ -77,7 +79,7 @@ must be reverse-engineered:
 Asks: document the column contract; add a `#` header line (or `--legend`); state the `seen` marker's
 meaning; note that `--guards` appends a trailing column. Same for `llm-ids`.
 
-## 5. `callers --entrypoints` cannot distinguish "unreachable" from "dynamic boundary"
+## 5. `callers --entrypoints` cannot distinguish "unreachable" from "dynamic boundary" — ✅ FIXED 2026-07-27
 
 ```bash
 rig callers "DocumentPreviewBuilder.GetUnsafe" --entrypoints
@@ -94,7 +96,7 @@ twin of the D4 boundary-marker item in [[cli-ux-file-paths-and-boundaries]], and
 mid-review (I attributed the gap to lambdas; rig in fact models lambdas fine — `~λ0` nodes appear in the
 chain).
 
-## 6. `--only <provider>` silently hides the edge you need when hunting guards
+## 6. `--only <provider>` silently hides the edge you need when hunting guards — ⚠️ WARNING SHIPPED; stronger fix BLOCKED (see Resolutions)
 
 `rig tree X --guards --only audit` dropped the `TransactionDependency.Call` edge that **carried** the guard,
 because that edge's own effect is `alloc:object`. Correct filtering, wrong outcome: the user asked for guards
@@ -213,3 +215,70 @@ to build-cache identity and wants its own item.
   Note for the record: an earlier check of `--format tsv` showed identical row counts (2,936 either way) and I
   read that as "structure unchanged". It is true for tsv, which does not prune, and false for the pretty
   renderer, which does.
+
+### 5 — fixed: the zero is now ATTRIBUTABLE
+
+`callers <x> --entrypoints` returning zero now reports the FRONTIER — the reverse-reachable methods with no
+in-solution caller, i.e. where the chain tops out. On the exact case from the report:
+
+```
+$ rig callers "DocumentPreviewBuilder.GetUnsafe" --entrypoints --store de69fd2ffc6b-dirty
+No rule-detected entry points reach 'DocumentPreviewBuilder.GetUnsafe'.
+  The reverse chain tops out at 2 method(s) with no in-solution caller:
+    DocumentPreviewBuilder.Get           …/MedDBase.ServiceTier/Document/DocumentPreview.cs:56
+    PersonEventHtmlService.ToString      …/MedDBase.ServiceTier/PersonEvent/PersonEventHtmlService.cs:688
+  These are the BOUNDARY, not proof of dead code: something outside the static call graph may invoke them —
+  template/Dom interpolation, reflection, DI-by-name, or an external caller.
+```
+
+It names `PersonEventHtmlService.ToString` — exactly the frontier method this item identified by hand.
+
+Design points:
+- **The verdict is unchanged** (exit 1, same first line). Only attribution was added; the zero was CORRECT.
+- **In-edges are computed under the SAME mode semantics as the walk** (handoff edges excluded under
+  `SyncCut`), so the frontier describes the traversal actually performed. Handoff-only callers are already
+  covered by the async under-report hint, which runs FIRST and returns before this.
+- **"Nothing calls it" is a DISTINCT message** from "the chain tops out": `Nothing in the analysed solution
+  calls it — the chain is empty, not cut short.` Those are materially different answers (an
+  externally-invoked root vs a blind spot) and must not share wording.
+- Paid only on the zero path; capped at 8 listed with a `+N more`.
+
+Tests: `tests/Rig.Tests/Cli/CallersFrontierTests.cs`, verified red→green, including a negative control that a
+SUCCESSFUL answer carries no frontier block (or it becomes noise and stops being read).
+
+### 6 — warning shipped; the stronger fix is BLOCKED on cross-method guard composition
+
+The warning is in (see the item heading above). The original ask's stronger half — "retain guarded edges on
+the path to matched effects" — turns out to be **already satisfied for the case it describes, and blocked for
+the case that actually bit us.** Worth writing down, because a naive "retain all guarded edges" change would
+look like a fix and would not be one.
+
+**Already satisfied:** pruning keeps a node when it OR ANY DESCENDANT has a surviving effect
+(`TreeRenderer.SubtreeHasEffect`). So a guarded edge on the path *to* a matched effect is retained already —
+`A →(guarded) B → C{audit}` survives `--only audit` intact, guard and all.
+
+**Why the real case still fails:** the MR !11025 audit is inside a lambda passed as an ARGUMENT:
+
+```csharp
+TransactionDependency.Call(                                     // ← the !IsPersonMerge-guarded edge
+    () => WithGlobal.ImpersonateProfileSafe(… AuditLog.Create(…).Log()),   // ← the audit lives HERE
+    e => Logger.Get().Error(e, e.Message), Transaction);
+```
+
+That lambda's node is `PersonEventEntity.Save~λN` — a child of **`Save`**, not of `TransactionDependency.Call`.
+So the guarded edge genuinely has NO audit descendant, and pruning drops it correctly by its own rules.
+Verified: under `--only audit --guards` the `TransactionDependency.Call` edge is absent, while the audit rows
+that DO appear belong to unrelated change-logger paths carrying a different guard
+(`!(!AutoChangeLoggingEnabled || IsModified…)`).
+
+Fixing this means attributing an argument-lambda's effects to the enclosing call edge — i.e. **cross-method
+guard composition**, which is [[guard-set-direct-vs-transitive-control-dependence]] (open, and explicitly
+scoped as a derive-side follow-up). It is NOT a pruning tweak.
+
+The two local alternatives were both rejected:
+- **Retain ALL guarded edges under `--guards`** — unprincipled and re-inflates output (~31 extra edges on one
+  seed) without connecting the guard to the effect the reviewer asked about.
+- **Retain guarded edges whose subtree has any effect PRE-filter** — that is just "ignore `--only`", which
+  defeats the flag the user passed.
+
+So item 6 closes here at the warning, with the real fix tracked on the composition item where it belongs.

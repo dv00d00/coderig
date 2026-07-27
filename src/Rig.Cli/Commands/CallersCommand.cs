@@ -480,6 +480,75 @@ internal static class CallersCommand
                 .Count();
         }
 
+        // THE FRONTIER: the reverse-reachable methods that have NO caller of their own — where the chain TOPS
+        // OUT. On a 0-EP answer this is the difference between "dead code" and "reached across a boundary this
+        // analysis cannot see". `callers X --entrypoints` reporting a bare zero while plain `callers X` returns
+        // an 18-method chain cost a WRONG CONCLUSION mid-review (the gap was attributed to lambdas; rig models
+        // lambdas fine — `~λ0` nodes appear in the chain). The real cause was template/Dom interpolation
+        // (`{MedicalRecord.Documents}` resolved reflectively), which is exactly what a frontier list shows.
+        //
+        // In-edges are computed under the SAME mode semantics as the walk (handoff edges excluded under
+        // SyncCut), so the frontier describes the traversal actually performed rather than a different graph.
+        // Handoff-only callers are already covered by the async hint above, which runs first.
+        List<(string SymbolId, string FilePath, int Line)> ReverseFrontier()
+        {
+            var hasCaller = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var e in graph.CallEdges)
+            {
+                if (mode == FactPathFinder.TraversalMode.SyncCut && e.Kind == EdgeKinds.Handoff)
+                {
+                    continue; // not walked in this mode, so it does not count as a caller for this answer
+                }
+
+                hasCaller.Add(e.Callee);
+            }
+
+            return graph
+                .Methods.Where(m => reachable.Contains(m.SymbolId) && !hasCaller.Contains(m.SymbolId))
+                .GroupBy(m => m.SymbolId, StringComparer.Ordinal)
+                .Select(g => (SymbolId: g.Key, g.First().FilePath, g.First().Line))
+                .OrderBy(m => m.SymbolId, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        // Report the frontier under a 0-EP answer, so the zero is attributable instead of merely discouraging.
+        void WriteFrontier()
+        {
+            const int MaxFrontierListed = 8;
+            var frontier = ReverseFrontier();
+            if (frontier.Count == 0)
+            {
+                return; // every reverse-reachable method has a caller (e.g. a cycle) — nothing to attribute
+            }
+
+            // The target itself being the only frontier node means nothing in the solution calls it at all —
+            // a materially different answer from "the chain runs up to a boundary", so say which one it is.
+            var selfOnly = frontier.Count == 1 && reachable.Count == 1;
+            output.WriteLine(
+                selfOnly
+                    ? $"{Indent.L1}Nothing in the analysed solution calls it — the chain is empty, not cut short."
+                    : $"{Indent.L1}The reverse chain tops out at {frontier.Count} method(s) with no in-solution caller:"
+            );
+            if (!selfOnly)
+            {
+                foreach (var m in frontier.Take(MaxFrontierListed))
+                {
+                    var where = string.IsNullOrEmpty(m.FilePath) ? "" : $"  {m.FilePath}:{m.Line}";
+                    output.WriteLine($"{Indent.L2}{ShortName(m.SymbolId)}{where}");
+                }
+
+                if (frontier.Count > MaxFrontierListed)
+                {
+                    output.WriteLine($"{Indent.L2}… +{frontier.Count - MaxFrontierListed} more");
+                }
+
+                output.WriteLine(
+                    $"{Indent.L1}These are the BOUNDARY, not proof of dead code: something outside the static call graph"
+                        + " may invoke them — template/Dom interpolation, reflection, DI-by-name, or an external caller."
+                );
+            }
+        }
+
         if (touching.Count == 0)
         {
             if (!tsv)
@@ -497,6 +566,7 @@ internal static class CallersCommand
                 }
 
                 output.WriteLine($"No rule-detected entry points reach '{toPattern}'.");
+                WriteFrontier();
             }
 
             return 1;
