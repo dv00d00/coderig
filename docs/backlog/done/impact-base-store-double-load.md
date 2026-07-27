@@ -38,3 +38,23 @@ fixtures in `tests/Rig.Tests` for the behavioral-delta feature.
 ### Detailed record
 
 `docs/bugs/impact-base-store-ep-data-loaded-twice.md` — full runtime trace with line-number references.
+
+## ✅ FIXED 2026-07-27
+
+`ComputeEpDiffAsync` (which opened its OWN base `RigDbContext` and re-ran
+`LoadFactEntryPointDataAsync` + `DeriveEntryPointsAsync`) is gone. In its place:
+
+- `DiffEntryPointSets(branchEps, baseEps)` — the PURE set-diff, no I/O;
+- `ComputeBaseSideAsync` takes the branch EP set and computes the diff from the base EP set it was
+  already deriving, so the base store is opened **once** per run.
+
+`ComputeBranchSideAsync` lost its `baseDbPath` parameter entirely (and became synchronous — it no longer
+touches a store), which is the structural proof the second open is gone rather than merely relocated.
+
+Measured on the MedDBase pair, `--no-cache --time`, output byte-identical: the duplicate load lived in the
+`head: reach sets + footprints + hazards` phase, whose **disk read went 1.9 GB -> 0 GB**. Wall-clock credit is
+entangled with the index-session fix landed in the same pass — see the table in
+[[redundant-graph-index-rebuild-per-query]] (head traversal phase 42.5s -> 32.8s, total 2m31s -> 2m22s).
+
+`ImpactEpDiffTests` now derives both sides and calls the pure diff, so no store-opening variant survives
+solely for a test to exercise.

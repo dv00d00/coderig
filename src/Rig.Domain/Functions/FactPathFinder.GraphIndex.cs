@@ -183,7 +183,10 @@ public static partial class FactPathFinder
         }
     }
 
-    private sealed class GraphIndex
+    // INTERNAL, not private, only so the nested TraversalSession can take one in its ctor (a private type
+    // cannot be a parameter of an accessible member). Still unreachable outside Rig.Domain, so a query-side
+    // caller like ImpactEngine holds a TraversalSession and cannot construct or poke at the index itself.
+    internal sealed class GraphIndex
     {
         public Dictionary<string, List<CallEdge>> Adjacency = new(StringComparer.Ordinal);
 

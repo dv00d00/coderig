@@ -45,11 +45,20 @@ public sealed class ImpactEpDiffTests(AnalyzedPlaygrounds playgrounds)
     private static async Task<EpDiff> DiffAsync(string branchDb, string baseDb, string wd)
     {
         var rules = RuleSetLoader.Load(wd);
-        await using var branchCtx = new RigDbContext(branchDb, pooling: false, readOnly: true);
-        var branchEpData = await Reads.LoadFactEntryPointDataAsync(branchCtx);
-        var branchSet = await EntryPointContext.DeriveEntryPointsAsync(branchCtx, branchEpData, rules);
-        var branchEps = branchSet.Derived.Concat(branchSet.PromotedOrigins).ToList();
-        return await ImpactEngine.ComputeEpDiffAsync(baseDb, branchEps, rules);
+        // Derive BOTH sides here and diff the pure sets. This mirrors what ImpactEngine now does: the base EP
+        // set comes from the base side's single load, rather than a second base-store open inside the diff
+        // helper (which was a full duplicate EP read on every impact run — see impact-base-store-double-load).
+        var branchEps = await DeriveEpsAsync(branchDb, rules);
+        var baseEps = await DeriveEpsAsync(baseDb, rules);
+        return ImpactEngine.DiffEntryPointSets(branchEps, baseEps);
+    }
+
+    private static async Task<IReadOnlyList<DerivedEntryPoint>> DeriveEpsAsync(string db, RuleSet rules)
+    {
+        await using var ctx = new RigDbContext(db, pooling: false, readOnly: true);
+        var epData = await Reads.LoadFactEntryPointDataAsync(ctx);
+        var set = await EntryPointContext.DeriveEntryPointsAsync(ctx, epData, rules);
+        return set.Derived.Concat(set.PromotedOrigins).ToList();
     }
 
     private static async Task<(string BranchDb, string BaseDb, string Wd)> TwoStoresAsync(AnalysisResult branch, AnalysisResult @base)

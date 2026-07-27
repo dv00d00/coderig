@@ -106,7 +106,7 @@ internal static class ImpactEngine
         await Tick("provenance");
         var headData = await LoadHeadSideDataAsync(headContext, rules, gate: gate);
         await Tick("head: load graph + derive effects");
-        var branchSide = await ComputeBranchSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode, headData: headData);
+        var branchSide = ComputeBranchSide(mode: mode, headData: headData);
         await Tick("head: reach sets + footprints + hazards");
         var impactDiff = await AssembleImpactDiffAsync(
             baseDbPath: baseDbPath,
@@ -198,7 +198,11 @@ internal static class ImpactEngine
     // vs the base, the branch reach sets, the (Kind, Route) → EP-ref site map, the effect footprints, and
     // the hazard sets. Bundled so AssembleImpactDiffAsync can consume them without re-opening the HEAD store.
     private sealed record BranchSideData(
-        EpDiff EpDiff,
+        // The branch EP set, carried so the base side can compute the EP set-diff from its single load.
+        IReadOnlyList<DerivedEntryPoint> BranchEps,
+        // The head-side traversal session, carried so the guard-condition walk reuses this index rather than
+        // building a fourth one over the same graph.
+        FactPathFinder.TraversalSession Session,
         Dictionary<(string Kind, string Route), HashSet<string>> ReachSets,
         Dictionary<(string Kind, string Route), EntryPointRef> EpByKey,
         Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Footprints,
@@ -206,23 +210,21 @@ internal static class ImpactEngine
         Dictionary<(string, int), string> IdBySite
     );
 
-    private static async Task<BranchSideData> ComputeBranchSideAsync(
-        string baseDbPath,
-        RuleSet rules,
-        FactPathFinder.TraversalMode mode,
-        HeadSideData headData
-    )
+    private static BranchSideData ComputeBranchSide(FactPathFinder.TraversalMode mode, HeadSideData headData)
     {
-        // --- Two-store entry-point diff: EPs added/removed vs the base store, paired on (Kind, Route) —
-        // line/param-free, so formatting + signature edits don't churn the diff.
+        // The branch entry-point set. The two-store EP DIFF is computed on the base side (ComputeBaseSideAsync),
+        // which already derives the base EP set — doing it here meant a second full base-store open + EP load.
         var branchEps = headData.DerivedEps.Concat(headData.PromotedEps).ToList();
-        var epDiff = await ComputeEpDiffAsync(baseDbPath, branchEps, rules);
 
         // --- Per-EP store-vs-store diff. The AFFECTED ENTRY POINTS are computed STRUCTURALLY: per EP, diff
         // its full reachable symbol set branch vs base ("two trees, diffed") — an EP is affected iff WHAT IT
         // REACHES changed, regardless of whether an effect rule fired. This catches the obj→sql kind of
         // migration the effect-set diff collapses (same key, different symbols), and excludes false positives.
-        var branchReachSets = ComputeReachSets(headData.Graph, branchEps, headData.IdBySite, mode, refsByEnclosing: headData.RefTargets);
+        // ONE traversal session for the whole head side: reach sets, footprints and hazards (plus the
+        // guard-condition walk in AssembleImpactDiffAsync) all traverse the same graph, and each used to
+        // rebuild the GraphIndex from scratch.
+        var headSession = FactPathFinder.OpenSession(headData.Graph);
+        var branchReachSets = ComputeReachSets(headSession, branchEps, headData.IdBySite, mode, refsByEnclosing: headData.RefTargets);
         var epByKey = branchEps
             .GroupBy(e => (e.Kind, e.Route))
             .ToDictionary(
@@ -235,18 +237,13 @@ internal static class ImpactEngine
                     Requires: g.First().Requires
                 )
             );
-        var branchFootprints = ComputeFootprints(
-            headData.Graph,
-            branchEps,
-            headData.IdBySite,
-            EffectKeysByEnclosing(headData.Effects),
-            mode
-        );
+        var branchFootprints = ComputeFootprints(headSession, branchEps, headData.IdBySite, EffectKeysByEnclosing(headData.Effects), mode);
         // The branch's per-EP reachable-hazard set (hazard mirror of the footprint), diffed against the base's
         // in DiffFootprints so each per-EP delta carries the hazards gained/lost.
-        var branchHazards = ComputeHazardSets(headData.Graph, branchEps, headData.IdBySite, HazardsByEnclosing(headData.Effects), mode);
+        var branchHazards = ComputeHazardSets(headSession, branchEps, headData.IdBySite, HazardsByEnclosing(headData.Effects), mode);
         return new BranchSideData(
-            EpDiff: epDiff,
+            BranchEps: branchEps,
+            Session: headSession,
             ReachSets: branchReachSets,
             EpByKey: epByKey,
             Footprints: branchFootprints,
@@ -272,6 +269,7 @@ internal static class ImpactEngine
             baseDbPath: baseDbPath,
             rules: rules,
             mode: mode,
+            branchEps: branchSide.BranchEps,
             headGuardedKeys: headGuarded.Keys,
             gate: gate
         );
@@ -303,7 +301,7 @@ internal static class ImpactEngine
             mode: mode
         );
         return new ImpactDiff(
-            Ep: branchSide.EpDiff,
+            Ep: baseSide.EpDiff,
             AffectedEps: affectedEntryPoints,
             PerEp: perEpDeltas,
             GuardConditions: guardConditions,
@@ -354,7 +352,7 @@ internal static class ImpactEngine
         }
 
         var effectsByCallee = EffectsReachableFrom(
-            graph: headData.Graph,
+            session: branchSide.Session,
             seeds: changedCallees.Distinct(StringComparer.Ordinal).ToList(),
             effectsByEnclosing: EffectKeysByEnclosing(headData.Effects),
             mode: mode
@@ -408,7 +406,7 @@ internal static class ImpactEngine
     // not a per-edge cost. Unbounded depth/nodes to match ComputeFootprints: a truncated walk would silently
     // drop the very effect that makes a guard change reviewable, reading as "this gates nothing".
     private static Dictionary<string, IReadOnlyList<string>> EffectsReachableFrom(
-        FactGraphData graph,
+        FactPathFinder.TraversalSession session,
         IReadOnlyList<string> seeds,
         Dictionary<string, List<(string, string, string, string)>> effectsByEnclosing,
         FactPathFinder.TraversalMode mode
@@ -420,7 +418,7 @@ internal static class ImpactEngine
             return result;
         }
 
-        var reached = FactPathFinder.ReachesInfoFromEachSeed(graph, seeds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
+        var reached = session.ReachesInfoFromEachSeed(seeds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
         for (var i = 0; i < seeds.Count; i++)
         {
             var labels = new HashSet<string>(StringComparer.Ordinal);
@@ -609,13 +607,16 @@ internal static class ImpactEngine
     // Derive entry points on the base store and set-diff them against the branch's, keyed on (Kind, Route).
     // DeriveEntryPointsAsync derives straight from the passed context with rules loaded from the (shared)
     // working dir — no query cache — so running it on a second store is correct. Internal for testing.
-    internal static async Task<EpDiff> ComputeEpDiffAsync(string baseDbPath, IReadOnlyList<DerivedEntryPoint> branchEps, RuleSet rules)
+    // PURE set-diff of two already-derived entry-point sets, paired on (Kind, Route) so line/param moves and
+    // formatting edits don't churn it.
+    //
+    // This used to open the BASE STORE itself and re-run LoadFactEntryPointDataAsync + DeriveEntryPointsAsync
+    // — a second full base-side EP load (all base-type edges, all interface edges, ~217k method symbols, all
+    // type symbols, all ctor refs) on top of the one ComputeBaseSideAsync already does, in a separate
+    // uncoordinated RigDbContext. ComputeBaseSideAsync now calls this with the base EP set it has already
+    // derived, so the base store is opened ONCE per run. Keeping it pure is what made that shareable.
+    internal static EpDiff DiffEntryPointSets(IReadOnlyList<DerivedEntryPoint> branchEps, IReadOnlyList<DerivedEntryPoint> baseEps)
     {
-        await using var baseContext = new RigDbContext(baseDbPath, readOnly: true);
-        var baseEpData = await Reads.LoadFactEntryPointDataAsync(baseContext);
-        var baseSet = await DeriveEntryPointsAsync(baseContext, baseEpData, rules);
-        var baseEps = baseSet.Derived.Concat(baseSet.PromotedOrigins).ToList();
-
         var branchKeys = branchEps.Select(e => (e.Kind, e.Route)).ToHashSet();
         var baseKeys = baseEps.Select(e => (e.Kind, e.Route)).ToHashSet();
 
@@ -727,7 +728,7 @@ internal static class ImpactEngine
     // hazard findings of each reachable enclosing node. Same seed/depth/mode contract as ComputeFootprints so
     // the two are computed over the identical reach. An EP whose reach bears no hazard maps to an empty set.
     private static Dictionary<(string Kind, string Route), HashSet<HazardFinding>> ComputeHazardSets(
-        FactGraphData graph,
+        FactPathFinder.TraversalSession session,
         IReadOnlyList<DerivedEntryPoint> eps,
         Dictionary<(string, int), string> idBySite,
         Dictionary<string, List<HazardFinding>> hazardsByEnclosing,
@@ -736,7 +737,7 @@ internal static class ImpactEngine
     {
         var distinct = eps.GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line)).Select(g => g.Key).ToList();
         var seedIds = distinct.Select(e => idBySite.TryGetValue((e.FilePath, e.Line), out var id) ? id : "").ToList();
-        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
+        var reached = session.ReachesFromEachSeed(seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
 
         var sets = new Dictionary<(string, string), HashSet<HazardFinding>>();
         for (var i = 0; i < distinct.Count; i++)
@@ -787,7 +788,7 @@ internal static class ImpactEngine
     // tree's 🔁 marker uses; available identically on both stores). The set-diff over the key SET is recovered
     // by DiffFootprints reading the dictionary keys, so Added/Removed semantics are unchanged.
     private static Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> ComputeFootprints(
-        FactGraphData graph,
+        FactPathFinder.TraversalSession session,
         IReadOnlyList<DerivedEntryPoint> eps,
         Dictionary<(string, int), string> idBySite,
         Dictionary<string, List<(string, string, string, string)>> effectsByEnclosing,
@@ -802,7 +803,7 @@ internal static class ImpactEngine
         // 20000-node budget silently truncated the reach BFS with no signal (unlike BuildTree's BudgetCapped) —
         // so a >20k-node EP dropped its tail effect/hazard deltas as a false "unchanged". The reach is bounded by
         // the finite graph (+ the MaxBinding re-enqueue cap) and cycle dedup, so the walk still terminates.
-        var reached = FactPathFinder.ReachesInfoFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
+        var reached = session.ReachesInfoFromEachSeed(seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
 
         var footprints = new Dictionary<(string, string), Dictionary<(string, string, string, string), EffectReach>>();
         for (var i = 0; i < distinct.Count; i++)
@@ -864,7 +865,7 @@ internal static class ImpactEngine
     // refsByEnclosing (Phase 3, optional) unions each reachable method's first-party field/property read/write
     // TARGETS into the set as `R:`-prefixed degenerate leaf nodes, so a changed access surfaces in the diff.
     private static Dictionary<(string Kind, string Route), HashSet<string>> ComputeReachSets(
-        FactGraphData graph,
+        FactPathFinder.TraversalSession session,
         IReadOnlyList<DerivedEntryPoint> eps,
         Dictionary<(string, int), string> idBySite,
         FactPathFinder.TraversalMode mode,
@@ -879,7 +880,7 @@ internal static class ImpactEngine
         // 20000-node budget silently truncated the reach BFS with no signal (unlike BuildTree's BudgetCapped) —
         // so a >20k-node EP dropped its tail effect/hazard deltas as a false "unchanged". The reach is bounded by
         // the finite graph (+ the MaxBinding re-enqueue cap) and cycle dedup, so the walk still terminates.
-        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
+        var reached = session.ReachesFromEachSeed(seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
 
         var sets = new Dictionary<(string, string), HashSet<string>>();
         for (var i = 0; i < distinct.Count; i++)
@@ -1031,11 +1032,15 @@ internal static class ImpactEngine
         Dictionary<(string Kind, string Route), HashSet<HazardFinding>> Hazards,
         IReadOnlyDictionary<string, string> BodyHashes,
         Dictionary<(string Caller, string Callee), SortedSet<string>> Guarded,
-        HashSet<(string Caller, string Callee)> PairsPresent
+        HashSet<(string Caller, string Callee)> PairsPresent,
+        EpDiff EpDiff
     )> ComputeBaseSideAsync(
         string baseDbPath,
         RuleSet rules,
         FactPathFinder.TraversalMode mode,
+        // The branch's entry points, so the EP set-diff is computed HERE from the base EP set this method
+        // already derives. Previously ComputeEpDiffAsync opened the base store a SECOND time to re-derive it.
+        IReadOnlyList<DerivedEntryPoint> branchEps,
         // The HEAD store's guarded-edge keys. Passed IN because the guard-condition diff needs, for every
         // candidate edge, whether it exists on the BASE side — and the base graph only exists inside this
         // method. Union with the base's own guarded keys here so one pass over the base edges answers
@@ -1086,9 +1091,11 @@ internal static class ImpactEngine
         // Phase 3: union the base's field/property-access targets into its reach sets too, so the per-EP
         // structural diff compares like-for-like (degenerate `R:` nodes on BOTH sides). Built once per store.
         var baseRefTargets = RefTargetsByEnclosing(await Reads.LoadFieldAccessRefsAsync(context));
-        var reachSets = ComputeReachSets(graph, baseEps, idBySite, mode, refsByEnclosing: baseRefTargets);
-        var footprints = ComputeFootprints(graph, baseEps, idBySite, EffectKeysByEnclosing(effects), mode);
-        var hazards = ComputeHazardSets(graph, baseEps, idBySite, HazardsByEnclosing(effects), mode);
+        // One session for the base side too — same three traversals over one index.
+        var baseSession = FactPathFinder.OpenSession(graph);
+        var reachSets = ComputeReachSets(baseSession, baseEps, idBySite, mode, refsByEnclosing: baseRefTargets);
+        var footprints = ComputeFootprints(baseSession, baseEps, idBySite, EffectKeysByEnclosing(effects), mode);
+        var hazards = ComputeHazardSets(baseSession, baseEps, idBySite, HazardsByEnclosing(effects), mode);
 
         // Phase 2: the base body-hash map (guarded — empty on a pre-fact store), so RunAsync can diff it
         // against the branch's WITHOUT a second base load.
@@ -1100,7 +1107,7 @@ internal static class ImpactEngine
         candidates.UnionWith(baseGuarded.Keys);
         var basePairs = GuardConditionDiff.PairsPresent(graph, candidates);
 
-        return (reachSets, footprints, hazards, bodyHashes, baseGuarded, basePairs);
+        return (reachSets, footprints, hazards, bodyHashes, baseGuarded, basePairs, DiffEntryPointSets(branchEps, baseEps));
     }
 
     // Diff two stores' per-EP footprints: for every EP present in BOTH (paired on Kind+Route), the effects its

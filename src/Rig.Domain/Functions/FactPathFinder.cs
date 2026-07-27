@@ -258,23 +258,71 @@ public static partial class FactPathFinder
         int maxNodes = 20000,
         bool narrowDispatch = true,
         TraversalMode mode = TraversalMode.SyncCut
-    )
+    ) => OpenSession(graph, narrowDispatch).ReachesFromEachSeed(seedIds, maxDepth, maxNodes, mode);
+
+    // A traversal SESSION over one graph: builds the GraphIndex ONCE and serves any number of batch
+    // traversals from it.
+    //
+    // Every public batch method builds its own private index, which is right for a one-shot query and wasteful
+    // for a caller that runs several over a byte-identical graph. `rig impact` is that caller: reach sets,
+    // footprints, hazards (and, since guard-condition deltas, an effects-from-callee walk) each rebuilt the
+    // full adjacency + four-key sort + MethodsByStrippedType/ImplsByInterface/context-family/mined-dispatch
+    // construction — 3-4× per side, 6-7× per cold diff, over the same graph each time.
+    //
+    // The index is safe to share across the parallel per-seed walks: the traversal is read-only over an
+    // immutable graph and the one mutable cache (DescendantsCache) is concurrent and idempotent — which is
+    // already relied on WITHIN each batch call, so sharing across calls adds no new concurrency assumption.
+    // GraphIndex stays private; a caller holds this instead of constructing one.
+    public sealed class TraversalSession
     {
-        var index = BuildIndex(graph, narrowDispatch);
-        var results = new HashSet<string>[seedIds.Count];
-        Parallel.For(
-            fromInclusive: 0,
-            toExclusive: seedIds.Count,
-            body: i =>
-            {
-                var seed = seedIds[i];
-                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : Array.Empty<string>();
-                var info = ReachesWithFanoutCore(index, seeds, maxDepth, maxNodes, mode);
-                results[i] = new HashSet<string>(info.Keys, StringComparer.Ordinal);
-            }
-        );
-        return results;
+        private readonly GraphIndex index;
+
+        // INTERNAL: GraphIndex is internal to Rig.Domain, so this ctor cannot be public without leaking a
+        // less-accessible type — and must not be, since the index is an implementation detail. Callers in other
+        // assemblies get a session from OpenSession.
+        internal TraversalSession(GraphIndex index) => this.index = index;
+
+        public IReadOnlyList<HashSet<string>> ReachesFromEachSeed(
+            IReadOnlyList<string> seedIds,
+            int maxDepth = 20,
+            int maxNodes = 20000,
+            TraversalMode mode = TraversalMode.SyncCut
+        )
+        {
+            var results = new HashSet<string>[seedIds.Count];
+            Parallel.For(
+                fromInclusive: 0,
+                toExclusive: seedIds.Count,
+                body: i => results[i] = new HashSet<string>(InfoFor(seedIds[i], maxDepth, maxNodes, mode).Keys, StringComparer.Ordinal)
+            );
+            return results;
+        }
+
+        public IReadOnlyList<IReadOnlyDictionary<string, ReachInfo>> ReachesInfoFromEachSeed(
+            IReadOnlyList<string> seedIds,
+            int maxDepth = 20,
+            int maxNodes = 20000,
+            TraversalMode mode = TraversalMode.SyncCut
+        )
+        {
+            var results = new IReadOnlyDictionary<string, ReachInfo>[seedIds.Count];
+            Parallel.For(
+                fromInclusive: 0,
+                toExclusive: seedIds.Count,
+                body: i => results[i] = InfoFor(seedIds[i], maxDepth, maxNodes, mode)
+            );
+            return results;
+        }
+
+        // An unknown seed id yields an EMPTY reach rather than an error — callers pass "" for an EP whose site
+        // resolved to no indexed method, and both batch APIs have always tolerated that.
+        private IReadOnlyDictionary<string, ReachInfo> InfoFor(string seed, int maxDepth, int maxNodes, TraversalMode mode) =>
+            ReachesWithFanoutCore(index, index.Nodes.Contains(seed) ? [seed] : [], maxDepth, maxNodes, mode);
     }
+
+    // Open a traversal session over `graph`, building its index once. Use when running SEVERAL batch
+    // traversals over one graph; the one-shot statics remain correct for a single query.
+    public static TraversalSession OpenSession(FactGraphData graph, bool narrowDispatch = true) => new(BuildIndex(graph, narrowDispatch));
 
     // Forward-VERIFY a set of candidate seed GROUPS against a target id set: for each group, true iff ANY
     // seed in that group forward-reaches ANY id in `targetIds` (one-hop narrowed dispatch, same engine as
@@ -345,22 +393,7 @@ public static partial class FactPathFinder
         int maxNodes = 20000,
         bool narrowDispatch = true,
         TraversalMode mode = TraversalMode.SyncCut
-    )
-    {
-        var index = BuildIndex(graph, narrowDispatch);
-        var results = new IReadOnlyDictionary<string, ReachInfo>[seedIds.Count];
-        Parallel.For(
-            fromInclusive: 0,
-            toExclusive: seedIds.Count,
-            body: i =>
-            {
-                var seed = seedIds[i];
-                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : Array.Empty<string>();
-                results[i] = ReachesWithFanoutCore(index, seeds, maxDepth, maxNodes, mode);
-            }
-        );
-        return results;
-    }
+    ) => OpenSession(graph, narrowDispatch).ReachesInfoFromEachSeed(seedIds, maxDepth, maxNodes, mode);
 
     // The shared BFS body of ReachesWithFanout / ReachesFromEachSeed: one-hop dispatch forward reach over a
     // PREBUILT index from the given seed nodes. All traversal state below is LOCAL — safe to run concurrently
