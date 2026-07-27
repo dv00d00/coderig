@@ -120,6 +120,18 @@ internal static class PathCommand
         graphWatch.Stop();
         timing.Record("graph load", graphWatch.Elapsed);
 
+        // Seed disclosure (no-match) for the FROM endpoint, BEFORE the search: a `from` that resolved to
+        // nothing yields an EMPTY forward slice, so the search below would report "No path from X to Y" —
+        // blaming connectivity for what is really a resolution failure. Matched against the same graph the
+        // traversal seeds off, through the shared FactPathFinder matcher; a matched LEAF is present in that
+        // graph (methods == 1), so this can only fire when the pattern named nothing.
+        var symbolIds = graph.Methods.Select(m => m.SymbolId).ToList();
+        if (FactPathFinder.DistinctMatchTargets(symbolIds, opts.FromPattern).Count == 0)
+        {
+            SeedResolutionNotice.ReportNoMatch(io.TextOutput.Output, opts.FromPattern, endpoint: "from");
+            return 1;
+        }
+
         // Ambiguity disclosure for BOTH endpoints: the first path found runs between whichever matched
         // from/to pair connects — a multi-target pattern can silently pick the "wrong" endpoint. NOTE:
         // the graph is the FROM-side forward slice, so a to-pattern target outside it (no path exists)
@@ -150,6 +162,20 @@ internal static class PathCommand
 
         if (path is null)
         {
+            // Seed disclosure for the TO endpoint: distinguish "the `to` pattern names nothing" from "both
+            // endpoints exist but do not connect". `graph` is the FROM-side forward slice, so a `to` that
+            // exists but is simply UNREACHABLE is absent from it — deciding no-match off the graph alone
+            // would libel a real symbol as nonexistent. So the graph miss only triggers a STORE-WIDE check,
+            // and only here on the negative path, where the query has already failed.
+            if (
+                FactPathFinder.DistinctMatchTargets(symbolIds, opts.ToPattern).Count == 0
+                && !await SeedResolutionNotice.ExistsInStoreAsync(context, opts.ToPattern)
+            )
+            {
+                SeedResolutionNotice.ReportNoMatch(io.TextOutput.Output, opts.ToPattern, endpoint: "to");
+                return 1;
+            }
+
             if (!tsv)
             {
                 io.TextOutput.Output.WriteLine($"No path from '{opts.FromPattern}' to '{opts.ToPattern}'.");

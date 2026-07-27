@@ -133,6 +133,25 @@ internal static class ReachesCommand
             FactPathFinder.ReachesWithFanout(graph, opts.FromPattern, maxDepth, mode: mode)
         );
 
+        // Seed disclosure, before any of the expensive downstream work. The traversal seeds off THIS graph
+        // via the SAME FactPathFinder.MatchNodes every other seed site uses, so an EMPTY reach set can only
+        // mean the pattern resolved to no node at all — a matched LEAF still yields itself at depth 0
+        // ("Reachable methods: 1"). Pre-fix both printed 0/0 and were indistinguishable, so "no such symbol"
+        // read as "this method does nothing". Exit 1 + tree's wording; the leaf case stays exit 0 with a
+        // stderr note naming what it resolved to (SeedResolutionNotice).
+        if (reachable.Count == 0)
+        {
+            traversalWatch.Stop();
+            timing.Record("traversal", traversalWatch.Elapsed);
+            // Distinguish "nothing by that name" from "a real symbol that can never be a node" (a `P:`
+            // property / `F:` field / `E:` event) — the latter is a fair pattern to try and deserves the
+            // accessor hint rather than a flat denial.
+            await SeedResolutionNotice.ReportNoNodeMatchAsync(io.TextOutput.Output, context, opts.FromPattern);
+            return 1;
+        }
+
+        SeedResolutionNotice.NoteIfNoOutEdges(io.TextOutput.Error, reachable, maxDepth);
+
         var effects = DeriveEffects(
             rules.Effects,
             rules.Observations,
