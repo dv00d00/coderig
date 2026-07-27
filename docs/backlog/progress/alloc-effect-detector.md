@@ -230,3 +230,23 @@ Build value-copy facts next using the same size/evidence vocabulary. Keep alloca
 summaries explicit, core-owned, and measurement-backed; do not infer allocation merely because an API returns
 `string` or another reference type. Retain IL scanning as a development/calibration backstop for compiler
 lowerings that cannot be attributed soundly from Roslyn source semantics, not as a required indexing stage.
+
+---
+
+## ⚠️ 2026-07-27 — `alloc` is now HIDDEN BY DEFAULT; evaluate this detector with `--intrinsic`
+
+`alloc` and `throw` were made language-INTRINSIC providers, withheld from `derive`/`reaches`/`tree`/`impact`
+unless `--intrinsic` is passed (or `--only alloc`, which implies it). Rationale: on the MedDBase store they are
+243,391 + 79,508 effects against ~30,619 for the other 49 providers combined — 91.3% of the corpus, so review
+commands were ~1:10 signal-to-noise. See [[impact-usability-parity-filter-and-alloc-noise]].
+
+**Consequence for this item:** a bare `rig derive` / `rig reaches` now shows ZERO allocation effects. That is
+the new default, NOT a detector regression — a plausible-but-wrong conclusion this note exists to prevent.
+Every evaluation of this detector (including the AngleSharp target) must pass `--intrinsic` or `--only alloc`.
+
+The hiding is purely presentational — applied AFTER derivation, so no detector's input is narrowed and the
+allocation facts themselves are untouched. `CoreAllocationPlaygroundTests` was updated to pass `--intrinsic`
+and now also asserts the DEFAULT withholds them.
+
+This also strengthens the case for finishing this item: with `alloc` off the review path by default, the
+allocation lens becomes an opt-in perf tool, which is the role it was always better suited to.

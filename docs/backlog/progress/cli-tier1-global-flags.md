@@ -42,3 +42,22 @@ The broader E2 flag-surface audit (dead aliases, mode-group validation, rename d
 ### Effort
 
 Additive per-command plumbing. Each flag can land independently. No breaking changes. No re-mine.
+
+---
+
+## 2026-07-27 — audit findings from the CLI-surface sweep
+
+A per-command audit of `--rules` / `--store` / `--format` (for
+[[cli-surface-and-help-refresh-2026-07]] item 1) produced two things for this card:
+
+- **NEXT SLICE: the FACT READERS have no `--format`.** This card's shipped-slice note lists `--format` as on
+  "*every* query command", which is true of the query/derive surface but NOT of `symbols` / `refs` / `files` /
+  `di` — they are text-only, so there is no machine-readable mode for raw fact inspection. That is the natural
+  next increment here, and it is a real gap: tooling that wants the symbol table has to parse human output.
+  The full matrix is documented in the rig skill's REFERENCE.md § "Which commands accept which global options".
+- **`--rules` is deliberately NOT going global.** Only commands whose OUTPUT IS A FUNCTION OF THE RULES accept
+  it; the fact readers ignore rules entirely, so a no-op `--rules` there would be WORSE than the current
+  `Unrecognized command or argument` — it would imply rules shaped a result they never touched. Recording it
+  here so a future "make Tier-1 flags uniform" pass does not treat it as an oversight to fix.
+- Minor staleness: the shipped-slice list names `dead` as carrying `--format`. `dead` is now a registered
+  DISABLED stub (it ran on the all-hops dispatch superset the one-hop engine no longer matches).

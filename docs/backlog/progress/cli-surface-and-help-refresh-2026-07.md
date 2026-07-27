@@ -1,6 +1,9 @@
 # CLI surface + help/docs refresh — inconsistent globals, fatal-on-stale-store, undocumented `llm` format
 
-**Status:** todo · **Priority: MEDIUM** (each item is small; together they are most of the friction in a real review session) · **Found:** 2026-07-27 (MedDBase MR !11025 review session) · **Family:** CLI / docs
+**Status:** 🟡 IN PROGRESS — **6 of 9 resolved 2026-07-27** (2, 3, 8 fixed; 1, 9 documented; 4, 7 found NOT
+REAL; 6 partially fixed). **Remaining: 5** (frontier reporting) **and the stronger half of 6** (retain guarded
+edges rather than prune). See the per-item headings and *Resolutions* below.
+**Original status:** todo · **Priority: MEDIUM** (each item is small; together they are most of the friction in a real review session) · **Found:** 2026-07-27 (MedDBase MR !11025 review session) · **Family:** CLI / docs
 **Related:** [[cli-ux-file-paths-and-boundaries]], [[pattern-resolution-divergence-tree-vs-reaches]], [[impact-usability-parity-filter-and-alloc-noise]]
 
 Framing from the owner: rig is moving from toy project to actually-useful tool; **help and skill docs are
