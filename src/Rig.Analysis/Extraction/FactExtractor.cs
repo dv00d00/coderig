@@ -1696,10 +1696,16 @@ internal static class FactExtractor
             var seen = new HashSet<(string, bool)>();
             foreach (var x in g)
             {
-                var condition = FullConditionText(cfg.Blocks[x.BranchBlock].BranchValue?.Syntax) ?? x.Predicate;
-                if (seen.Add((condition, x.WhenTrue)))
+                // POLARITY: WhenTrue is relative to the CFG's BranchValue, and Roslyn folds a leading `!` OUT
+                // of the branch value (inverting ConditionKind) — `if (!flag)` branches on `flag`. Widening the
+                // text back up through that `!` therefore has to flip WhenTrue with it, or the negation is
+                // applied twice and the rendered guard reads BACKWARDS (`!flag` came out as `!!flag`).
+                var widened = FullCondition(cfg.Blocks[x.BranchBlock].BranchValue?.Syntax);
+                var condition = widened?.Text ?? x.Predicate;
+                var whenTrue = widened is { NegationsCrossed: true } ? !x.WhenTrue : x.WhenTrue;
+                if (seen.Add((condition, whenTrue)))
                 {
-                    pairs.Add((condition, x.WhenTrue));
+                    pairs.Add((condition, whenTrue));
                 }
             }
 
@@ -1716,7 +1722,12 @@ internal static class FactExtractor
     // operands. Stops at the first non-combinator parent (the enclosing `if`/`while`/`?:`/switch), so a
     // non-boolean condition (a `?.` null-check, a switch governing expression) is returned unchanged. Null in
     // -> null out (the caller then falls back to the raw per-branch Predicate).
-    private static string? FullConditionText(SyntaxNode? branchValueSyntax)
+    //
+    // NegationsCrossed reports whether an ODD number of `!` were crossed on the way up. The caller must XOR it
+    // into the guard's WhenTrue: the raw polarity is relative to the BRANCH VALUE, and every `!` the widening
+    // steps over is a negation the text now carries but the polarity does not yet account for. Without it,
+    // `if (!flag) { … }` renders as `!!flag` — the condition for the arm that does NOT run.
+    private static (string Text, bool NegationsCrossed)? FullCondition(SyntaxNode? branchValueSyntax)
     {
         if (branchValueSyntax is null)
         {
@@ -1724,6 +1735,7 @@ internal static class FactExtractor
         }
 
         var node = branchValueSyntax;
+        var negations = 0;
         while (
             (
                 node.Parent is BinaryExpressionSyntax be
@@ -1733,10 +1745,15 @@ internal static class FactExtractor
             || (node.Parent is PrefixUnaryExpressionSyntax pue && pue.IsKind(SyntaxKind.LogicalNotExpression))
         )
         {
+            if (node.Parent.IsKind(SyntaxKind.LogicalNotExpression))
+            {
+                negations++;
+            }
+
             node = node.Parent;
         }
 
-        return node.ToString();
+        return (node.ToString(), negations % 2 == 1);
     }
 
     // The owner's top-level CFG plus every NESTED CFG — lambdas (anonymous functions) and local functions,
