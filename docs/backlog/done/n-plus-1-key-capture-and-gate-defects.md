@@ -1,8 +1,8 @@
 # `n_plus_1`: two independent defects losing 23 true findings (key capture + provider gate)
 
-**Status:** TODO · **Found:** 2026-08-03, investigating why all 175 `n_plus_1` findings were `entity_cache:read`
+**Status:** SHIPPED 2026-08-03 (see "Outcome" at the bottom) · **Found:** 2026-08-03, investigating why all 175 `n_plus_1` findings were `entity_cache:read`
 · **Family:** hazard-recall / FR-3 · Distinct from
-[n-plus-1-cross-method-amplification](n-plus-1-cross-method-amplification.md) — these are INTRA-method and both
+[n-plus-1-cross-method-amplification](../progress/n-plus-1-cross-method-amplification.md) — these are INTRA-method and both
 have small fixes.
 
 ## The observation that started it
@@ -99,3 +99,35 @@ rather than an independent bug.
 Both counts are static projections from the fact store, not observed rig output after a fix. Neither fix
 addresses parse-then-use shapes (`InvoiceEntity.cs:2064`), which need intra-method dataflow. The 3,564
 non-looped `llblgen:read` rows were not examined for cross-method amplification.
+
+## Outcome (2026-08-03)
+
+Both fixes landed. On a fresh full-solution store the intra-method `n_plus_1` count moved **175 -> 218**, and no
+other detector moved (`race_window` 127, `lazy_init_race` 39, `event_cycle` 24, `thread_local_context` 16,
+`dual_write` 9, `static_init_capture` 6, `cache_coherence` 4 — all unchanged; the effect set is row-for-row
+identical). Per provider:
+
+| provider:operation | before | after |
+|---|---|---|
+| `entity_cache:read` | 175 | 189 |
+| `object_store:read` | 0 | 18 |
+| `llblgen:read` | 0 | 11 |
+
+The `llblgen` 11 are **exactly** the 11 sites predicted above, `InvoicesByNominalCode.cs:96` included. The other
+two columns overshoot the prediction because the two fixes COMPOSE: the +12 predicted for the provider gate
+counted only `object_store` sites whose key was already a bare argument, and the composite-argument surface adds
+6 more of those plus 14 `entity_cache` sites whose key sits inside a composite expression. So +43, not +23, and
+the +20 unpredicted are the same shape as the 11 that were.
+
+Two things worth knowing next time:
+
+* **The composite surface is over-approximating by construction and now has a pinned false positive**
+  (`ProductionFixCorpusNPlusOneTests.A_loop_variable_named_like_a_field_in_a_composite_key_is_a_KNOWN_false_positive`):
+  it reports which names appear ANYWHERE in an argument, so a loop variable that occurs only as a field NAME on
+  the constant side of a predicate flags a hoistable read. Separating that from a real key needs intra-method
+  dataflow. The alternative — the pre-fix silence — costs the 11 true findings, so the FP is accepted and
+  disclosed rather than traded away.
+* **The surface is MARKED (`~` prefix) and the nth-argument RESOURCE strategy rejects a marked value.** Without
+  that, `argument_name` resource resolution started resolving composite arguments and manufactured 63 new Echo
+  `actor:spawn`/`ask` effects named `~ChildName|chamberGuid` — graph nodes matching no delivery edge. The
+  argument surface is evidence about names, not a resource identity; the mark is what keeps the fix additive.

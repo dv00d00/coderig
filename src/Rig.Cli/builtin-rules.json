@@ -1963,13 +1963,14 @@
           "db_reader",
           "db_command",
           "llblgen",
+          "object_store",
           "repository",
           "efcore",
           "fhir",
           "elasticsearch",
           "azure_search"
         ],
-        "operations": ["GET", "read", "row_read", "query", "fetch", "search", "index_read"]
+        "operations": ["GET", "read", "row_read", "query", "fetch", "search", "index_read", "execute"]
       }
     ],
     "enumeratingMethods": [

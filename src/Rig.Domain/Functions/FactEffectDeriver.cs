@@ -689,7 +689,7 @@ public static class FactEffectDeriver
             // the ProcessId DNS constant `tell(PaymentGatewayProcessDns.AccountService, msg)`. With
             // argumentIndex set, the nth argument's name instead (e.g. the Rights.* permission at arg 1
             // of CertificateEntity.HasRight(cert, Rights.X.Y, txn)).
-            "argument_name" => argumentIndex is null ? firstArgName : NthJsonString(argumentNames, argumentIndex.Value),
+            "argument_name" => argumentIndex is null ? firstArgName : SinglePathOrNull(NthJsonString(argumentNames, argumentIndex.Value)),
             // The invocation target's declaring type — independent of how it's called. Needed for
             // statically-imported helpers that have no receiver (e.g. `using static LanguageExt.Prelude;`
             // then a bare `failwith(...)`), where receiver_type resolves to null and drops the effect.
@@ -787,6 +787,15 @@ public static class FactEffectDeriver
         }
         return position == index ? typeArguments.Substring(start).Trim() : null;
     }
+
+    // A stored argument NAME that is a member/identifier PATH, or null when it is the marked REDUCED SURFACE of
+    // a composite expression (FactExtractor.ReducedIdentifierSurfaceOf, leading '~'). The surface is evidence
+    // about which names appear somewhere in an argument — enough for the varying-key discriminator, and NOT a
+    // resource identity: naming an Echo process `~ChildName|chamberGuid` would invent a graph node that matches
+    // no spawn/tell/delivery edge. So this strategy keeps its pre-surface behaviour (unresolved -> effect
+    // dropped), which is what makes the surface strictly additive rather than a silent resource re-tune.
+    private static string? SinglePathOrNull(string? argumentName) =>
+        argumentName is null || argumentName.StartsWith('~') ? null : argumentName;
 
     // Buffer ceiling for the zero-allocation path: a JSON arg list this size or smaller is UTF-8
     // encoded into a stack buffer; anything larger borrows from the array pool. 1 KiB comfortably

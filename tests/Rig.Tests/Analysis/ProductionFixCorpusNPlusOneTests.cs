@@ -300,4 +300,104 @@ public sealed class ProductionFixCorpusNPlusOneTests
         result.ObservationsIn("Via_Custom_Select", "looped_effect").ShouldBeEmpty();
         result.ObservationsIn("Via_Custom_Select", "n_plus_1").ShouldBeEmpty();
     }
+
+    // The KEY-CAPTURE base case. The argument surface used to record a name only when the argument expression
+    // was ITSELF an identifier or member access, so a key nested inside a composite expression — an LLBLGen
+    // predicate, a concatenation, a cast, a ternary — was invisible and n_plus_1 could not fire. That is the
+    // exact shape of all 14 looped `TypedListBase.Fill(1, null, true, (Fields.Name == s.Trim()))` sites
+    // (InvoicesByNominalCode.cs:96 and 10 more): provider, operation and iteration identifier all pass, and
+    // the key match alone rejected them. Reduced to the same http read surface the rest of this file uses.
+    //
+    // The CONTRAST is the whole point and is why this is one test: the composite argument of the hoistable
+    // variant is captured too (it is no longer null), and it still must not fire — a captured surface that
+    // does not name the loop variable is a NEGATIVE, not a free pass.
+    [Test]
+    public void A_key_nested_in_a_composite_argument_fires_n_plus_1_a_composite_constant_key_does_not()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace Billing
+            {
+                public sealed class NominalCodes
+                {
+                    private const string BasePath = "/nominal";
+
+                    // BUG (InvoicesByNominalCode.cs:96 shape): the key varies per iteration but sits INSIDE a
+                    // composite expression, so the whole argument is neither an identifier nor a member access.
+                    public static void Fill_Bug(
+                        System.Net.Http.HttpClient client,
+                        System.Collections.Generic.IEnumerable<string> nomCs)
+                    {
+                        foreach (string s in nomCs)
+                        {
+                            var body = client.GetStringAsync(BasePath + "/" + s.Trim()).Result;
+                        }
+                    }
+
+                    // FIX: same composite SHAPE (so the surface is captured), constant key -> hoistable.
+                    public static void Fill_Fix(
+                        System.Net.Http.HttpClient client,
+                        System.Collections.Generic.IEnumerable<string> nomCs)
+                    {
+                        foreach (string s in nomCs)
+                        {
+                            var body = client.GetStringAsync(BasePath + "/" + Total(nomCs)).Result;
+                        }
+                    }
+
+                    private static string Total(System.Collections.Generic.IEnumerable<string> all) => "all";
+                }
+            }
+            """
+        );
+
+        var fired = result.ObservationsIn("Fill_Bug", "n_plus_1").ShouldHaveSingleItem();
+        fired.Context.ShouldBe("s");
+
+        result.ObservationsIn("Fill_Fix", "looped_effect").ShouldNotBeEmpty();
+        result.ObservationsIn("Fill_Fix", "n_plus_1").ShouldBeEmpty();
+    }
+
+    // THE DISCLOSED FALSE POSITIVE of the composite-argument surface above, pinned so it cannot be discovered
+    // by surprise in a review. The surface says "these names appear somewhere in this expression", never "this
+    // name is the key": a loop variable mentioned in a NON-key position of a composite argument matches all the
+    // same. Here the read's key is a constant and `code` appears only as a FIELD NAME on the other side of the
+    // predicate — the read is hoistable, and n_plus_1 fires anyway.
+    //
+    // Not fixable by narrowing the surface: separating "appears as the key" from "appears anywhere" needs
+    // intra-method dataflow rig does not have, and the alternative — dropping composite arguments, as before —
+    // costs the 11 confirmed true findings the test above pins. Recorded per the house rule that clears are
+    // unsound and the ceiling is disclosed, never quietly assumed away.
+    [Test]
+    public void A_loop_variable_named_like_a_field_in_a_composite_key_is_a_KNOWN_false_positive()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace Billing
+            {
+                public static class Fields
+                {
+                    public static string code = "code";
+                }
+
+                public sealed class Shadowed
+                {
+                    // The key is CONSTANT ("/all"); `code` occurs only as the member name of Fields.code, not
+                    // as a value. Hoistable, and flagged regardless — the over-approximation, pinned.
+                    public static void Hoistable(
+                        System.Net.Http.HttpClient client,
+                        System.Collections.Generic.IEnumerable<string> codes)
+                    {
+                        foreach (string code in codes)
+                        {
+                            var body = client.GetStringAsync(Fields.code + "/all").Result;
+                        }
+                    }
+                }
+            }
+            """
+        );
+
+        result.ObservationsIn("Hoistable", "n_plus_1").ShouldNotBeEmpty();
+    }
 }

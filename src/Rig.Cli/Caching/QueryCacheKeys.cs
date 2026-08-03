@@ -20,7 +20,11 @@ internal static class QueryCacheKeys
     // change with no matching bump serves stale (same tradeoff the tree/hazard keys have always carried).
     internal const int EpSchema = 1;
     internal const int TreeSchema = 2; // v1->v2: TraceNode gained TruncationCause (no stale conflated seen flags)
-    internal const int HazardEffectsSchema = 3; // v1->v2 EnclosingGuards; v2->v3 lazy_init_race lock-enclosed tier
+
+    // v1->v2 EnclosingGuards; v2->v3 lazy_init_race lock-enclosed tier; v3->v4 the n_plus_1 read gate gained
+    // object_store + the `execute` operation (a BUILTIN-rules edit, which the rulesHash — computed over the
+    // loaded rule FILES — does not see, so without this bump a warm cache would keep serving the old 175).
+    internal const int HazardEffectsSchema = 4;
     internal const int GraphHazSchema = 1;
     internal const int ImpactSchema = 4; // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition deltas added to the payload
 

@@ -1315,7 +1315,9 @@ internal static class FactExtractor
             templates[i] = template;
             anyTemplate |= template is not null;
 
-            var name = expression is MemberAccessExpressionSyntax or IdentifierNameSyntax ? expression.ToString() : null;
+            var name = expression is MemberAccessExpressionSyntax or IdentifierNameSyntax
+                ? expression.ToString()
+                : ReducedIdentifierSurfaceOf(expression);
             names[i] = name;
             anyName |= name is not null;
         }
@@ -1332,6 +1334,61 @@ internal static class FactExtractor
         }
 
         return (JsonSerializer.Serialize(templates), JsonSerializer.Serialize(names));
+    }
+
+    // Marks a value in the argument-NAMES list as a reduced SURFACE rather than a member/identifier path. No
+    // identifier or member-access expression can begin with '~' (`~x` is a bitwise-not, never a path), so the
+    // mark is unambiguous, and it is a token boundary, so the whole-word key matching the surface exists for is
+    // unaffected. Consumers that want an identity (the nth-argument resource strategy) reject a marked value —
+    // see FactEffectDeriver.SinglePathOrNull — which is what keeps this addition strictly additive.
+    private const char ReducedSurfaceMark = '~';
+
+    // The identifier/member-path SURFACE of a COMPOSITE argument expression: its outermost identifier and
+    // member-access paths, '|'-joined and marked — `(NominalCodeFields.Name == s.Trim())` ->
+    // "~NominalCodeFields.Name|s.Trim".
+    // Without it a composite argument contributes no name at all, so any key nested inside a predicate, a cast,
+    // an arithmetic expression or a ternary is INVISIBLE to every consumer of the argument surface — which is
+    // what silenced all 14 looped `TypedListBase.Fill(…, IPredicate)` reads (the key lives inside the LLBLGen
+    // predicate) and made the varying-key n_plus_1 discriminator work only for syntactically bare keys.
+    //
+    // OUTERMOST: a captured path's own subtree is not re-walked, so `s.Trim()` yields "s.Trim" and not also "s"
+    // and "Trim". That is the "reduced" in reduced surface, and it costs nothing — the consumers match
+    // WHOLE-WORD over the joined string, which already recovers each dotted segment as its own token.
+    //
+    // Over-approximating BY CONSTRUCTION, and deliberately so: the surface says "these names appear somewhere
+    // in this expression", never "this name is the key". A loop variable mentioned in a non-key position of a
+    // composite argument therefore now matches. Separating the two needs dataflow rig does not have; the
+    // alternative (staying silent) loses the true findings above. Null when the expression names nothing at
+    // all (a purely literal composite), which keeps the no-information skip in ArgumentListOf intact.
+    private static string? ReducedIdentifierSurfaceOf(ExpressionSyntax expression)
+    {
+        List<string>? paths = null;
+        Collect(expression);
+        return paths is null ? null : ReducedSurfaceMark + string.Join('|', paths);
+
+        void Collect(SyntaxNode node)
+        {
+            if (node is MemberAccessExpressionSyntax or IdentifierNameSyntax)
+            {
+                var path = node.ToString();
+                paths ??= [];
+                // Bounded + deduped: a large generated predicate can mention the same field path many times,
+                // and this string is STORED per call site over millions of reference facts. The cap is a
+                // storage guard, not a semantic one — a key beyond the 24th distinct path in one argument is
+                // not a shape we have seen, and truncating is strictly better than an unbounded blob.
+                if (paths.Count < 24 && !paths.Contains(path, StringComparer.Ordinal))
+                {
+                    paths.Add(path);
+                }
+
+                return;
+            }
+
+            foreach (var child in node.ChildNodes())
+            {
+                Collect(child);
+            }
+        }
     }
 
     // The argument's string VALUE for the string_argument resource: its inline string template
