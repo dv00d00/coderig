@@ -51,10 +51,19 @@ Cheap partial worth considering first: propagate one hop only, and only when the
 DIRECTLY as an argument at the call site. That covers the `foreach (x in xs) Helper.Load(x)` shape — likely
 the common one — without a general dataflow pass.
 
-## Also visible in the same measurement
+## Also visible in the same measurement — INVESTIGATED, and it is NOT this gap
 
-All 175 current `n_plus_1` findings are `entity_cache:read`. Zero come from `llblgen:read`/`fetch`,
-`db_command`, or `http`, even though all are in the `nPlusOne` provider gate. Consistent with the above: the
-`*Cache.New(pk)` family is the one shape where the per-element key is a direct syntactic argument at the read
-site, because the raw LLBLGen fetch sits one frame deeper inside the cache seam. Worth confirming that this is
-the same root cause and not a second, independent gate problem.
+All 175 current `n_plus_1` findings are `entity_cache:read`. The first guess was that this shared the
+cross-method root cause. **That was investigated and refuted** (2026-08-03): it is two INDEPENDENT defects,
+tracked separately in [n-plus-1-key-capture-and-gate-defects](n-plus-1-key-capture-and-gate-defects.md).
+Iteration context IS found for looped `llblgen:read` (14 sites) and `object_store:read` (33 sites) — they
+carry `looped_effect` and fail only at the key/gate stage, so they are not instances of this cross-method
+problem. Only redis/inproc_cache/efcore/repository/fhir/elasticsearch/azure_search have genuine zeros, and
+those are vacuous (5 of the 12 gated providers have no effect rule at all in the MedDBase ruleset).
+
+**The finding that matters for THIS item:** `entity_cache` fires only by syntactic accident —
+`Cache.New(chamber.PfkCompany)` happens to be a bare member-access, so the key lands in `FirstArgumentName`.
+The varying-key discriminator is therefore far more brittle than 175 findings suggests: it works only when the
+key is a syntactically bare identifier/member path at the read's OWN call site. Any cross-method key
+propagation designed here is strictly harder than an intra-method base case that is itself only working for
+one syntactic shape — so the arg-surface capture fix is likely a PREREQUISITE milestone, not an unrelated bug.
