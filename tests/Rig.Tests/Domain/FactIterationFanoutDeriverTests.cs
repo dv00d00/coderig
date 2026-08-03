@@ -216,10 +216,7 @@ public sealed class FactIterationFanoutDeriverTests
     public void A_composite_argument_surface_keeps_its_reduced_mark()
     {
         var fanout = FactIterationFanoutDeriver
-            .Derive(
-                [Call(loopKind: "foreach", loopDetail: "s in names", argumentNames: """["~NominalCodeFields.Name|s.Trim"]""")],
-                Rules
-            )
+            .Derive([Call(loopKind: "foreach", loopDetail: "s in names", argumentNames: """["~NominalCodeFields.Name|s.Trim"]""")], Rules)
             .ShouldHaveSingleItem();
 
         fanout.KeyToken.ShouldBe("s");
@@ -240,7 +237,10 @@ public sealed class FactIterationFanoutDeriverTests
 
     [Test]
     public void A_keyless_anchor_has_no_key_path() =>
-        FactIterationFanoutDeriver.Derive([Call(loopKind: "while", loopDetail: "while")], Rules).ShouldHaveSingleItem().KeyPath.ShouldBe("");
+        FactIterationFanoutDeriver
+            .Derive([Call(loopKind: "while", loopDetail: "while")], Rules)
+            .ShouldHaveSingleItem()
+            .KeyPath.ShouldBe("");
 
     // The loop's element TYPE, which the source-text detail cannot supply: "row in rows" says nothing about what
     // a row is. This is the semantic half of the self-keyed test.
@@ -249,7 +249,14 @@ public sealed class FactIterationFanoutDeriverTests
     {
         var fanout = FactIterationFanoutDeriver
             .Derive(
-                [Call(loopKind: "foreach", loopDetail: "p in profiles", argumentNames: """["p.PkProfile"]""", elementType: "N.ProfileEntity")],
+                [
+                    Call(
+                        loopKind: "foreach",
+                        loopDetail: "p in profiles",
+                        argumentNames: """["p.PkProfile"]""",
+                        elementType: "N.ProfileEntity"
+                    ),
+                ],
                 Rules
             )
             .ShouldHaveSingleItem();

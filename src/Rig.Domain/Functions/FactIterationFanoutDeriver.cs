@@ -142,10 +142,7 @@ public static class FactIterationFanoutDeriver
     // `Cache.New(p.PkProfile)` yields the path "p.PkProfile" while the token stays "p". Names are preferred over
     // templates because a name is the member path the key discriminator needs; a template only wins where the
     // element travels inside a string ("/vars/{id}") and there is no name at all.
-    private static (string KeyToken, string KeyPath, int ArgumentIndex) KeyOf(
-        IReadOnlyList<string> identifiers,
-        FactInvocation inv
-    )
+    private static (string KeyToken, string KeyPath, int ArgumentIndex) KeyOf(IReadOnlyList<string> identifiers, FactInvocation inv)
     {
         if (identifiers.Count == 0)
         {

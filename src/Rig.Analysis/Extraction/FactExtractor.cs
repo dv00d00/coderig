@@ -1775,9 +1775,7 @@ internal static class FactExtractor
                 _ => null,
             };
 
-            return parameter is null
-                ? ""
-                : symbolCache.TypeDisplay((model.GetDeclaredSymbol(parameter) as IParameterSymbol)?.Type) ?? "";
+            return parameter is null ? "" : symbolCache.TypeDisplay((model.GetDeclaredSymbol(parameter) as IParameterSymbol)?.Type) ?? "";
         }
 
         return "";
