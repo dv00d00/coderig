@@ -576,6 +576,23 @@ public sealed record FactCacheCoherenceRule(
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
+// n_plus_1_cross_method POLICY: which effects count as a READ beneath a per-iteration call, and how far to
+// look. Opt-in — the detector fires ONLY when this section is present, mirroring cacheCoherence — because it
+// is a DATA-GATHERING instrument first: it emits one row per (looped call site x reachable read) pair, which is
+// the grain an amortization analysis needs and emphatically not a review surface.
+//
+// The read gate is deliberately a SEPARATE list from `observations.nPlusOne`: the intra-method detector is
+// calibrated, this one is not, and coupling them means a fix to one silently re-tunes the other. MaxDepth is
+// the reach bound (not a semantic gate — recall is monotone in depth, so depth is emitted as data);
+// MaxWitnessesPerAnchor 0 keeps the full cross product, >0 keeps the nearest-depth N per anchor.
+public sealed record FactCrossMethodNPlusOneRule(
+    IReadOnlyList<string> ReadProviders,
+    IReadOnlyList<string> ReadOperations,
+    int MaxDepth = 6,
+    int MaxWitnessesPerAnchor = 0,
+    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
+);
+
 // static_init_capture POLICY: the project-specific mutable-source resource patterns whose READ into a
 // STATIC field initializer is the hazard (config / Settings.* / feature flag — frozen at CLR type-init,
 // "wrong until app restart"). Patterns are matched as substrings of the effect's ResourceType (like

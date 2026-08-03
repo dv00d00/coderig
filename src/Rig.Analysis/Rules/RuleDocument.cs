@@ -140,6 +140,19 @@ internal sealed record CacheCoherenceRule(
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
+// n_plus_1_cross_method POLICY (JSON authoring shape of the `crossMethodNPlusOne` section): the read gate
+// (`readProviders` x `readOperations`) that decides what counts as a read beneath a per-iteration call, the
+// reach bound `maxDepth`, and `maxWitnessesPerAnchor` (0 = the full anchor x witness cross product — the
+// dataset grain). Projected to FactCrossMethodNPlusOneRule. One object, not a list (last-writer-wins). Opt-in:
+// an absent section leaves the detector off.
+internal sealed record CrossMethodNPlusOneRule(
+    IReadOnlyList<string> ReadProviders,
+    IReadOnlyList<string>? ReadOperations = null,
+    int? MaxDepth = null,
+    int? MaxWitnessesPerAnchor = null,
+    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
+);
+
 // static_init_capture POLICY (JSON authoring shape of the `staticInitCapture` section): `mutableSources` is
 // the project-specific list of resource substrings (e.g. "MedDBase.Configuration.Settings.") whose READ
 // into a static field initializer is flagged as frozen-at-type-init config. Projected to
@@ -252,6 +265,10 @@ internal sealed class AnalysisRulesDocument
     // Top-level key "cacheCoherence": a SINGLE object (not a list) declaring the cached entities + bulk-write +
     // invalidation method names for the FR-7 cache-coherence graph hazard (see CacheCoherenceRule).
     public CacheCoherenceRule? CacheCoherence { get; set; }
+
+    // Top-level key "crossMethodNPlusOne": a SINGLE object declaring the read gate + reach bound for the
+    // n_plus_1_cross_method presence correlation (see CrossMethodNPlusOneRule). Absent = detector off.
+    public CrossMethodNPlusOneRule? CrossMethodNPlusOne { get; set; }
 
     // Top-level key "staticInitCapture": a SINGLE object declaring the mutable-source resource patterns for
     // the static_init_capture hazard (see StaticInitCaptureRule).

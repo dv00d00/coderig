@@ -28,11 +28,28 @@ public enum CorrelationRelation
     CompanionForwardReachable,
 }
 
-// Which side of the relation is the FINDING. Only one this session.
+// Which side of the relation is the FINDING.
 public enum CorrelationPolarity
 {
     // Flag anchors that LACK the expected companion (the missing-invalidation / dual-write-gap shape).
     Absence,
+
+    // Flag anchors that HAVE the companion (the amplification / co-presence shape). The finding carries the
+    // WITNESS that made it fire — an absence finding has nothing to point at, a presence one does.
+    Presence,
+}
+
+// How a companion is matched to an anchor beyond the predicate.
+public enum CorrelationKeyMatch
+{
+    // Today's behavior: normalized ResourceKey equality (bulk_write of X <-> invalidate of X).
+    ResourceKeyEquality,
+
+    // The anchor's key TOKEN is carried as EVIDENCE, not as a join condition: it cannot be followed across a
+    // call boundary until the callee's parameter names are a fact, and — the point of the presence polarity —
+    // C# statements are eager, so a read beneath a per-element call runs per element whatever its key. A null
+    // token is therefore data, not a disqualifier, and every anchor's key state is reported rather than gated.
+    PropagatedKeyToken,
 }
 
 public sealed record CorrelationSpec(
@@ -60,7 +77,15 @@ public sealed record CorrelationSpec(
     // Null = no restriction and no tiering (every anchor in scope; Certainty left null) — the generic default.
     IReadOnlyDictionary<string, string>? InScopeKeys = null,
     int MaxDepth = 20,
-    FactPathFinder.TraversalMode Mode = FactPathFinder.TraversalMode.SyncCut
+    FactPathFinder.TraversalMode Mode = FactPathFinder.TraversalMode.SyncCut,
+    CorrelationKeyMatch KeyMatch = CorrelationKeyMatch.ResourceKeyEquality,
+    // A companion matches if it satisfies ANY of these predicates. Null = the single `Companion` predicate.
+    // The presence instance needs a SET (a read is any of ~7 provider:operation pairs) and must not pay for a
+    // reach per pair.
+    IReadOnlyList<EffectPredicate>? Companions = null,
+    // Presence only: at most this many witnesses per anchor, nearest-depth first. 0 = unlimited, i.e. the full
+    // (anchor x witness) cross product — the DATA-GATHERING grain, not the finding grain.
+    int MaxWitnessesPerAnchor = 1
 );
 
 // One anchor effect with no matching companion on its forward closure. Method = the anchor's
@@ -75,7 +100,23 @@ public sealed record CorrelationFinding(
     string AnchorOperation,
     // The certainty token from spec.InScopeKeys for this finding's key (e.g. "high" for a declared-contract
     // entity, "medium" for one inferred from cache reads). Null when the spec did not tier keys.
-    string? Certainty = null
+    string? Certainty = null,
+    // PRESENCE only: the companion that made this fire, with the reach evidence that found it. All null for
+    // Absence — which has nothing to point at — so the Absence output (and the FR-7 golden oracle) is
+    // byte-identical to before these fields existed.
+    string? WitnessMethod = null,
+    string? WitnessFilePath = null,
+    int? WitnessLine = null,
+    string? WitnessResourceKey = null,
+    string? WitnessProvider = null,
+    string? WitnessOperation = null,
+    int? WitnessDepth = null,
+    // Reach evidence for the witness, carried because dispatch fan-out must be visible as DOUBT: a witness
+    // found only through a heuristically-resolved virtual call may live in an implementation this anchor never
+    // reaches. Never a filter here — the analysis pass decides what it is worth.
+    string? WitnessDispatchBasis = null,
+    string? WitnessDispatchVia = null,
+    int? WitnessDispatchDegree = null
 );
 
 public static class FactCorrelationDeriver
@@ -86,6 +127,11 @@ public static class FactCorrelationDeriver
     // Line). Mirrors FactCacheCoherenceDeriver.DeriveCacheCoherence.
     public static IReadOnlyList<CorrelationFinding> Derive(FactGraphData graph, IReadOnlyList<DerivedEffect> effects, CorrelationSpec spec)
     {
+        if (spec.Polarity == CorrelationPolarity.Presence)
+        {
+            return DerivePresence(graph, effects, spec);
+        }
+
         // 2. Companions index: resource key -> the set of enclosing nodes that invalidate it.
         var companions = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var e in effects)
@@ -198,6 +244,202 @@ public static class FactCorrelationDeriver
             }
         );
         return findings;
+    }
+
+    // Polarity=Presence: every (anchor, witness) pair where a COMPANION is forward-reachable from the anchor's
+    // enclosing symbol. Structurally the same three steps as the Absence path — companion index, anchor filter,
+    // one reach per distinct anchor enclosing id — with three differences, each following from the polarity:
+    //   * the companion index is by ENCLOSING NODE, not by resource key: presence does not join on identity
+    //     (see CorrelationKeyMatch.PropagatedKeyToken), it asks only "is one of these below me";
+    //   * the reach keeps its ReachInfo, because DEPTH picks the nearest witness and is itself evidence;
+    //   * the emission is per PAIR (capped by MaxWitnessesPerAnchor), because a presence finding without its
+    //     witness is unactionable.
+    private static IReadOnlyList<CorrelationFinding> DerivePresence(
+        FactGraphData graph,
+        IReadOnlyList<DerivedEffect> effects,
+        CorrelationSpec spec
+    )
+    {
+        var companionsByNode = new Dictionary<string, List<DerivedEffect>>(StringComparer.Ordinal);
+        foreach (var e in effects)
+        {
+            if (e.EnclosingSymbolId is null || !MatchesAny(e, spec))
+            {
+                continue;
+            }
+
+            if (!companionsByNode.TryGetValue(e.EnclosingSymbolId, out var here))
+            {
+                here = [];
+                companionsByNode[e.EnclosingSymbolId] = here;
+            }
+
+            here.Add(e);
+        }
+
+        // Anchors. No key gate and no normalization: the anchor's ResourceType IS its key token, "" when the
+        // site is keyless, and a keyless anchor is exactly as much of a finding (§ the eager-statement premise).
+        var anchors = new List<(DerivedEffect Effect, string Key, string? Certainty)>();
+        foreach (var e in effects)
+        {
+            if (e.EnclosingSymbolId is null || !Matches(e, spec.Anchor))
+            {
+                continue;
+            }
+
+            if (ExcludedByNamespace(e.EnclosingSymbolId, spec.ExcludeEnclosingNamespaceSuffix))
+            {
+                continue;
+            }
+
+            string? certainty = null;
+            if (spec.InScopeKeys is { } inScope && !inScope.TryGetValue(e.ResourceType, out certainty))
+            {
+                continue;
+            }
+
+            anchors.Add((e, e.ResourceType, certainty));
+        }
+
+        var distinctEnclosing = anchors.Select(a => a.Effect.EnclosingSymbolId!).Distinct(StringComparer.Ordinal).ToList();
+        var reachSets = FactPathFinder.ReachesInfoFromEachSeed(
+            graph,
+            distinctEnclosing,
+            maxDepth: spec.MaxDepth,
+            maxNodes: 20000,
+            narrowDispatch: true,
+            mode: spec.Mode
+        );
+        var reachOf = new Dictionary<string, IReadOnlyDictionary<string, FactPathFinder.ReachInfo>>(StringComparer.Ordinal);
+        for (var i = 0; i < distinctEnclosing.Count; i++)
+        {
+            reachOf[distinctEnclosing[i]] = reachSets[i];
+        }
+
+        var findings = new List<CorrelationFinding>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (effect, key, certainty) in anchors)
+        {
+            var reach = reachOf[effect.EnclosingSymbolId!];
+            var witnesses = new List<(DerivedEffect Witness, FactPathFinder.ReachInfo Reach)>();
+            foreach (var (node, info) in reach)
+            {
+                if (companionsByNode.TryGetValue(node, out var here))
+                {
+                    witnesses.AddRange(here.Select(w => (w, info)));
+                }
+            }
+
+            // Nearest-depth first, then a total order so the cap (and the emitted dataset) is deterministic.
+            witnesses.Sort(
+                (a, b) =>
+                {
+                    var byDepth = a.Reach.Depth.CompareTo(b.Reach.Depth);
+                    if (byDepth != 0)
+                    {
+                        return byDepth;
+                    }
+
+                    var byMethod = string.CompareOrdinal(a.Witness.EnclosingSymbolId, b.Witness.EnclosingSymbolId);
+                    return byMethod != 0 ? byMethod : a.Witness.Line.CompareTo(b.Witness.Line);
+                }
+            );
+
+            var take = spec.MaxWitnessesPerAnchor <= 0 ? witnesses.Count : Math.Min(spec.MaxWitnessesPerAnchor, witnesses.Count);
+            for (var i = 0; i < take; i++)
+            {
+                var (witness, info) = witnesses[i];
+                var finding = new CorrelationFinding(
+                    Method: effect.EnclosingSymbolId!,
+                    ResourceKey: key,
+                    FilePath: effect.FilePath,
+                    Line: effect.Line,
+                    AnchorProvider: effect.Provider,
+                    AnchorOperation: effect.Operation,
+                    Certainty: certainty,
+                    WitnessMethod: witness.EnclosingSymbolId,
+                    WitnessFilePath: witness.FilePath,
+                    WitnessLine: witness.Line,
+                    WitnessResourceKey: witness.ResourceType,
+                    WitnessProvider: witness.Provider,
+                    WitnessOperation: witness.Operation,
+                    WitnessDepth: info.Depth,
+                    WitnessDispatchBasis: info.DispatchBasis,
+                    WitnessDispatchVia: info.DispatchVia,
+                    WitnessDispatchDegree: info.DispatchDegree
+                );
+
+                if (
+                    seen.Add(
+                        finding.Method
+                            + " "
+                            + finding.FilePath
+                            + " "
+                            + finding.Line
+                            + " "
+                            + finding.WitnessMethod
+                            + " "
+                            + finding.WitnessFilePath
+                            + " "
+                            + finding.WitnessLine
+                    )
+                )
+                {
+                    findings.Add(finding);
+                }
+            }
+        }
+
+        findings.Sort(
+            (a, b) =>
+            {
+                var byFile = string.CompareOrdinal(a.FilePath, b.FilePath);
+                if (byFile != 0)
+                {
+                    return byFile;
+                }
+
+                var byLine = a.Line.CompareTo(b.Line);
+                if (byLine != 0)
+                {
+                    return byLine;
+                }
+
+                var byMethod = string.CompareOrdinal(a.Method, b.Method);
+                if (byMethod != 0)
+                {
+                    return byMethod;
+                }
+
+                var byDepth = (a.WitnessDepth ?? 0).CompareTo(b.WitnessDepth ?? 0);
+                if (byDepth != 0)
+                {
+                    return byDepth;
+                }
+
+                var byWitness = string.CompareOrdinal(a.WitnessMethod, b.WitnessMethod);
+                return byWitness != 0 ? byWitness : (a.WitnessLine ?? 0).CompareTo(b.WitnessLine ?? 0);
+            }
+        );
+        return findings;
+    }
+
+    private static bool MatchesAny(DerivedEffect e, CorrelationSpec spec)
+    {
+        if (spec.Companions is not { Count: > 0 } predicates)
+        {
+            return Matches(e, spec.Companion);
+        }
+
+        foreach (var p in predicates)
+        {
+            if (Matches(e, p))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool Matches(DerivedEffect e, EffectPredicate p) =>

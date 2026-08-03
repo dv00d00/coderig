@@ -42,32 +42,13 @@ public static class FactObservationDeriver
     {
         var observations = new List<EffectObservationInfo>();
 
-        // The enumerating-lambda iteration context: the innermost enclosing call that the rules declare
-        // ENUMERATES its receiver and whose lambda argument contains this effect. `ids.Select(id =>
-        // Fetch(id))` amplifies exactly as `foreach (var id in ids) Fetch(id)` does, but has no loop
-        // STATEMENT ancestor, so the loop facts alone report no iteration at all. Rule-gated on the
-        // resolved declaring type, which is what keeps single-shot lambda takers (Option.Map, Try, Lazy,
-        // Task.Run) out. Innermost-first; first match wins, mirroring the other enclosing-invocation scans.
-        var enumerating = enclosingInvocations.FirstOrDefault(e =>
-            !string.IsNullOrEmpty(e.LambdaParameter)
-            && rules.EnumeratingMethods.Any(r =>
-                (r.Methods.Count == 0 || r.Methods.Contains(e.MethodName, StringComparer.Ordinal))
-                && (r.DeclaringTypes.Count == 0 || r.DeclaringTypes.Contains(e.DeclaringType, StringComparer.Ordinal))
-            )
-        );
-
-        // EnclosingInvocation is a record STRUCT, so a FirstOrDefault miss yields `default` — where the
-        // positional `= ""` defaults do NOT apply and every string field is null. Normalize once here
-        // rather than null-guarding each use.
-        var enumeratingParameter = enumerating.LambdaParameter ?? "";
-
-        // A loop STATEMENT wins the reported kind when both are present (it is the coarser, outer context
-        // and keeps existing output stable), but the identifiers UNION: in `foreach (var a in xs) ys.Select(y
-        // => Fetch(y))` both `a` and `y` are genuinely rebound per iteration, so a key built from either is
-        // amplified. Taking only the loop's identifier would miss the `y`-keyed read entirely.
-        var iterationKind = loopKind ?? (enumeratingParameter.Length > 0 ? "lambda" : null);
-        var iterationDetail =
-            loopDetail ?? (enumeratingParameter.Length > 0 ? $"{enumeratingParameter} in {enumerating.MethodName}" : null);
+        // The iteration context around this effect: the loop facts unioned with the rule-declared
+        // enumerating-lambda contexts among the ancestor invocations (`ids.Select(id => Fetch(id))` amplifies
+        // exactly as `foreach (var id in ids) Fetch(id)` does but has no loop STATEMENT ancestor). Shared with
+        // the cross-method iteration-fanout deriver — see IterationContext on why it is not inlined here.
+        var iteration = IterationContext.Of(loopKind, loopDetail, enclosingInvocations, rules);
+        var iterationKind = iteration.Kind;
+        var iterationDetail = iteration.Detail;
 
         // looped_effect — the effect is lexically inside an iteration context (nearest enclosing loop, or a
         // rule-declared enumerating lambda).
@@ -264,10 +245,7 @@ public static class FactObservationDeriver
         // by looped_effect alone — deliberately, rather than emitting a keyless n_plus_1 guess.
         if (provider is not null && iterationKind is not null && rules.NPlusOne.Count > 0)
         {
-            var iterationIdentifiers = IterationIdentifiers(loopKind, loopDetail)
-                .Concat(SplitIdentifiers(enumeratingParameter))
-                .Distinct(StringComparer.Ordinal)
-                .ToList();
+            var iterationIdentifiers = iteration.Identifiers;
             if (iterationIdentifiers.Count > 0)
             {
                 foreach (var rule in rules.NPlusOne)
@@ -311,34 +289,6 @@ public static class FactObservationDeriver
         return observations;
     }
 
-    // The identifiers rebound on every iteration, parsed from a loopDetail of the form
-    // "{identifier}[, {identifier}…] in {expression}" — a `foreach` contributes its single iteration
-    // variable ("id in ids" -> ["id"]), a `query` contributes every range variable the query binds
-    // ("p, profile in profiles" -> ["p", "profile"]). Empty for `for`/`while`/`do`, which carry no
-    // identifier: their amplification is real but the varying-key discriminator has nothing to match, so
-    // they stay covered by looped_effect alone rather than producing a keyless n_plus_1 guess.
-    private static IReadOnlyList<string> IterationIdentifiers(string? loopKind, string? loopDetail)
-    {
-        if (loopKind is not ("foreach" or "query") || string.IsNullOrEmpty(loopDetail))
-        {
-            return [];
-        }
-
-        var inMarker = loopDetail!.IndexOf(" in ", StringComparison.Ordinal);
-        if (inMarker <= 0)
-        {
-            return [];
-        }
-
-        return SplitIdentifiers(loopDetail.Substring(startIndex: 0, length: inMarker));
-    }
-
-    // A comma-separated identifier list ("p, profile", a lambda's "x, i") to its trimmed, non-empty parts.
-    private static IReadOnlyList<string> SplitIdentifiers(string? identifiers) =>
-        string.IsNullOrEmpty(identifiers)
-            ? []
-            : identifiers!.Split(',').Select(part => part.Trim()).Where(part => part.Length > 0).ToList();
-
     // True when the loop identifier appears as a whole-word token in any of the read's key-argument
     // surfaces: the first-argument member/identifier path, the first-argument string/interp template, or
     // any element of the all-positional-args JSON name/template arrays. Whole-word so "id" matches in
@@ -351,44 +301,9 @@ public static class FactObservationDeriver
         string? argumentTemplates
     )
     {
-        return ContainsToken(haystack: firstArgName, token: loopIdentifier)
-            || ContainsToken(haystack: firstArgTemplate, token: loopIdentifier)
-            || ContainsToken(haystack: argumentNames, token: loopIdentifier)
-            || ContainsToken(haystack: argumentTemplates, token: loopIdentifier);
+        return IterationContext.ContainsToken(haystack: firstArgName, token: loopIdentifier)
+            || IterationContext.ContainsToken(haystack: firstArgTemplate, token: loopIdentifier)
+            || IterationContext.ContainsToken(haystack: argumentNames, token: loopIdentifier)
+            || IterationContext.ContainsToken(haystack: argumentTemplates, token: loopIdentifier);
     }
-
-    // True when `token` occurs in `haystack` bounded by non-identifier characters on both sides (so it is
-    // a distinct identifier reference, not a substring of a longer name). A C# identifier char is a
-    // letter, digit, or underscore — any other char (`/`, `{`, `}`, `.`, `"`, `,`, quotes) is a boundary,
-    // which is exactly what surrounds a varying key in a member path ("a.id"), an interp template
-    // ("/var/{id}"), or a JSON arg array (["id"]).
-    private static bool ContainsToken(string? haystack, string token)
-    {
-        if (string.IsNullOrEmpty(haystack))
-        {
-            return false;
-        }
-
-        var from = 0;
-        while (true)
-        {
-            var at = haystack!.IndexOf(token, from, StringComparison.Ordinal);
-            if (at < 0)
-            {
-                return false;
-            }
-
-            var before = at == 0 ? '\0' : haystack[at - 1];
-            var afterIndex = at + token.Length;
-            var after = afterIndex >= haystack.Length ? '\0' : haystack[afterIndex];
-            if (!IsIdentifierChar(before) && !IsIdentifierChar(after))
-            {
-                return true;
-            }
-
-            from = at + 1;
-        }
-    }
-
-    private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 }

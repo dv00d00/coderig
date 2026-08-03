@@ -1,6 +1,7 @@
 using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Effects;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -216,6 +217,22 @@ internal static class DeriveCommand
             allHazards.RemoveAll(h => CommonOptions.MatchesExcludedNamespace(h.Enclosing, opts.ExcludeNamespaces));
         }
 
+        // --- n_plus_1_cross_method: the PRESENCE correlation over iteration-fanout pseudo-events (a read
+        //     reachable at or beneath a call issued once per element). Opt-in — only when the
+        //     `crossMethodNPlusOne` rule section is present, mirroring cacheCoherence. Emitted as its OWN tsv
+        //     row type, never as a HazardFinding: step 1 is a dataset at (anchor x witness) grain, and folding
+        //     it into the Hazards view would swamp it and re-tune `rig impact`'s hazard deltas. Sees the
+        //     UNFILTERED effects for the same reason cache_coherence does — --only/--exclude is presentation.
+        var crossMethodRows = rules.CrossMethodNPlusOne is { } xm
+            ? CrossMethodNPlusOneDataset.TsvRows(
+                invocations: await Reads.LoadInvocationRefsAsync(context),
+                graph: shapedGraph,
+                effects: unfilteredEffects,
+                observationRules: rules.Observations,
+                rule: xm
+            )
+            : [];
+
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
         if (tsv)
@@ -239,6 +256,12 @@ internal static class DeriveCommand
             foreach (var h in allHazards)
             {
                 io.TextOutput.Output.WriteLine(HazardTsvRow(h));
+            }
+
+            // See CrossMethodNPlusOneDataset for the column reference. Empty unless the rule section is present.
+            foreach (var row in crossMethodRows)
+            {
+                io.TextOutput.Output.WriteLine(row);
             }
 
             var tsvEps = FactEntryPointDeriver.Derive(epData, rules.EntryPoints, rules.ClassInheritance);
@@ -273,6 +296,16 @@ internal static class DeriveCommand
         //     n_plus_1 / unserializable_payload — see HazardKinds). Promoted out of the generic observations
         //     block into their own section with per-type, per-confidence counts + sampled sites. ---
         WriteHazards(io.TextOutput.Output, allHazards, opts.Limit);
+
+        // The cross-method dataset is a machine artifact (see CrossMethodNPlusOneDataset): the human view gets
+        // its size and the flag that emits it, never the rows — 74k pairs is not a review surface.
+        if (crossMethodRows.Count > 0)
+        {
+            io.TextOutput.Output.WriteLine();
+            io.TextOutput.Output.WriteLine(
+                $"{CrossMethodNPlusOneDataset.RowType}: {crossMethodRows.Count} (anchor x witness) pair(s) — emit with --format tsv"
+            );
+        }
 
         // --- STRUCTURAL observations attached to effects (looped_effect / parallel_fanout /
         //     lock_held_across_effect / transaction_spans_effect, P2b) — context facts, NOT hazards. The

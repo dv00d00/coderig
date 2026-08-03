@@ -1,6 +1,6 @@
 # `n_plus_1` is INTRA-METHOD: cross-method amplification (loop in caller, read in callee) is invisible
 
-**Status:** TODO · **Found:** 2026-08-03, measuring FR-3 recall against preprod runtime data after shipping
+**Status:** IN PROGRESS — step 1 of 3 (the dataset instrument) landed 2026-08-03; see "Step 1" at the bottom · **Found:** 2026-08-03, measuring FR-3 recall against preprod runtime data after shipping
 [n-plus-1-iteration-contexts-beyond-loop-statements](../done/n-plus-1-iteration-contexts-beyond-loop-statements.md)
 · **Family:** hazard-recall / FR-3 · **Tier:** graph (not effect-local)
 
@@ -67,3 +67,31 @@ The varying-key discriminator is therefore far more brittle than 175 findings su
 key is a syntactically bare identifier/member path at the read's OWN call site. Any cross-method key
 propagation designed here is strictly harder than an intra-method base case that is itself only working for
 one syntactic shape — so the arg-surface capture fix is likely a PREREQUISITE milestone, not an unrelated bug.
+
+## Step 1 of 3 landed (2026-08-03) — a DATA-GATHERING instrument, not a detector
+
+Sequencing per the design's plan of record (docs/design-effect-cep-n-plus-1.md, "PLAN OF RECORD after review"):
+**(1) promote loop effects and gather a dataset -> (2) analyze it -> (3) derive the amortization rules from the
+shapes the data actually shows.** Only step 1 exists. Nothing about caching, tiering, hub suppression or
+on-by-default is encoded, deliberately: those are step 3's decisions, to be made on step 2's evidence.
+
+What shipped:
+* `FactIterationFanoutDeriver` — pure `FactInvocation` -> `DerivedEffect` pseudo-events (`iteration:fanout`),
+  `EnclosingSymbolId` = **the CALLEE** (so the existing reach step means "read reachable AT OR BENEATH the
+  per-iteration call" with zero reach changes), file/line = the call site, `Caller` carried beside it.
+  Emitted for keyed AND keyless sites — presence is the finding, so a null key token is data.
+* `CorrelationPolarity.Presence` + `CorrelationKeyMatch` + nullable witness/dispatch fields on
+  `CorrelationFinding` (Absence output byte-identical, FR-7 `cache_coherence` unmoved at 4).
+* `IterationContext` — the iteration-context union and the whole-word key test, extracted so the intra-method
+  detector and this one cannot drift.
+* Opt-in rules section `crossMethodNPlusOne` (absent = off, mirroring `cacheCoherence`) and a
+  `derive --format tsv` row type `n_plus_1_cross_method` at **(anchor x witness) grain** — the full cross
+  product, which is what a cross-tab needs and emphatically not a review surface. NOT a `HazardKinds` member:
+  admitting it would swamp the Hazards view and move `rig impact`'s hazard deltas.
+
+**NO `maxDepth` semantic gate and NO key gate** — only the resource bounds (`MaxDepth` 6 by rules default,
+`maxNodes` 20000). Depth, guards, dispatch basis/via/degree, the iterated source expression and the key token
+are all emitted as COLUMNS so step 2 can measure what each explains.
+
+The dataset and its descriptive breakdown live in `meddbase-analysis` (the grounded-roadmap side), per the
+existing split. Step 2 is the analysis; step 3 derives the rules.
