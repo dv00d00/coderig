@@ -46,6 +46,11 @@ internal static class FactObservationRuleProvider
         var nPlusOne = (doc.Observations?.NPlusOne ?? [])
             .Select(r => new FactNPlusOneRule(Providers: r.Providers ?? [], Operations: r.Operations ?? []))
             .ToArray();
+        // Amplification DISPLAY scope (looped_effect): projected exactly like nPlusOne — an absent section
+        // yields an empty list, which AmplificationScope reads as "no findings" (declared scope only).
+        var amplification = (doc.Observations?.Amplification ?? [])
+            .Select(r => new FactAmplificationRule(Providers: r.Providers ?? [], Operations: r.Operations ?? []))
+            .ToArray();
         var enumeratingMethods = (doc.Observations?.EnumeratingMethods ?? [])
             .Select(r => new FactEnumeratingMethodRule(Methods: r.Methods ?? [], DeclaringTypes: r.DeclaringTypes ?? []))
             .ToArray();
@@ -57,7 +62,8 @@ internal static class FactObservationRuleProvider
             resourceSpan,
             serializationHazard,
             nPlusOne,
-            enumeratingMethods
+            enumeratingMethods,
+            amplification
         );
     }
 }

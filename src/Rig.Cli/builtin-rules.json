@@ -1973,6 +1973,23 @@
         "operations": ["GET", "read", "row_read", "query", "fetch", "search", "index_read", "execute"]
       }
     ],
+    // amplification: the DISPLAY scope of looped_effect (the amplification finding tier). Staged deliberately —
+    // this default admits only NETWORK-CROSSING effects, where ×N in a loop means N round trips over a socket.
+    // Widening it is a one-line edit here or in a project overlay (the lists concatenate); nothing in C# names a
+    // provider. `operations` absent = every operation of that provider.
+    //
+    // CANDIDATES FOR EXPANSION, deliberately NOT in the default because their ×N is CPU/contention rather than
+    // round trips (and two of them are the highest-volume looped providers, so they would dominate the section):
+    //   shared_state, lock, entity_cache, io, permission, audit, parallel, and the intrinsics alloc/throw
+    //   (the intrinsics are additionally hidden by the existing --intrinsic mechanism, which still governs them).
+    "amplification": [
+      { "providers": ["http"] },
+      { "providers": ["llblgen"], "operations": ["read", "write", "delete", "bulk_write", "fetch"] },
+      { "providers": ["db_command", "db_connection", "db_reader", "efcore"] },
+      { "providers": ["object_store"], "operations": ["read", "write"] },
+      { "providers": ["queue"] },
+      { "providers": ["actor"], "operations": ["tell", "ask", "spawn"] }
+    ],
     "enumeratingMethods": [
       {
         "methods": [

@@ -74,6 +74,7 @@ internal static class TreeCommand
         var excludeNamespace = CommonOptions.ExcludeNamespace();
         var noCache = CommonOptions.NoCache();
         var noGate = CommonOptions.NoGate();
+        var noAmplification = CommonOptions.NoAmplification();
         var time = CommonOptions.Time();
         var format = CommonOptions.Format(
             description: "Output format: tsv — machine-readable DFS rows; llm — compact LLM TSV (6-col for --view paths/full; 7-col for --view effects, which adds a parent column); llm-ids — LLM TSV with explicit id/parent_id linkage (8-col, all views). In --view effects, parent_id is the nearest EFFECTFUL ancestor (not the direct caller) and depth is the original-tree depth. llm and llm-ids compose with --view paths/full/effects only. --guards appends a trailing `guards` column (the control-dependence condition gating each call) to all three formats.",
@@ -105,6 +106,7 @@ internal static class TreeCommand
             excludeNamespace,
             noCache,
             noGate,
+            noAmplification,
             time,
             format,
             store,
@@ -197,6 +199,7 @@ internal static class TreeCommand
                             ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
                             NoCache: pr.GetValue(noCache),
                             Gate: !pr.GetValue(noGate),
+                            Amplification: !pr.GetValue(noAmplification),
                             Time: pr.GetValue(time),
                             Format: pr.GetValue(format),
                             Suppress: pr.GetValue(suppress)
@@ -233,6 +236,9 @@ internal static class TreeCommand
         IReadOnlyList<string> ExcludeNamespaces,
         bool NoCache,
         bool Gate,
+        // Amplification finding tier (looped_effect) under --view hazards — ON by default; --no-amplification
+        // reproduces the pre-tier output exactly. See CommonOptions.NoAmplification.
+        bool Amplification,
         bool Time,
         string? Format,
         string? Suppress
@@ -404,6 +410,10 @@ internal static class TreeCommand
         // forest/effect/sidecar caches stay hazard-free (keyed without --hazards); this set lives in its own
         // store-keyed cache namespace, so a later plain `tree` is unaffected.
         IReadOnlyList<DeriveCommand.HazardFinding> hazardFindings = [];
+        // The AMPLIFICATION tier (looped_effect on an in-scope provider:operation), kept in its OWN list rather
+        // than folded into hazardFindings: it renders as its own section, its own tsv row type, and its own inline
+        // 🔁 mark, and the `hazard` surfaces must stay exactly the hazard set.
+        IReadOnlyList<DeriveCommand.HazardFinding> amplificationFindings = [];
         IReadOnlyDictionary<string, string>? hazardsByMethod = null;
         if (hazards)
         {
@@ -449,9 +459,24 @@ internal static class TreeCommand
                     .ToList();
             }
 
+            // Amplification findings over the SAME tree-filtered effects, gated by the rules-declared display
+            // scope and by --no-amplification. Derived from the effects (not the graph), so it costs nothing extra.
+            amplificationFindings = opts.Amplification
+                ? DeriveCommand.AmplificationFindings(effects, rules.Observations.AmplificationOrEmpty)
+                : [];
+            if (opts.ExcludeNamespaces.Count > 0)
+            {
+                amplificationFindings = amplificationFindings
+                    .Where(f => !CommonOptions.MatchesExcludedNamespace(f.Enclosing, opts.ExcludeNamespaces))
+                    .ToList();
+            }
+
+            // ONE mark string per method covering BOTH tiers — hazards behind ⚠, amplification behind 🔁, so a
+            // reader can tell a judgment from a structural fact at a glance without reading the type names.
             hazardsByMethod = hazardFindings
+                .Concat(amplificationFindings)
                 .GroupBy(f => f.Enclosing, StringComparer.Ordinal)
-                .ToDictionary(keySelector: g => g.Key, elementSelector: FormatHazardMark, comparer: StringComparer.Ordinal);
+                .ToDictionary(keySelector: g => g.Key, elementSelector: FormatFindingMark, comparer: StringComparer.Ordinal);
             timer.Lap("hazard lookup (cached whole-store, filtered to tree)");
         }
 
@@ -493,6 +518,12 @@ internal static class TreeCommand
             foreach (var h in hazardFindings)
             {
                 io.TextOutput.Output.WriteLine(DeriveCommand.HazardTsvRow(h));
+            }
+
+            // …then the `amplification` rows (own row type, same column contract + provider/operation).
+            foreach (var a in amplificationFindings)
+            {
+                io.TextOutput.Output.WriteLine(DeriveCommand.AmplificationTsvRow(a));
             }
 
             timer.Total();
@@ -676,6 +707,7 @@ internal static class TreeCommand
             }
 
             DeriveCommand.WriteHazards(io.TextOutput.Output, hazardFindings, AllHazardSites);
+            DeriveCommand.WriteAmplification(io.TextOutput.Output, amplificationFindings, AllHazardSites);
             timer.Total();
             return 0;
         }
@@ -699,6 +731,7 @@ internal static class TreeCommand
             }
 
             DeriveCommand.WriteHazards(io.TextOutput.Output, hazardFindings, AllHazardSites);
+            DeriveCommand.WriteAmplification(io.TextOutput.Output, amplificationFindings, AllHazardSites);
             timer.Total();
             return 0;
         }
@@ -801,6 +834,7 @@ internal static class TreeCommand
         // a no-op without --hazards (hazardFindings stays []). AllHazardSites = show every site (this is the
         // bounded one-EP drill-in, not the whole-store triage list `derive` caps).
         DeriveCommand.WriteHazards(io.TextOutput.Output, hazardFindings, AllHazardSites);
+        DeriveCommand.WriteAmplification(io.TextOutput.Output, amplificationFindings, AllHazardSites);
 
         timer.Lap("seam effects + render");
         timer.Total();
@@ -811,13 +845,31 @@ internal static class TreeCommand
     // triage list). WriteHazards samples `limit / 8 + 1` per type, so a large limit prints all of them.
     private const int AllHazardSites = int.MaxValue;
 
-    // The compact inline hazard marker for one method's findings (the --hazards node annotation): the distinct
-    // hazard types the method carries, each tagged with its WORST (highest) confidence, type-sorted, with a
-    // `×N` suffix when a type fires more than once on the method (e.g. two distinct race windows). Terse on
-    // purpose — the full per-finding evidence is in the Hazards section + the tsv `hazard` rows.
-    private static string FormatHazardMark(IEnumerable<DeriveCommand.HazardFinding> findings) =>
-        "  ⚠ "
-        + string.Join(
+    // The compact inline marker for one method's findings (the --hazards node annotation), TIERED so the two
+    // kinds are visually distinct: hazards behind ⚠ (a judgment to act on), amplification behind 🔁 (a structural
+    // fact — this effect repeats). Within each tier: distinct types, each tagged with its WORST (highest)
+    // confidence, type-sorted, with a `×N` suffix when a type fires more than once on the method (e.g. two
+    // distinct race windows, or three looped effects). A method carrying only amplification gets ONLY the 🔁
+    // segment — it must never render under a ⚠ that would read as "hazard". Terse on purpose: the full evidence
+    // is in the Hazards / Amplification sections + the tsv rows. Byte-identical to the pre-tier mark for a
+    // hazard-only method (the ⚠ segment is unchanged), so --no-amplification output is unaffected.
+    private static string FormatFindingMark(IEnumerable<DeriveCommand.HazardFinding> findings)
+    {
+        var all = findings.ToList();
+        var hazards = all.Where(f => HazardKinds.IsHazard(f.Type)).ToList();
+        var amplification = all.Where(f => HazardKinds.IsAmplification(f.Type)).ToList();
+        var mark = hazards.Count > 0 ? "  ⚠ " + TypeSummary(hazards) : "";
+        if (amplification.Count > 0)
+        {
+            mark += "  🔁 " + TypeSummary(amplification);
+        }
+
+        return mark;
+    }
+
+    // "type(worstConfidence)[×N], …" for one tier's findings on one method — the shared body of both mark segments.
+    private static string TypeSummary(IEnumerable<DeriveCommand.HazardFinding> findings) =>
+        string.Join(
             ", ",
             findings
                 .GroupBy(f => f.Type, StringComparer.Ordinal)

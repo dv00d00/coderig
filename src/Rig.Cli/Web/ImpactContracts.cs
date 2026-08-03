@@ -11,6 +11,13 @@ internal sealed record ImpactEffectDto(string Provider, string Operation, string
 
 internal sealed record ImpactHazardDto(string Type, string Cell, string Enclosing, string Confidence);
 
+// The AMPLIFICATION tier's per-EP delta entry (from Impact.EpAmplification): a provider:operation whose effect is
+// now reached INSIDE an iteration context (or no longer is), with the reachable site count. A SEPARATE dto and
+// separate lists rather than extra ImpactHazardDto entries: looped_effect is NOT a hazard (HazardKinds keeps the
+// tiers disjoint), it has no cell/confidence dimension worth showing, and the client must label and count the two
+// independently.
+internal sealed record ImpactAmplificationDto(string Provider, string Operation, int Sites);
+
 internal sealed record ImpactEpDeltaDto(
     string Kind,
     string Route,
@@ -23,7 +30,11 @@ internal sealed record ImpactEpDeltaDto(
     IReadOnlyList<ImpactEffectDto> Removed,
     IReadOnlyList<ImpactHazardDto> HazardsAdded,
     IReadOnlyList<ImpactHazardDto> HazardsRemoved,
-    bool SharedMutationOnPath
+    bool SharedMutationOnPath,
+    // Amplification delta — defaulted empty so an existing client (and any test constructing this dto) is
+    // unaffected; a client that knows about the tier renders them as a labelled "looped" group.
+    IReadOnlyList<ImpactAmplificationDto>? AmplificationsAdded = null,
+    IReadOnlyList<ImpactAmplificationDto>? AmplificationsRemoved = null
 );
 
 internal sealed record ImpactKindRouteDto(string Kind, string Route);

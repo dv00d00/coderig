@@ -893,6 +893,27 @@ public sealed record FactEnumeratingMethodRule(
     IReadOnlyList<string> DeclaringTypes // FQNs declaring them (e.g. "System.Linq.Enumerable"); empty = any
 );
 
+// The DISPLAY SCOPE of the amplification finding tier (looped_effect — see HazardKinds): which
+// provider:operation effects get their own Amplification section / inline 🔁 mark / impact delta row, instead
+// of staying an anonymous count in the generic observations block. Same authoring shape as FactNPlusOneRule
+// (an empty Providers OR Operations list = "any" for that dimension), matched the same way: ANY matching rule
+// admits the effect.
+//
+// This gates DISPLAY ONLY — the looped_effect OBSERVATION is still derived for EVERY looped effect regardless
+// (FactObservationDeriver is untouched), so the `effect` tsv row's observation list, n_plus_1, and the
+// cross-method dataset all still see the full set. Narrowing here narrows what a human is SHOWN, never what is
+// known.
+//
+// The scope is DATA (rules JSON, `observations.amplification`) rather than a C# list precisely because staging
+// it is expected: the shipped default is NETWORK-CROSSING providers only — the ones where ×N in a loop means N
+// round trips — and widening it must be a one-line rules edit (builtin-rules.json or a project overlay), not a
+// code change. An ABSENT section means an EMPTY scope (no amplification findings): the scope is declared, never
+// implied.
+public sealed record FactAmplificationRule(
+    IReadOnlyList<string> Providers, // effect providers in amplification scope (e.g. "http"); empty = any
+    IReadOnlyList<string> Operations // operations in scope (e.g. "read", "POST"); empty = any operation
+);
+
 public sealed record FactObservationRules(
     IReadOnlyList<FactResilienceRetryRule> ResilienceRetry,
     IReadOnlyList<FactConcurrencyHandledRule> ConcurrencyHandled,
@@ -900,8 +921,14 @@ public sealed record FactObservationRules(
     IReadOnlyList<FactResourceSpanRule> ResourceSpan,
     IReadOnlyList<FactSerializationHazardRule> SerializationHazard,
     IReadOnlyList<FactNPlusOneRule> NPlusOne,
-    IReadOnlyList<FactEnumeratingMethodRule> EnumeratingMethods
-);
+    IReadOnlyList<FactEnumeratingMethodRule> EnumeratingMethods,
+    // Defaulted so the ONE construction site is the only place that must supply it, and a hand-built rule set
+    // in a test projects to an EMPTY (= no findings) amplification scope rather than failing to compile.
+    IReadOnlyList<FactAmplificationRule>? Amplification = null
+)
+{
+    public IReadOnlyList<FactAmplificationRule> AmplificationOrEmpty => Amplification ?? [];
+}
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).
 // Covers the two type-entry-point cases: constructor-per-overload (page kind) and

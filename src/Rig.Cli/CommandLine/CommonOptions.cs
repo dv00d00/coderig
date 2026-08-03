@@ -125,6 +125,19 @@ internal static class CommonOptions
                 "Disable the shared_state:read write-pairing gate — emit every static-field read, including never-written const/enum cells (default: gate on).",
         };
 
+    // --no-amplification: disable the AMPLIFICATION finding tier (looped_effect — see HazardKinds). By default
+    // a looped effect gets its own displayed section (derive) / inline 🔁 mark (tree --view hazards), broken
+    // down by provider:operation; --no-amplification collapses it back to an anonymous count line in the
+    // generic "Observations on effects" block, i.e. reproduces the pre-2026-08 output exactly. Mirrors --no-gate
+    // (an inverted default-on flag) rather than an --amplification opt-in: a looped effect is a structural FACT,
+    // and facts ship as on-by-default inventory (only JUDGMENTS like n_plus_1 need FP calibration first).
+    internal static Option<bool> NoAmplification() =>
+        new("--no-amplification")
+        {
+            Description =
+                "Disable the amplification finding tier (looped_effect) — collapse it back into the generic observation counts instead of its own provider:operation section (default: amplification on).",
+        };
+
     internal static Option<bool> Time() => new("--time") { Description = "Print per-phase timings to stderr." };
 
     internal static Option<bool> Files() => new("--files") { Description = "Append each node's source location." };

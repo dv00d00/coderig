@@ -26,13 +26,28 @@ internal static class QueryCacheKeys
     // loaded rule FILES — does not see, so without this bump a warm cache would keep serving the old 175).
     internal const int HazardEffectsSchema = 4;
     internal const int GraphHazSchema = 1;
-    internal const int ImpactSchema = 4; // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition deltas added to the payload
+
+    // The FINDING-VIEW payload/logic version: how the hazard-augmented effect set is CLASSIFIED and PROJECTED
+    // into displayed findings (the /api/hazards mark stream, the derive Hazards/Amplification split), as opposed
+    // to how the effects themselves are derived (HazardEffectsSchema). v1 = the amplification tier (looped_effect
+    // promoted to its own displayed finding, 2026-08): the same store + rules now yield MORE marks, so a warm
+    // client IndexedDB entry would keep serving the pre-tier mark list forever. No SERVER key uses this constant
+    // — the /api/hazards marks are recomputed per call off the (separately keyed) effect cache — it exists to move
+    // DerivationSchemaToken, which is the client's only invalidation signal.
+    internal const int FindingViewSchema = 1;
+
+    // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
+    // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)
+    // added to the payload — a warm v4 blob decodes with empty amplification lists and would silently render a
+    // newly-looped effect as "no change".
+    internal const int ImpactSchema = 5;
 
     // The composite token the CLIENT keys its cache by (hashed with the rules fingerprint in /api/meta). It
     // folds in EVERY per-artifact schema version, so bumping ANY one above also moves the client's derivation
     // version — the client can never keep serving an artifact whose server-side schema advanced. This is the
     // desync guard that a single hand-bumped client constant would lack, and it needs no MVID.
-    internal static string DerivationSchemaToken() => $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}";
+    internal static string DerivationSchemaToken() =>
+        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}";
 
     // Identity of the current store for cache keying + invalidation: rig.db size + last-write time.
     // `rig index` publishes a fresh db (atomic rename → new mtime/size) and `rig graph` rewrites the

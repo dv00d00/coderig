@@ -164,15 +164,27 @@ function Trunc(node) {
     );
   return h("span", { class: "trunc" }, "⋯elided");
 }
-// hazard mark for a method: types sorted, each "type(worstConfidence)×N".
+// Finding mark for a method: types sorted, each "type(worstConfidence)×N". TIERED, mirroring the CLI's
+// `tree --view hazards` mark — HAZARDS (a judgment: race_window / n_plus_1 / …) behind ⚠, AMPLIFICATION (a
+// structural fact: the effect is inside a loop) behind 🔁. /api/hazards returns both in one HazardMark stream;
+// the tier is read off the type name rather than a hard-coded hazard list, so a new hazard kind needs no client
+// change and only the amplification types (see HazardKinds.Amplification) are listed here.
 const CONF_RANK = { high: 0, medium: 1, low: 2 };
+const AMPLIFICATION_TYPES = new Set(["looped_effect"]);
 function HazardMark(marks) {
   if (!marks || !marks.length) return null;
-  const label = [...marks]
-    .sort((a, b) => a.type.localeCompare(b.type))
-    .map((m) => `${m.type}(${m.confidence})${m.sites > 1 ? "×" + m.sites : ""}`)
-    .join(", ");
-  return h("span", { class: "haz", title: label }, "⚠ " + label);
+  const fmt = (ms) =>
+    [...ms]
+      .sort((a, b) => a.type.localeCompare(b.type))
+      .map((m) => `${m.type}(${m.confidence})${m.sites > 1 ? "×" + m.sites : ""}`)
+      .join(", ");
+  const haz = marks.filter((m) => !AMPLIFICATION_TYPES.has(m.type));
+  const amp = marks.filter((m) => AMPLIFICATION_TYPES.has(m.type));
+  const parts = [];
+  if (haz.length) parts.push("⚠ " + fmt(haz));
+  if (amp.length) parts.push("🔁 Amplification: " + fmt(amp));
+  const label = parts.join("  ");
+  return h("span", { class: "haz", title: label }, label);
 }
 
 // Merge effect occurrences into an aggregate map: "provider:op" -> {provider, operation, glyph, sites}.

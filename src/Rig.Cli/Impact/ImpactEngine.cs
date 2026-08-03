@@ -32,7 +32,8 @@ internal static class ImpactEngine
         IReadOnlyList<string> extraRules,
         bool gate,
         bool noCache,
-        FactPathFinder.TraversalMode mode
+        FactPathFinder.TraversalMode mode,
+        bool amplification = true
     )
     {
         var rules = RuleSetLoader.Load(workingDirectory: ws.WorkingDirectory, extraRules: extraRules, loadedPaths: out var loadedRulePaths);
@@ -49,6 +50,11 @@ internal static class ImpactEngine
         // recompute on upgrade; correctness over a warm-cache hit).
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // F6: reuse paths Load resolved.
         var keyRulesHash = gate ? $"{rulesHash}|gate" : $"{rulesHash}|nogate";
+        // Same reasoning for the amplification tier: it changes the PAYLOAD (extra per-EP rows), so a suppressed
+        // and an amplified diff must not share a slot. Only the OFF state is tokenized, so the default (on) key is
+        // byte-identical to the pre-tier key shape — one less forced recompute on upgrade. (The tier's rules scope
+        // itself already rides in rulesHash: `observations.amplification` lives in builtin-rules.json.)
+        keyRulesHash = amplification ? keyRulesHash : $"{keyRulesHash}|noamp";
         var cacheKey = cache is null
             ? null
             : ImpactCacheKey(baseStoreKey: baseStoreKey, headStoreKey: headStoreKey, rulesHash: keyRulesHash, mode: mode);
@@ -72,10 +78,23 @@ internal static class ImpactEngine
         // Optional coarse progress callback (phase name, ms since previous phase) — awaited between the
         // top-level phases so a caller (the SSE endpoint) can stream live progress on a cold diff. Null (the
         // CLI) makes this a no-op; the diff RESULT is unchanged either way.
-        Func<string, long, Task>? onPhase = null
+        Func<string, long, Task>? onPhase = null,
+        // --no-amplification: drop the amplification tier from the per-EP delta (no ep_amplification_* rows).
+        // Folded into the CACHE KEY — an amplified and a suppressed diff are DIFFERENT artifacts, and sharing one
+        // slot would let a --no-amplification run poison the default view (the mistake --no-gate already avoids).
+        bool amplification = true
     )
     {
-        var (rules, baseDbPath, cacheRaw, cacheKey) = ResolveStoresAndCache(ws, baseRef, headRef, extraRules, gate, noCache, mode);
+        var (rules, baseDbPath, cacheRaw, cacheKey) = ResolveStoresAndCache(
+            ws,
+            baseRef,
+            headRef,
+            extraRules,
+            gate,
+            noCache,
+            mode,
+            amplification
+        );
         using var cache = cacheRaw;
 
         // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → return WITHOUT loading the
@@ -106,7 +125,7 @@ internal static class ImpactEngine
         await Tick("provenance");
         var headData = await LoadHeadSideDataAsync(headContext, rules, gate: gate);
         await Tick("head: load graph + derive effects");
-        var branchSide = ComputeBranchSide(mode: mode, headData: headData);
+        var branchSide = ComputeBranchSide(mode: mode, headData: headData, rules: rules, amplification: amplification);
         await Tick("head: reach sets + footprints + hazards");
         var impactDiff = await AssembleImpactDiffAsync(
             baseDbPath: baseDbPath,
@@ -114,7 +133,8 @@ internal static class ImpactEngine
             mode: mode,
             headData: headData,
             branchSide: branchSide,
-            gate: gate
+            gate: gate,
+            amplification: amplification
         );
         await Tick("base: load + derive + diff");
         var fqnSites = branchSide.IdBySite;
@@ -207,10 +227,18 @@ internal static class ImpactEngine
         Dictionary<(string Kind, string Route), EntryPointRef> EpByKey,
         Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Footprints,
         Dictionary<(string Kind, string Route), HashSet<HazardFinding>> Hazards,
+        Dictionary<(string Kind, string Route), HashSet<EpAmplification>> Amplifications,
         Dictionary<(string, int), string> IdBySite
     );
 
-    private static BranchSideData ComputeBranchSide(FactPathFinder.TraversalMode mode, HeadSideData headData)
+    // `rules` is threaded in for the amplification DISPLAY SCOPE (rules.Observations.Amplification — data, not a
+    // C# list); `amplification` is the --no-amplification opt-out. Both only affect the amplification tier.
+    private static BranchSideData ComputeBranchSide(
+        FactPathFinder.TraversalMode mode,
+        HeadSideData headData,
+        RuleSet rules,
+        bool amplification
+    )
     {
         // The branch entry-point set. The two-store EP DIFF is computed on the base side (ComputeBaseSideAsync),
         // which already derives the base EP set — doing it here meant a second full base-store open + EP load.
@@ -238,9 +266,17 @@ internal static class ImpactEngine
                 )
             );
         var branchFootprints = ComputeFootprints(headSession, branchEps, headData.IdBySite, EffectKeysByEnclosing(headData.Effects), mode);
-        // The branch's per-EP reachable-hazard set (hazard mirror of the footprint), diffed against the base's
-        // in DiffFootprints so each per-EP delta carries the hazards gained/lost.
-        var branchHazards = ComputeHazardSets(headSession, branchEps, headData.IdBySite, HazardsByEnclosing(headData.Effects), mode);
+        // The branch's per-EP reachable-hazard + reachable-amplification sets (the finding mirror of the
+        // footprint), diffed against the base's in DiffFootprints so each per-EP delta carries what was
+        // gained/lost. ONE walk for both tiers.
+        var (branchHazards, branchAmplifications) = ComputeFindingSets(
+            headSession,
+            branchEps,
+            headData.IdBySite,
+            HazardsByEnclosing(headData.Effects),
+            amplification ? AmplificationsByEnclosing(headData.Effects, rules.Observations.AmplificationOrEmpty) : [],
+            mode
+        );
         return new BranchSideData(
             BranchEps: branchEps,
             Session: headSession,
@@ -248,6 +284,7 @@ internal static class ImpactEngine
             EpByKey: epByKey,
             Footprints: branchFootprints,
             Hazards: branchHazards,
+            Amplifications: branchAmplifications,
             IdBySite: headData.IdBySite
         );
     }
@@ -261,7 +298,8 @@ internal static class ImpactEngine
         FactPathFinder.TraversalMode mode,
         HeadSideData headData,
         BranchSideData branchSide,
-        bool gate = true
+        bool gate = true,
+        bool amplification = true
     )
     {
         var headGuarded = GuardConditionDiff.GuardedEdges(headData.Graph);
@@ -271,7 +309,8 @@ internal static class ImpactEngine
             mode: mode,
             branchEps: branchSide.BranchEps,
             headGuardedKeys: headGuarded.Keys,
-            gate: gate
+            gate: gate,
+            amplification: amplification
         );
 
         // The symbols whose declaration BODY changed base↔branch (differing/one-sided hash). An EP whose reach
@@ -290,7 +329,9 @@ internal static class ImpactEngine
             baseStore: baseSide.Footprints,
             epByKey: branchSide.EpByKey,
             branchHazards: branchSide.Hazards,
-            baseHazards: baseSide.Hazards
+            baseHazards: baseSide.Hazards,
+            branchAmplifications: branchSide.Amplifications,
+            baseAmplifications: baseSide.Amplifications
         );
         var guardConditions = ComputeGuardConditionDeltas(
             headData: headData,
@@ -703,6 +744,10 @@ internal static class ImpactEngine
     // type — the same field the cli renders); Confidence rides along (not part of the diff identity, see the
     // record). An effect with no hazard observation contributes nothing. Distinct so two effects in one method
     // bearing the same finding count once.
+    // NOTE ON THE TIER SPLIT: this stays on IsHazard, NOT IsFinding. The amplification tier is diffed separately
+    // (AmplificationsByEnclosing below) into its OWN terse per-EP rows, because (a) the `hazard` delta rows and
+    // the --expect-no-hazard-* gates are keyed to exactly the hazard set, and (b) a HazardFinding has no
+    // provider/operation columns, which is the only thing an amplification row is worth reporting at.
     private static Dictionary<string, List<HazardFinding>> HazardsByEnclosing(IReadOnlyList<DerivedEffect> effects) =>
         effects
             .Where(e => e.EnclosingSymbolId is not null && e.Observations is not null)
@@ -723,15 +768,43 @@ internal static class ImpactEngine
             .GroupBy(x => x.Enclosing, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Finding).Distinct().ToList(), StringComparer.Ordinal);
 
-    // The reachable-HAZARD set of each entry point, keyed on (Kind, Route), over an ALREADY-LOADED graph +
-    // hazards-by-enclosing — the hazard mirror of ComputeFootprints. Forward-reaches every EP and unions the
-    // hazard findings of each reachable enclosing node. Same seed/depth/mode contract as ComputeFootprints so
-    // the two are computed over the identical reach. An EP whose reach bears no hazard maps to an empty set.
-    private static Dictionary<(string Kind, string Route), HashSet<HazardFinding>> ComputeHazardSets(
+    // enclosing-method-id -> the distinct AMPLIFICATION (provider, operation) pairs declared there: an effect
+    // carrying a looped_effect observation whose provider:operation is in the rules-declared display scope. The
+    // amplification mirror of HazardsByEnclosing, at the TERSE grain — the pair, not the site: one loop wrapped
+    // around three calls to the same provider:operation is ONE thing a reviewer needs told. Empty dictionary when
+    // the tier is off (--no-amplification) or the rule scope is empty, which makes the whole delta a no-op.
+    private static Dictionary<string, List<(string Provider, string Operation)>> AmplificationsByEnclosing(
+        IReadOnlyList<DerivedEffect> effects,
+        IReadOnlyList<FactAmplificationRule> scope
+    ) =>
+        effects
+            .Where(e =>
+                e.EnclosingSymbolId is not null
+                && e.Observations is not null
+                && e.Observations.Any(o => HazardKinds.IsAmplification(o.Type))
+                && AmplificationScope.Includes(scope, e.Provider, e.Operation)
+            )
+            .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Select(e => (e.Provider, e.Operation)).Distinct().ToList(), StringComparer.Ordinal);
+
+    // The reachable-HAZARD and reachable-AMPLIFICATION sets of each entry point, keyed on (Kind, Route), over an
+    // ALREADY-LOADED graph — the finding mirror of ComputeFootprints. Forward-reaches every EP and unions the
+    // findings of each reachable enclosing node. Same seed/depth/mode contract as ComputeFootprints so all of them
+    // are computed over the identical reach. An EP whose reach bears no finding maps to an empty set.
+    //
+    // BOTH tiers come out of ONE walk on purpose: the reach walk is the expensive part of an impact run (minutes
+    // over two stores), so the amplification tier must ride the hazard traversal rather than add a second one.
+    // Amplification is accumulated as a per-(provider, operation) SITE COUNT over the reachable producing nodes,
+    // then materialized into EpAmplification (whose identity is the pair alone — the count rides along).
+    private static (
+        Dictionary<(string Kind, string Route), HashSet<HazardFinding>> Hazards,
+        Dictionary<(string Kind, string Route), HashSet<EpAmplification>> Amplifications
+    ) ComputeFindingSets(
         FactPathFinder.TraversalSession session,
         IReadOnlyList<DerivedEntryPoint> eps,
         Dictionary<(string, int), string> idBySite,
         Dictionary<string, List<HazardFinding>> hazardsByEnclosing,
+        Dictionary<string, List<(string Provider, string Operation)>> amplificationsByEnclosing,
         FactPathFinder.TraversalMode mode
     )
     {
@@ -740,6 +813,7 @@ internal static class ImpactEngine
         var reached = session.ReachesFromEachSeed(seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
 
         var sets = new Dictionary<(string, string), HashSet<HazardFinding>>();
+        var ampCounts = new Dictionary<(string, string), Dictionary<(string Provider, string Operation), int>>();
         for (var i = 0; i < distinct.Count; i++)
         {
             var key = (distinct[i].Kind, distinct[i].Route);
@@ -748,16 +822,33 @@ internal static class ImpactEngine
                 sets[key] = set = new HashSet<HazardFinding>();
             }
 
+            if (!ampCounts.TryGetValue(key, out var counts))
+            {
+                ampCounts[key] = counts = new Dictionary<(string, string), int>();
+            }
+
             foreach (var node in reached[i])
             {
                 if (hazardsByEnclosing.TryGetValue(node, out var findings))
                 {
                     set.UnionWith(findings);
                 }
+
+                if (amplificationsByEnclosing.TryGetValue(node, out var pairs))
+                {
+                    foreach (var pair in pairs)
+                    {
+                        counts[pair] = counts.GetValueOrDefault(pair) + 1;
+                    }
+                }
             }
         }
 
-        return sets;
+        var amplifications = ampCounts.ToDictionary(
+            kv => kv.Key,
+            kv => kv.Value.Select(p => new EpAmplification(p.Key.Provider, p.Key.Operation, p.Value)).ToHashSet()
+        );
+        return (sets, amplifications);
     }
 
     // (FilePath, Line) -> the method declared there, so an EP (which carries a declaration site, not an id)
@@ -1030,6 +1121,7 @@ internal static class ImpactEngine
         Dictionary<(string Kind, string Route), HashSet<string>> ReachSets,
         Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Footprints,
         Dictionary<(string Kind, string Route), HashSet<HazardFinding>> Hazards,
+        Dictionary<(string Kind, string Route), HashSet<EpAmplification>> Amplifications,
         IReadOnlyDictionary<string, string> BodyHashes,
         Dictionary<(string Caller, string Callee), SortedSet<string>> Guarded,
         HashSet<(string Caller, string Callee)> PairsPresent,
@@ -1046,7 +1138,10 @@ internal static class ImpactEngine
         // method. Union with the base's own guarded keys here so one pass over the base edges answers
         // presence for the whole candidate set; the HEAD half is answered by the caller, which holds that graph.
         IReadOnlyCollection<(string Caller, string Callee)> headGuardedKeys,
-        bool gate = true
+        bool gate = true,
+        // --no-amplification: skip the base-side amplification set too, so the diff sees empty on BOTH sides and
+        // emits no amplification rows (rather than reading every pair as "removed").
+        bool amplification = true
     )
     {
         await using var context = new RigDbContext(baseDbPath, readOnly: true);
@@ -1095,7 +1190,14 @@ internal static class ImpactEngine
         var baseSession = FactPathFinder.OpenSession(graph);
         var reachSets = ComputeReachSets(baseSession, baseEps, idBySite, mode, refsByEnclosing: baseRefTargets);
         var footprints = ComputeFootprints(baseSession, baseEps, idBySite, EffectKeysByEnclosing(effects), mode);
-        var hazards = ComputeHazardSets(baseSession, baseEps, idBySite, HazardsByEnclosing(effects), mode);
+        var (hazards, amplifications) = ComputeFindingSets(
+            baseSession,
+            baseEps,
+            idBySite,
+            HazardsByEnclosing(effects),
+            amplification ? AmplificationsByEnclosing(effects, rules.Observations.AmplificationOrEmpty) : [],
+            mode
+        );
 
         // Phase 2: the base body-hash map (guarded — empty on a pre-fact store), so RunAsync can diff it
         // against the branch's WITHOUT a second base load.
@@ -1107,7 +1209,7 @@ internal static class ImpactEngine
         candidates.UnionWith(baseGuarded.Keys);
         var basePairs = GuardConditionDiff.PairsPresent(graph, candidates);
 
-        return (reachSets, footprints, hazards, bodyHashes, baseGuarded, basePairs, DiffEntryPointSets(branchEps, baseEps));
+        return (reachSets, footprints, hazards, amplifications, bodyHashes, baseGuarded, basePairs, DiffEntryPointSets(branchEps, baseEps));
     }
 
     // Diff two stores' per-EP footprints: for every EP present in BOTH (paired on Kind+Route), the effects its
@@ -1127,7 +1229,12 @@ internal static class ImpactEngine
         // here (shouldn't happen — branch footprints are keyed off the same EPs) falls back to empty site.
         IReadOnlyDictionary<(string Kind, string Route), EntryPointRef> epByKey,
         Dictionary<(string Kind, string Route), HashSet<HazardFinding>>? branchHazards = null,
-        Dictionary<(string Kind, string Route), HashSet<HazardFinding>>? baseHazards = null
+        Dictionary<(string Kind, string Route), HashSet<HazardFinding>>? baseHazards = null,
+        // Amplification delta (additive, same optional-map contract as the hazard maps): the per-EP
+        // provider:operation sets that are reached inside an iteration context. Null on the effect-only callers
+        // and under --no-amplification ⇒ no amplification rows.
+        Dictionary<(string Kind, string Route), HashSet<EpAmplification>>? branchAmplifications = null,
+        Dictionary<(string Kind, string Route), HashSet<EpAmplification>>? baseAmplifications = null
     )
     {
         var deltas = new List<EpFootprintDelta>();
@@ -1176,9 +1283,23 @@ internal static class ImpactEngine
             // when the EP's hazard set is unchanged.
             var (hazardsAdded, hazardsRemoved) = DiffHazards(key, branchHazards, baseHazards);
 
-            // An EP is listed when its effect footprint changed (set membership or amplification) OR a hazard
-            // was gained/lost — so a PURE hazard gain (no effect-set change) still surfaces in PerEp.
-            if (added.Count > 0 || removed.Count > 0 || amplified.Count > 0 || hazardsAdded.Count > 0 || hazardsRemoved.Count > 0)
+            // Amplification delta: the set-diff of this EP's reachable provider:operation amplification pairs.
+            // Identity is the PAIR (EpAmplification.Equals ignores Sites), so "this EP's http:POST is now looped"
+            // surfaces and "its site count went 3→4" deliberately does not.
+            var (amplificationsAdded, amplificationsRemoved) = DiffAmplifications(key, branchAmplifications, baseAmplifications);
+
+            // An EP is listed when its effect footprint changed (set membership or amplification) OR a hazard or
+            // amplification finding was gained/lost — so a PURE finding gain (no effect-set change, which is
+            // exactly what wrapping a loop around an existing call looks like) still surfaces in PerEp.
+            if (
+                added.Count > 0
+                || removed.Count > 0
+                || amplified.Count > 0
+                || hazardsAdded.Count > 0
+                || hazardsRemoved.Count > 0
+                || amplificationsAdded.Count > 0
+                || amplificationsRemoved.Count > 0
+            )
             {
                 var site = epByKey.GetValueOrDefault(key);
                 // FR-1e: does the branch path still mutate shared state? (provider == shared_state — an
@@ -1203,7 +1324,9 @@ internal static class ImpactEngine
                             .ToList(),
                         SharedMutationOnPath: sharedMutationOnPath,
                         HazardsAdded: hazardsAdded,
-                        HazardsRemoved: hazardsRemoved
+                        HazardsRemoved: hazardsRemoved,
+                        AmplificationsAdded: amplificationsAdded,
+                        AmplificationsRemoved: amplificationsRemoved
                     )
                 );
             }
@@ -1211,7 +1334,13 @@ internal static class ImpactEngine
 
         return deltas
             .OrderByDescending(d =>
-                d.Added.Count + d.Removed.Count + d.Amplified.Count + d.HazardsAddedOrEmpty.Count + d.HazardsRemovedOrEmpty.Count
+                d.Added.Count
+                + d.Removed.Count
+                + d.Amplified.Count
+                + d.HazardsAddedOrEmpty.Count
+                + d.HazardsRemovedOrEmpty.Count
+                + d.AmplificationsAddedOrEmpty.Count
+                + d.AmplificationsRemovedOrEmpty.Count
             )
             .ThenBy(d => d.Route, StringComparer.Ordinal)
             .ToList();
@@ -1249,6 +1378,34 @@ internal static class ImpactEngine
         var added = Order(branchSet.Where(h => !baseSet.Contains(h)));
         var removed = Order(baseSet.Where(h => !branchSet.Contains(h)));
         return (added, removed);
+    }
+
+    // The per-EP AMPLIFICATION set-diff, mirroring DiffHazards: head-only pairs = added, base-only = removed,
+    // stably ordered by provider then operation. Empty when no maps were supplied (--no-amplification / the
+    // effect-only callers) or the EP is unchanged. Site counts come from the side the row is reported on (the head
+    // count for an added pair, the base count for a removed one) — Sites is outside the diff identity.
+    private static (IReadOnlyList<EpAmplification> Added, IReadOnlyList<EpAmplification> Removed) DiffAmplifications(
+        (string Kind, string Route) key,
+        Dictionary<(string Kind, string Route), HashSet<EpAmplification>>? branchAmplifications,
+        Dictionary<(string Kind, string Route), HashSet<EpAmplification>>? baseAmplifications
+    )
+    {
+        if (branchAmplifications is null || baseAmplifications is null)
+        {
+            return ([], []);
+        }
+
+        var branchSet = branchAmplifications.GetValueOrDefault(key) ?? [];
+        var baseSet = baseAmplifications.GetValueOrDefault(key) ?? [];
+        if (branchSet.Count == 0 && baseSet.Count == 0)
+        {
+            return ([], []);
+        }
+
+        static List<EpAmplification> Order(IEnumerable<EpAmplification> xs) =>
+            xs.OrderBy(a => a.Provider, StringComparer.Ordinal).ThenBy(a => a.Operation, StringComparer.Ordinal).ToList();
+
+        return (Order(branchSet.Where(a => !baseSet.Contains(a))), Order(baseSet.Where(a => !branchSet.Contains(a))));
     }
 
     // Partition an EP's added/removed reachable DocIDs by param-free stem (StripParams). A stem present on

@@ -32,6 +32,7 @@ internal static class DeriveCommand
         var format = CommonOptions.Format();
         var store = CommonOptions.Store();
         var noGate = CommonOptions.NoGate();
+        var noAmplification = CommonOptions.NoAmplification();
         var listProviders = new Option<bool>("--list-providers")
         {
             Description = "Print the known effect providers and provider:operation pairs from the effective rule set, then exit.",
@@ -47,6 +48,7 @@ internal static class DeriveCommand
             format,
             store,
             noGate,
+            noAmplification,
             listProviders,
         };
         cmd.SetAction(pr =>
@@ -64,6 +66,7 @@ internal static class DeriveCommand
                             ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
                             Format: pr.GetValue(format),
                             Gate: !pr.GetValue(noGate),
+                            Amplification: !pr.GetValue(noAmplification),
                             ListProviders: pr.GetValue(listProviders)
                         ),
                         new CommandIo(
@@ -85,6 +88,10 @@ internal static class DeriveCommand
         IReadOnlyList<string> ExcludeNamespaces,
         string? Format,
         bool Gate = true,
+        // Amplification finding tier (looped_effect) — ON by default, `--no-amplification` flips it off and
+        // reproduces the pre-tier output exactly (the type falls back to an anonymous count in the generic
+        // Observations block). See CommonOptions.NoAmplification / HazardKinds for the fact-vs-judgment rationale.
+        bool Amplification = true,
         bool ListProviders = false
     );
 
@@ -217,6 +224,20 @@ internal static class DeriveCommand
             allHazards.RemoveAll(h => CommonOptions.MatchesExcludedNamespace(h.Enclosing, opts.ExcludeNamespaces));
         }
 
+        // --- AMPLIFICATION (looped_effect): the second finding tier — a structural FACT (this effect is inside
+        //     an iteration context), rendered in its own section broken down by provider:operation. Scoped by the
+        //     rules-declared network-crossing provider set (AmplificationScope) and suppressed wholesale by
+        //     --no-amplification, in which case the type falls back into the generic Observations block below and
+        //     the output is byte-identical to the pre-tier behaviour. Built from the SAME filtered effect list the
+        //     Observations block reads, so --only/--exclude/--intrinsic apply consistently. ---
+        var amplificationFindings = opts.Amplification ? AmplificationFindings(effects, rules.Observations.AmplificationOrEmpty) : [];
+        if (opts.ExcludeNamespaces.Count > 0)
+        {
+            amplificationFindings = amplificationFindings
+                .Where(f => !CommonOptions.MatchesExcludedNamespace(f.Enclosing, opts.ExcludeNamespaces))
+                .ToList();
+        }
+
         // --- n_plus_1_cross_method: the PRESENCE correlation over iteration-fanout pseudo-events (a read
         //     reachable at or beneath a call issued once per element). Opt-in — only when the
         //     `crossMethodNPlusOne` rule section is present, mirroring cacheCoherence. Emitted as its OWN tsv
@@ -241,6 +262,7 @@ internal static class DeriveCommand
             //   effect      \t provider \t operation \t resource \t enclosing \t file \t line \t observations(csv of Type)
             //               \t mechanism \t cardinality \t shallowSizeBytes \t sizeConfidence \t sizeBasis
             //   hazard      \t type \t confidence \t reason \t cell/context \t enclosing \t file \t line \t detail
+            //   amplification \t type \t confidence \t reason \t iterationContext \t enclosing \t file \t line \t detail \t provider \t operation
             //   entrypoint  \t kind \t method \t route \t file \t line \t services(csv) \t activeServices(csv) \t fqn
             // The `effect` row's observations column keeps the comma-joined Type list (back-compat: existing
             // consumers); the `hazard` row carries the full per-hazard evidence (confidence / reason / detail)
@@ -256,6 +278,15 @@ internal static class DeriveCommand
             foreach (var h in allHazards)
             {
                 io.TextOutput.Output.WriteLine(HazardTsvRow(h));
+            }
+
+            // The AMPLIFICATION rows (own row type, never `hazard` — downstream consumers and the skill doc
+            // treat `hazard` as exactly the hazard set, and an amplification row additionally carries the
+            // effect's provider/operation, which a hazard row has no column for). Empty under
+            // --no-amplification, so a consumer's `hazard`-filtered pipeline is bit-for-bit unaffected either way.
+            foreach (var a in amplificationFindings)
+            {
+                io.TextOutput.Output.WriteLine(AmplificationTsvRow(a));
             }
 
             // See CrossMethodNPlusOneDataset for the column reference. Empty unless the rule section is present.
@@ -297,6 +328,11 @@ internal static class DeriveCommand
         //     block into their own section with per-type, per-confidence counts + sampled sites. ---
         WriteHazards(io.TextOutput.Output, allHazards, opts.Limit);
 
+        // --- Amplification: the FACT tier, rendered AFTER Hazards (judgments first — a hazard is what a reviewer
+        //     must decide about; amplification is inventory to scan). Empty-safe: a no-op under
+        //     --no-amplification or when nothing in scope is looped. ---
+        WriteAmplification(io.TextOutput.Output, amplificationFindings, opts.Limit);
+
         // The cross-method dataset is a machine artifact (see CrossMethodNPlusOneDataset): the human view gets
         // its size and the flag that emits it, never the rows — 74k pairs is not a review surface.
         if (crossMethodRows.Count > 0)
@@ -307,23 +343,25 @@ internal static class DeriveCommand
             );
         }
 
-        // --- STRUCTURAL observations attached to effects (looped_effect / parallel_fanout /
-        //     lock_held_across_effect / transaction_spans_effect, P2b) — context facts, NOT hazards. The
-        //     hazard kinds are EXCLUDED here so they're never double-counted (they're in the Hazards section).
-        var observationGroups = effects
-            .SelectMany(e => e.Observations ?? [])
-            .Where(o => !HazardKinds.IsHazard(o.Type))
-            .GroupBy(o => o.Type, StringComparer.Ordinal)
-            .OrderByDescending(g => g.Count())
-            .ToList();
+        // --- STRUCTURAL observations attached to effects (parallel_fanout / lock_held_across_effect /
+        //     transaction_spans_effect, P2b) — context facts with no section of their own, reported as bare
+        //     counts. Anything DISPLAYED as a finding is excluded here so nothing is double-counted: the hazard
+        //     kinds (Hazards section) always, and an in-scope looped_effect (Amplification section) when the tier
+        //     is on. An OUT-of-scope looped_effect still lands here — that is what keeps the narrowed default
+        //     lossless rather than hiding effects. ---
+        var observationGroups = GenericObservationGroups(
+            effects,
+            amplificationScope: rules.Observations.AmplificationOrEmpty,
+            amplification: opts.Amplification
+        );
 
         if (observationGroups.Count > 0)
         {
             io.TextOutput.Output.WriteLine();
-            io.TextOutput.Output.WriteLine($"Observations on effects: {observationGroups.Sum(g => g.Count())}");
+            io.TextOutput.Output.WriteLine($"Observations on effects: {observationGroups.Sum(g => g.Count)}");
             foreach (var group in observationGroups)
             {
-                io.TextOutput.Output.WriteLine($"{Indent.L1}{group.Key}: {group.Count()}");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}{group.Type}: {group.Count}");
             }
         }
 
@@ -403,8 +441,20 @@ internal static class DeriveCommand
         string Detail,
         string Enclosing,
         string FilePath,
-        int Line
-    );
+        int Line,
+        // The producing effect's provider / operation. Carried ONLY for the AMPLIFICATION tier, whose whole
+        // point is provider-agnostic visibility: a flat "looped_effect: 1531" is useless, so the section and the
+        // tsv row group by `provider:operation`. Defaulted empty and ABSENT from HazardTsvRow, so every hazard
+        // construction site and every `hazard` row stays byte-identical (a hazard's identity is its Type + cell,
+        // not the provider — see the record's use in the Hazards view).
+        string Provider = "",
+        string Operation = ""
+    )
+    {
+        // The amplification grouping key: "provider:operation", or just the provider when the operation is
+        // absent (defensive — every derived effect carries both today).
+        public string ProviderOperation => Operation.Length > 0 ? $"{Provider}:{Operation}" : Provider;
+    }
 
     // Flatten every HAZARD observation (HazardKinds) across the effects into one finding per (effect,
     // observation), carrying the effect's site. STRUCTURAL observations are excluded — they stay in the
@@ -438,6 +488,81 @@ internal static class DeriveCommand
 
         return findings;
     }
+
+    // Flatten every in-scope AMPLIFICATION observation (HazardKinds.Amplification — looped_effect) across the
+    // effects into one finding per (effect, observation), carrying BOTH the effect's site and its
+    // provider/operation. Two gates, in this order:
+    //   * the TYPE must be in the amplification tier (so a hazard observation can never leak in here and be
+    //     counted twice — the tiers are disjoint by construction, and this is where that is enforced);
+    //   * the EFFECT's provider:operation must be in the rules-declared display scope (AmplificationScope) —
+    //     the shipped default is network-crossing providers only.
+    // Pure + internal so the tier, the scope gate, and the rendering are unit-testable without a store.
+    internal static IReadOnlyList<HazardFinding> AmplificationFindings(
+        IReadOnlyList<DerivedEffect> effects,
+        IReadOnlyList<FactAmplificationRule> scope
+    )
+    {
+        var findings = new List<HazardFinding>();
+        foreach (var e in effects)
+        {
+            if (!AmplificationScope.Includes(scope, e.Provider, e.Operation))
+            {
+                continue;
+            }
+
+            foreach (var o in e.Observations ?? [])
+            {
+                if (!HazardKinds.IsAmplification(o.Type))
+                {
+                    continue;
+                }
+
+                findings.Add(
+                    new HazardFinding(
+                        Type: o.Type,
+                        Confidence: o.Confidence,
+                        Reason: o.Reason,
+                        Context: o.Context, // the iteration context (foreach / for / a rule-declared enumerating call)
+                        Detail: o.Detail,
+                        Enclosing: e.EnclosingSymbolId ?? "",
+                        FilePath: e.FilePath,
+                        Line: e.Line,
+                        Provider: e.Provider,
+                        Operation: e.Operation
+                    )
+                );
+            }
+        }
+
+        return findings;
+    }
+
+    // The generic "Observations on effects" groups: every effect observation that gets NO section of its own,
+    // as (Type, Count) ordered by count desc. Excluded are the hazard kinds (always — they are in the Hazards
+    // section) and, when the amplification tier is ON, the amplification kinds on IN-SCOPE effects (they are in
+    // the Amplification section). An out-of-scope looped effect deliberately remains counted here, so narrowing
+    // the display scope never makes a looped effect disappear from the output entirely. With `amplification:
+    // false` the predicate collapses to the original `!IsHazard`, which is what makes --no-amplification
+    // byte-identical to the pre-tier output. Pure + internal so both branches are unit-testable.
+    internal static IReadOnlyList<(string Type, int Count)> GenericObservationGroups(
+        IReadOnlyList<DerivedEffect> effects,
+        IReadOnlyList<FactAmplificationRule> amplificationScope,
+        bool amplification
+    ) =>
+        effects
+            .SelectMany(e => (e.Observations ?? []).Select(o => (Effect: e, Observation: o)))
+            .Where(x =>
+                !HazardKinds.IsHazard(x.Observation.Type)
+                && !(
+                    amplification
+                    && HazardKinds.IsAmplification(x.Observation.Type)
+                    && AmplificationScope.Includes(amplificationScope, x.Effect.Provider, x.Effect.Operation)
+                )
+            )
+            .GroupBy(x => x.Observation.Type, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .Select(g => (Type: g.Key, Count: g.Count()))
+            .ToList();
 
     // Map each graph-tier event_cycle into a HazardFinding so it flows through the SAME Hazards view + tsv
     // split as the over-effects findings. event_cycle is NOT effect-attached, so it has no single owning
@@ -583,6 +708,13 @@ internal static class DeriveCommand
     internal static string HazardTsvRow(HazardFinding h) =>
         $"hazard\t{h.Type}\t{h.Confidence}\t{h.Reason}\t{h.Context}\t{h.Enclosing}\t{h.FilePath}\t{h.Line}\t{h.Detail}";
 
+    // The tsv `amplification` row: the `hazard` column contract verbatim (so one parser handles both), plus the
+    // two columns amplification exists for — the effect's PROVIDER and OPERATION. A DISTINCT row type on purpose:
+    // `hazard` is the closed hazard set for every downstream consumer and the skill doc, and column-1 filtering
+    // (`awk -F'\t' '$1=="amplification"'`) is the documented idiom. Pure + internal so the contract is pinned.
+    internal static string AmplificationTsvRow(HazardFinding a) =>
+        $"amplification\t{a.Type}\t{a.Confidence}\t{a.Reason}\t{a.Context}\t{a.Enclosing}\t{a.FilePath}\t{a.Line}\t{a.Detail}\t{a.Provider}\t{a.Operation}";
+
     // Confidence tiers in disclosure order (high first), so a per-type breakdown reads worst-first.
     private static readonly string[] ConfidenceOrder = ["high", "medium", "low"];
 
@@ -603,12 +735,39 @@ internal static class DeriveCommand
 
         output.WriteLine();
         output.WriteLine($"Hazards (pattern findings): {findings.Count}");
+        WriteFindingGroups(output, findings.GroupBy(f => f.Type, StringComparer.Ordinal), limit);
+    }
+
+    // The AMPLIFICATION section: the same per-group rendering as Hazards (so the two read consistently), grouped
+    // by the effect's `provider:operation` instead of by finding TYPE — because the type is always looped_effect,
+    // and a flat "looped_effect: 1531" line answers nothing. The provider:operation breakdown is the whole point
+    // of promoting this tier: a looped `http:POST` must be as visible as a looped `llblgen:read`.
+    //
+    // Deliberately NOT called "hazards": looped_effect is a structural FACT (the effect is inside an iteration
+    // context, soundly) and not a judgment that anything is wrong — the header says "inventory" so a reader
+    // triages it as such. See HazardKinds for the tier rationale. Empty-safe.
+    internal static void WriteAmplification(TextWriter output, IReadOnlyList<HazardFinding> findings, int limit)
+    {
+        if (findings.Count == 0)
+        {
+            return;
+        }
+
+        output.WriteLine();
+        output.WriteLine($"Amplification (looped effects — structural inventory): {findings.Count}");
+        WriteFindingGroups(output, findings.GroupBy(f => f.ProviderOperation, StringComparer.Ordinal), limit);
+    }
+
+    // The shared per-group body of the Hazards + Amplification sections, factored so the two sections cannot
+    // drift in shape: for each group (ordered by site count desc, ties by key) a header line with site + method
+    // counts and the confidence-tier breakdown, then one sampled row per ENCLOSING METHOD (deduped, worst-first,
+    // ×N when a method holds several sites), then the truncation note. The only thing that varies between the
+    // sections is the GROUPING KEY the caller chose — hazard type vs the effect's provider:operation.
+    private static void WriteFindingGroups(TextWriter output, IEnumerable<IGrouping<string, HazardFinding>> groups, int limit)
+    {
         // perTypeSample caps the number of METHOD rows shown (not sites).
         var perTypeSample = limit / 8 + 1;
-        var byType = findings
-            .GroupBy(f => f.Type, StringComparer.Ordinal)
-            .OrderByDescending(g => g.Count())
-            .ThenBy(g => g.Key, StringComparer.Ordinal);
+        var byType = groups.OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal);
         foreach (var typeGroup in byType)
         {
             // Site-level tier counts (for the per-type breakdown parenthetical — unchanged from pre-dedup).

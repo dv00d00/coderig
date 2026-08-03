@@ -120,13 +120,40 @@ internal sealed record EpFootprintDelta(
     // refactor that opened a race_window on a path, or a fix that closed one. Defaulted empty so existing
     // constructions/tests (and OLD cache blobs) are unaffected.
     IReadOnlyList<HazardFinding>? HazardsAdded = null,
-    IReadOnlyList<HazardFinding>? HazardsRemoved = null
+    IReadOnlyList<HazardFinding>? HazardsRemoved = null,
+    // AMPLIFICATION DELTA (the looped_effect finding tier): the provider:operations this EP's reach newly runs
+    // INSIDE an iteration context (AmplificationsAdded) or no longer does (AmplificationsRemoved). This is the
+    // reviewer-facing half of the amplification tier: wrapping a loop around an existing effect leaves the effect
+    // SET unchanged, so the Added/Removed lists say nothing, yet the effect now costs ×N. TERSE by construction —
+    // one entry per (EP × provider:operation) with a site count, never one per site. Defaulted empty so existing
+    // constructions/tests and OLD cache blobs are unaffected.
+    IReadOnlyList<EpAmplification>? AmplificationsAdded = null,
+    IReadOnlyList<EpAmplification>? AmplificationsRemoved = null
 )
 {
     // Normalized non-null views so callers (ordering, rendering, the cache codec) never NRE on the
     // defaulted-null hazard lists (a delta with no hazard change, or an OLD cache blob / effect-only test).
     public IReadOnlyList<HazardFinding> HazardsAddedOrEmpty => HazardsAdded ?? [];
     public IReadOnlyList<HazardFinding> HazardsRemovedOrEmpty => HazardsRemoved ?? [];
+    public IReadOnlyList<EpAmplification> AmplificationsAddedOrEmpty => AmplificationsAdded ?? [];
+    public IReadOnlyList<EpAmplification> AmplificationsRemovedOrEmpty => AmplificationsRemoved ?? [];
+}
+
+// One AMPLIFICATION finding on an EP's reach, at the TERSE grain: a `provider:operation` whose effect is reached
+// inside an iteration context, with how many reachable sites carry it. Keyed on (Provider, Operation) ONLY —
+// Sites rides along for rendering but is DELIBERATELY EXCLUDED from equality/hash (same trick HazardFinding uses
+// for Confidence), so the set-diff answers "did this EP's http:POST become looped?" and NOT "did the site count
+// tick from 3 to 4". That is the whole point of the terse grain: a reviewer wants the fact, not an enumeration.
+internal sealed record EpAmplification(string Provider, string Operation, int Sites)
+{
+    public bool Equals(EpAmplification? other) =>
+        other is not null
+        && string.Equals(Provider, other.Provider, StringComparison.Ordinal)
+        && string.Equals(Operation, other.Operation, StringComparison.Ordinal);
+
+    public override int GetHashCode() => HashCode.Combine(Provider, Operation);
+
+    public string ProviderOperation => $"{Provider}:{Operation}";
 }
 
 // One hazard finding on an EP's reach: a hazard observation (race_window / lazy_init_race / n_plus_1 /

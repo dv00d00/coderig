@@ -25,7 +25,13 @@ public static class HazardsService
         string fromPattern,
         string? storeRef = null,
         bool gate = true,
-        IReadOnlyList<string>? extraRules = null
+        IReadOnlyList<string>? extraRules = null,
+        // AMPLIFICATION tier (looped_effect on an in-scope provider:operation — see HazardKinds): ON by default,
+        // like the CLI's `--no-amplification` opt-out, and exposed as `?amplification=false` on /api/hazards.
+        // Amplification marks come back in the SAME HazardMark shape, so the tree overlay renders them with no
+        // client change — the client only labels them (their Type is looped_effect, which is what distinguishes
+        // them from the hazard set: HazardKinds.IsHazard(looped_effect) is false by design).
+        bool amplification = true
     )
     {
         var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules ?? [], loadedPaths: out var loadedPaths);
@@ -88,8 +94,17 @@ public static class HazardsService
             )
         ).Where(f => treeMethods.Contains(f.Enclosing));
 
+        // Amplification findings over the SAME tree-filtered effects — a second SOURCE folded into the same mark
+        // stream (exactly as graphFindings is), not a separate endpoint: one fetch, one overlay.
+        var amplificationFindings = amplification
+            ? DeriveCommand
+                .AmplificationFindings(filteredEffects, rules.Observations.AmplificationOrEmpty)
+                .Where(f => treeMethods.Contains(f.Enclosing))
+            : [];
+
         return effectFindings
             .Concat(graphFindings)
+            .Concat(amplificationFindings)
             .GroupBy(f => (f.Enclosing, f.Type))
             .Select(g => new HazardMark(
                 MethodId: g.Key.Enclosing,

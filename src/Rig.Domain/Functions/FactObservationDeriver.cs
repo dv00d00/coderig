@@ -14,6 +14,12 @@ namespace Rig.Domain.Functions;
 // invocation).
 public static class FactObservationDeriver
 {
+    // looped_effect's type string, owned HERE (this is the emitter) and re-stated by the HazardKinds catalog —
+    // same "the type strings are owned by their derivers" convention race_window/sync_over_async follow. It is
+    // hoisted to a const because looped_effect is no longer display-anonymous: it is the AMPLIFICATION finding
+    // tier (see HazardKinds.Amplification), so the catalog must reference it without re-typing the literal.
+    public const string LoopedEffectType = "looped_effect";
+
     public static IReadOnlyList<EffectObservationInfo> Derive(
         string methodName,
         string? loopKind,
@@ -56,7 +62,7 @@ public static class FactObservationDeriver
         {
             observations.Add(
                 new EffectObservationInfo(
-                    Type: "looped_effect",
+                    Type: LoopedEffectType,
                     Context: iterationKind,
                     Detail: iterationDetail ?? iterationKind,
                     Confidence: "high",

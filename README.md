@@ -111,6 +111,18 @@ Structural context is appended to an effect line in brackets when a pattern is d
 | `[read_before_commit:before_commit]` | `SaveChanges*` preceded by a read in the same method — lost-update / TOCTOU candidate |
 | `[concurrency_handled:DbUpdateConcurrencyException]` | `SaveChanges*` inside a concurrency catch — optimistic concurrency **is** handled |
 
+`looped_effect` is additionally promoted to a **displayed finding tier of its own — "amplification"** — on by
+default: `rig derive` prints an `Amplification (looped effects — structural inventory)` section after Hazards,
+broken down by `provider:operation` (so a looped `http:POST` is as visible as a looped `llblgen:read`),
+`rig tree --view hazards` marks it inline with `🔁`, and `--format tsv` emits it as its own `amplification` row
+type. It is **not** a hazard: a looped effect is a structural FACT (the effect is lexically inside an iteration
+context — no guess), whereas `n_plus_1` is a JUDGMENT about whether the key varies, so every hazard surface is
+untouched. The displayed scope is rule data (`observations.amplification`) and ships staged to the
+network-crossing providers, where ×N means N round trips; anything outside it stays a plain observation count.
+`--no-amplification` turns the tier off. In `rig impact` it appears as the terse per-entry-point
+`ep_amplification_added` / `ep_amplification_removed` rows — the only signal that a loop was wrapped around an
+existing call, which leaves the effect set unchanged while multiplying the cost.
+
 `tree --guards` adds the control-dependence layer on top: `⎇ [invoice.IsHealthcode]` on the guarded
 edge, `!pred` for the else-arm, `&&`-joined for nested branches, nothing at all for the must-run spine.
 Intra-method; guards stop at the source boundary rather than fabricating them for external frames.

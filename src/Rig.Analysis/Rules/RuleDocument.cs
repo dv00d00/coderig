@@ -242,6 +242,15 @@ internal sealed record SerializationHazardObservationRule(IReadOnlyList<string>?
 // discriminator over plain looped_effect. Projected to FactNPlusOneRule. Annotate-only.
 internal sealed record NPlusOneObservationRule(IReadOnlyList<string>? Providers, IReadOnlyList<string>? Operations);
 
+// The DISPLAY SCOPE of the amplification finding tier (looped_effect — JSON authoring shape of the
+// `observations.amplification` section): which provider:operation effects get their own Amplification section /
+// inline mark / impact delta row instead of an anonymous count in the generic observations block. Same shape and
+// merge semantics as nPlusOne — a LIST, so a project overlay can APPEND providers without restating the
+// defaults; `providers`/`operations` empty or absent = "any" for that dimension. Projected to
+// FactAmplificationRule (see it for why the scope is data, and what the shipped network-crossing default
+// admits). Display-only: the looped_effect observation itself is always derived.
+internal sealed record AmplificationObservationRule(IReadOnlyList<string>? Providers, IReadOnlyList<string>? Operations);
+
 // A higher-order method that ENUMERATES its receiver, so its lambda body runs once per element and an
 // effect inside it is amplified exactly as a loop body is (`ids.Select(id => Fetch(id))`).
 // `declaringTypes` gates on the resolved target's containing type — the one dimension separating these
@@ -327,6 +336,10 @@ internal sealed class ObservationsSection
     public List<SerializationHazardObservationRule>? SerializationHazard { get; set; }
 
     public List<NPlusOneObservationRule>? NPlusOne { get; set; }
+
+    // Section key "amplification": the DISPLAYED provider:operation scope of looped_effect (see
+    // AmplificationObservationRule). Absent = empty scope = the feature is off for that rule cascade.
+    public List<AmplificationObservationRule>? Amplification { get; set; }
 
     public List<EnumeratingMethodObservationRule>? EnumeratingMethods { get; set; }
 }

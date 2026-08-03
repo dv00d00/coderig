@@ -230,7 +230,9 @@ internal static class ImpactCacheCodec
             Amplified: d.Amplified.Select(MapAmplified).ToArray(),
             SharedMutationOnPath: d.SharedMutationOnPath,
             HazardsAdded: d.HazardsAddedOrEmpty.Select(MapHazard).ToArray(),
-            HazardsRemoved: d.HazardsRemovedOrEmpty.Select(MapHazard).ToArray()
+            HazardsRemoved: d.HazardsRemovedOrEmpty.Select(MapHazard).ToArray(),
+            AmplificationsAdded: d.AmplificationsAddedOrEmpty.Select(MapEpAmplification).ToArray(),
+            AmplificationsRemoved: d.AmplificationsRemovedOrEmpty.Select(MapEpAmplification).ToArray()
         );
 
     private static EpFootprintDelta UnmapFootprint(FootprintDeltaDto d) =>
@@ -248,8 +250,16 @@ internal static class ImpactCacheCodec
             // Defaulted null on an OLD blob (pre-hazard schema) — UnmapHazards maps null -> empty so the warm
             // path's delta is byte-identical to a cold recompute that found no hazard change.
             HazardsAdded: (d.HazardsAdded ?? []).Select(UnmapHazard).ToArray(),
-            HazardsRemoved: (d.HazardsRemoved ?? []).Select(UnmapHazard).ToArray()
+            HazardsRemoved: (d.HazardsRemoved ?? []).Select(UnmapHazard).ToArray(),
+            AmplificationsAdded: (d.AmplificationsAdded ?? []).Select(UnmapEpAmplification).ToArray(),
+            AmplificationsRemoved: (d.AmplificationsRemoved ?? []).Select(UnmapEpAmplification).ToArray()
         );
+
+    private static EpAmplificationDto MapEpAmplification(EpAmplification a) =>
+        new(Provider: a.Provider, Operation: a.Operation, Sites: a.Sites);
+
+    private static EpAmplification UnmapEpAmplification(EpAmplificationDto a) =>
+        new(Provider: a.Provider, Operation: a.Operation, Sites: a.Sites);
 
     private static HazardFindingDto MapHazard(HazardFinding h) =>
         new(Type: h.Type, Cell: h.Cell, Enclosing: h.Enclosing, Confidence: h.Confidence);
@@ -357,10 +367,17 @@ internal sealed record FootprintDeltaDto(
     // lines + headline byte-identically to a cold recompute. Defaulted null so an OLD blob (pre-hazard schema)
     // still decodes — missing => empty (UnmapFootprint maps null -> []).
     IReadOnlyList<HazardFindingDto>? HazardsAdded = null,
-    IReadOnlyList<HazardFindingDto>? HazardsRemoved = null
+    IReadOnlyList<HazardFindingDto>? HazardsRemoved = null,
+    // AMPLIFICATION DELTA: the per-EP provider:operation pairs whose effect newly runs inside (or no longer runs
+    // inside) an iteration context, with the site count. Same defaulted-null old-blob contract as the hazard
+    // lists; ImpactSchema was bumped alongside, so a pre-tier blob is a miss anyway.
+    IReadOnlyList<EpAmplificationDto>? AmplificationsAdded = null,
+    IReadOnlyList<EpAmplificationDto>? AmplificationsRemoved = null
 );
 
 internal sealed record HazardFindingDto(string Type, string Cell, string Enclosing, string Confidence);
+
+internal sealed record EpAmplificationDto(string Provider, string Operation, int Sites);
 
 internal sealed record ReachDeltaDto(
     string Kind,

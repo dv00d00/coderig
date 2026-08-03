@@ -55,7 +55,20 @@ internal static class ImpactMapper
                             Confidence: hz.Confidence
                         ))
                         .ToList(),
-                    SharedMutationOnPath: p.SharedMutationOnPath
+                    SharedMutationOnPath: p.SharedMutationOnPath,
+                    // Amplification (looped_effect) delta — the terse per-(EP x provider:operation) entries.
+                    AmplificationsAdded: p.AmplificationsAddedOrEmpty.Select(a => new ImpactAmplificationDto(
+                            Provider: a.Provider,
+                            Operation: a.Operation,
+                            Sites: a.Sites
+                        ))
+                        .ToList(),
+                    AmplificationsRemoved: p.AmplificationsRemovedOrEmpty.Select(a => new ImpactAmplificationDto(
+                            Provider: a.Provider,
+                            Operation: a.Operation,
+                            Sites: a.Sites
+                        ))
+                        .ToList()
                 ))
                 .ToList()
         );

@@ -1,18 +1,35 @@
 namespace Rig.Domain.Functions;
 
-// The catalog of HAZARD finding types — the higher-order findings that match PATTERNS over effects (a
-// read-modify-write window, an N+1 read in a loop, …), as distinct from STRUCTURAL observations
-// (looped_effect / parallel_fanout / lock_held_across_effect / transaction_spans_effect) which are context
-// facts, not hazards. Most are modeled as EffectObservationInfo notes on effects; the single GRAPH-tier
-// hazard, event_cycle (FactCycleDeriver), is NOT effect-attached — it is a property of the call-graph
-// topology (a feedback cycle closing through a publish→consumer delivery edge), derived over the graph and
-// folded into the same Hazards view as a second source. This is the single place that answers "is this a
-// hazard?" so the derive Hazards view, the generic-observations exclusion, and the tsv split don't each
-// hard-code the list.
+// The catalog of DISPLAYED FINDING types, in TWO TIERS. This is the single place that answers "is this a
+// finding, and which kind?" so the derive Hazards/Amplification views, the generic-observations exclusion,
+// the tsv split, and the impact deltas don't each hard-code a list.
 //
-// The type strings are owned by their derivers (race_window / lazy_init_race by FactHazardDeriver;
-// n_plus_1 / unserializable_payload by FactObservationDeriver) and re-stated here as the closed set — this
-// catalog enumerates, it does not detect.
+// TIER 1 — HAZARDS (`All` / IsHazard): higher-order findings that match PATTERNS over effects (a
+// read-modify-write window, an N+1 read in a loop, …). Most are EffectObservationInfo notes on effects; the
+// graph-tier ones (event_cycle / cache_coherence / static_init_capture) are NOT effect-attached — they are
+// properties of the call-graph topology or the static-field universe, derived over the graph and folded into
+// the same Hazards view as extra sources.
+//
+// TIER 2 — AMPLIFICATION (`Amplification` / IsAmplification): looped_effect. Promoted (2026-08) out of the
+// anonymous "Observations on effects" count line into its own displayed, provider-agnostic section — a looped
+// `http:POST` is as visible as a looped `llblgen:read`. On by DEFAULT with an opt-out (`--no-amplification`).
+//
+// Why the tiers are separate — FACT vs JUDGMENT. This deliberately REVERSES the display half of the earlier
+// "looped_effect is a context fact, not a hazard" call that this header used to record: looped_effect stays
+// NOT a hazard, but it becomes a FINDING.
+//   * `looped_effect` is a structural FACT: the effect is lexically inside an iteration context, soundly,
+//     with no guess. A fact can ship on-by-default as INVENTORY — "here is every effect that repeats" — and
+//     needs no false-positive calibration, because there is nothing to be wrong about.
+//   * `n_plus_1` is a JUDGMENT layered on that fact: does the key VARY per iteration, and does it matter?
+//     Judgments are wrong sometimes, so they must be FP-calibrated before going on by default.
+// Keeping them in separate sets is what lets amplification ship now without disturbing the hazard surface:
+// `All` and `IsHazard` are semantically UNCHANGED, so every existing hazard count, golden file, tsv `hazard`
+// row, `rig impact` delta, and `--expect-no-effect-change` gate stays byte-identical. IsFinding is the union,
+// for the ONE consumer that needs "don't also show this as an anonymous observation".
+//
+// The type strings are owned by their derivers (race_window / lazy_init_race by FactHazardDeriver; n_plus_1 /
+// unserializable_payload / looped_effect by FactObservationDeriver) and re-stated here as the closed sets —
+// this catalog enumerates, it does not detect.
 public static class HazardKinds
 {
     // race_window / lazy_init_race come from FactHazardDeriver; reuse its constants so the catalog can never
@@ -52,6 +69,25 @@ public static class HazardKinds
         UnserializablePayload,
     };
 
-    // True when an observation TYPE is a hazard finding (vs. a structural context observation).
+    // True when an observation TYPE is a hazard finding (tier 1). Deliberately does NOT include the
+    // amplification tier: every hazard-keyed surface (the Hazards view, the tsv `hazard` rows, the `rig impact`
+    // per-EP hazard deltas) must keep its exact pre-amplification membership.
     public static bool IsHazard(string type) => All.Contains(type);
+
+    // looped_effect — an effect lexically inside an iteration context. Emitted by FactObservationDeriver;
+    // reuse its constant so this catalog can never drift from the emitter.
+    public const string LoopedEffect = FactObservationDeriver.LoopedEffectType;
+
+    // The closed set of AMPLIFICATION finding types (tier 2): structural facts that repeat an effect. A set of
+    // one today, but a set on purpose — parallel_fanout is the obvious next member (a fanout wrapper amplifies
+    // the same way a loop does), and the display machinery is already generic over the set.
+    public static readonly IReadOnlySet<string> Amplification = new HashSet<string>(StringComparer.Ordinal) { LoopedEffect };
+
+    // True when an observation TYPE is an amplification finding (tier 2).
+    public static bool IsAmplification(string type) => Amplification.Contains(type);
+
+    // True when an observation TYPE is DISPLAYED as a finding in either tier. The one question the generic
+    // "Observations on effects" block asks: a type that has its own section must not ALSO appear there as an
+    // anonymous count (double-counting).
+    public static bool IsFinding(string type) => IsHazard(type) || IsAmplification(type);
 }

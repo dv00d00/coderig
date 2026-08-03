@@ -59,6 +59,7 @@ internal static class ImpactCommand
         var limit = CommonOptions.Limit();
         var noCache = CommonOptions.NoCache();
         var noGate = CommonOptions.NoGate();
+        var noAmplification = CommonOptions.NoAmplification();
         var time = CommonOptions.Time();
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
@@ -105,6 +106,7 @@ internal static class ImpactCommand
             limit,
             noCache,
             noGate,
+            noAmplification,
             time,
             structural,
             only,
@@ -142,6 +144,7 @@ internal static class ImpactCommand
                             Limit: pr.GetValue(limit),
                             NoCache: pr.GetValue(noCache),
                             Gate: !pr.GetValue(noGate),
+                            Amplification: !pr.GetValue(noAmplification),
                             Time: pr.GetValue(time),
                             Structural: pr.GetValue(structural),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
@@ -172,6 +175,9 @@ internal static class ImpactCommand
         int? Limit,
         bool NoCache,
         bool Gate,
+        // Amplification finding tier in the per-EP delta (ep_amplification_added/_removed) — ON by default;
+        // --no-amplification drops those rows (and keys its own cache entry). See CommonOptions.NoAmplification.
+        bool Amplification,
         bool Time,
         bool Structural,
         HashSet<string> Only,
@@ -225,7 +231,8 @@ internal static class ImpactCommand
                     timing.Record(name, TimeSpan.FromMilliseconds(ms));
                     return Task.CompletedTask;
                 }
-                : null
+                : null,
+            amplification: opts.Amplification
         );
 
         // --only / --exclude / the default intrinsic hiding, applied to the per-EP behavioral deltas. Done on
@@ -572,6 +579,21 @@ internal static class ImpactCommand
             {
                 output.WriteLine($"ep_hazard_removed\t{d.Kind}\t{d.Route}\t{h.Type}\t{h.Confidence}\t{h.Cell}\t{h.Enclosing}");
             }
+
+            // AMPLIFICATION DELTA (the looped_effect tier): one row per (EP × provider:operation) whose effect
+            // newly runs inside — or no longer runs inside — an iteration context, with the reachable site count.
+            // TERSE on purpose: never one row per site. Distinct row types so a consumer filters on column 1
+            // (`awk -F'\t' '$1=="ep_amplification_added"'`) without touching the `ep_hazard_*` stream.
+            //  ep_amplification_added / _removed  <kind>  <route>  <provider>  <operation>  <sites>
+            foreach (var a in d.AmplificationsAddedOrEmpty)
+            {
+                output.WriteLine($"ep_amplification_added\t{d.Kind}\t{d.Route}\t{a.Provider}\t{a.Operation}\t{a.Sites}");
+            }
+
+            foreach (var a in d.AmplificationsRemovedOrEmpty)
+            {
+                output.WriteLine($"ep_amplification_removed\t{d.Kind}\t{d.Route}\t{a.Provider}\t{a.Operation}\t{a.Sites}");
+            }
         }
     }
 
@@ -608,8 +630,11 @@ internal static class ImpactCommand
             var hazAdded = d.HazardsAddedOrEmpty;
             var hazRemoved = d.HazardsRemovedOrEmpty;
             var hazPart = hazAdded.Count > 0 || hazRemoved.Count > 0 ? $", hazards +{hazAdded.Count}/-{hazRemoved.Count}" : "";
+            var ampAdded = d.AmplificationsAddedOrEmpty;
+            var ampRemoved = d.AmplificationsRemovedOrEmpty;
+            var loopPart = ampAdded.Count > 0 || ampRemoved.Count > 0 ? $", looped +{ampAdded.Count}/-{ampRemoved.Count}" : "";
             output.WriteLine(
-                $"{Indent.L2}{d.Kind} {label}  (effects {d.BaseEffects}→{d.BranchEffects}, +{d.Added.Count}/-{d.Removed.Count}{ampPart}{hazPart})"
+                $"{Indent.L2}{d.Kind} {label}  (effects {d.BaseEffects}→{d.BranchEffects}, +{d.Added.Count}/-{d.Removed.Count}{ampPart}{hazPart}{loopPart})"
             );
             foreach (var (provider, operation, resource, enclosing) in d.Added.Take(max))
             {
@@ -658,6 +683,20 @@ internal static class ImpactCommand
             foreach (var h in hazRemoved.Take(max))
             {
                 output.WriteLine($"{Indent.L3}- hazard {h.Type} ({h.Confidence}){Cell(h.Cell)}  ({h.Enclosing})");
+            }
+
+            // AMPLIFICATION DELTA: this EP's reach newly runs (or stopped running) a provider:operation inside an
+            // iteration context. Wrapping a loop around an existing call leaves the effect SET identical, so the
+            // +/- effect lines above say nothing while the cost went ×N — this line is the whole reason the tier
+            // is wired into impact. One line per provider:operation with the site count, never per site.
+            foreach (var a in d.AmplificationsAddedOrEmpty.Take(max))
+            {
+                output.WriteLine($"{Indent.L3}+ 🔁 {a.ProviderOperation} now in loop  ({a.Sites} site(s))  [review]");
+            }
+
+            foreach (var a in d.AmplificationsRemovedOrEmpty.Take(max))
+            {
+                output.WriteLine($"{Indent.L3}- 🔁 {a.ProviderOperation} no longer in loop  ({a.Sites} site(s))");
             }
         }
 
@@ -905,6 +944,8 @@ internal static class ImpactCommand
         //  ep_guard_delta  <kind>  <route>  <+guards>  <-guards>   (FR-1e: a lock/async_lock acquire/release ADDED (+, comma-joined provider:operation) or REMOVED (-) on a path whose branch reach STILL carries a shared_state mutation — the concurrency guard around an inherently-shared cell changed. A REVIEW flag covering both the lost-guard race and the guard-adding fix.)
         //  ep_hazard_added    <kind>  <route>  <type>  <confidence>  <cell>  <enclosing>   (a hazard finding — race_window / lazy_init_race / n_plus_1 / unserializable_payload, see HazardKinds — newly present on the EP's reach: a refactor opened it. cell = the observation Context, enclosing = the param-free producing method. A REVIEW flag, not a verdict.)
         //  ep_hazard_removed  <kind>  <route>  <type>  <confidence>  <cell>  <enclosing>   (a hazard finding that DROPPED from the EP's reach base->head: a fix closed it. Same columns as ep_hazard_added.)
+        //  ep_amplification_added    <kind>  <route>  <provider>  <operation>  <sites>   (the AMPLIFICATION tier, looped_effect: this provider:operation is now reached INSIDE an iteration context and was not before — i.e. a loop was introduced around an existing effect, which leaves the effect SET unchanged while the cost goes ×N, so no ep_effect_* row can show it. TERSE: one row per (EP x provider:operation), <sites> = reachable producing sites, never one row per site. Scoped to the rules-declared network-crossing providers (observations.amplification); suppressed by --no-amplification. A REVIEW flag, not a verdict.)
+        //  ep_amplification_removed  <kind>  <route>  <provider>  <operation>  <sites>   (the converse: the provider:operation is no longer reached inside an iteration context — a loop was removed / the call hoisted. Same columns.)
 
         //  guard_condition_delta  <verdict>  <caller>  <callee>  <effects>  <eps>  <baseCondition>  <headCondition>
         //     (A call edge whose CONTROL-DEPENDENCE CONDITION moved while the call and its effects stayed put —
