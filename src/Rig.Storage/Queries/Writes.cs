@@ -419,9 +419,9 @@ public static class Writes
                     + "TargetInSource, FilePath, Line, ReceiverType, FirstArgumentTemplate, FirstArgumentType, EnclosingLoopKind, "
                     + "EnclosingLoopDetail, EnclosingInvocations, EnclosingCatchTypes, TypeArguments, FirstArgumentName, DelegateConsumer, "
                     + "EnclosingScopes, ArgumentTemplates, ArgumentNames, DeclaringTypeArgBinding, MethodTypeArgBinding, NonVirtual, "
-                    + "EnclosingGuards) "
+                    + "EnclosingGuards, EnclosingLoopElementType) "
                     + "VALUES ($run,$idx,$target,$kind,$enc,$tasm,$insrc,$file,$line,$recv,$fat,$fatype,$elk,$eld,$einv,$ect,$ta,$fan,$dc,"
-                    + "$es,$at,$an,$dtab,$mtab,$nonvirtual,$eg);",
+                    + "$es,$at,$an,$dtab,$mtab,$nonvirtual,$eg,$elt);",
                 [
                     "$run",
                     "$idx",
@@ -449,6 +449,7 @@ public static class Writes
                     "$mtab",
                     "$nonvirtual",
                     "$eg",
+                    "$elt",
                 ],
                 references,
                 (p, r, i) =>
@@ -479,6 +480,7 @@ public static class Writes
                     p[23].Value = (object?)r.MethodTypeArgBinding ?? DBNull.Value;
                     p[24].Value = r.NonVirtual ? 1 : 0;
                     p[25].Value = (object?)r.EnclosingGuards ?? DBNull.Value;
+                    p[26].Value = (object?)r.EnclosingLoopElementType ?? DBNull.Value;
                 },
                 alreadySaved: saved,
                 total: total,

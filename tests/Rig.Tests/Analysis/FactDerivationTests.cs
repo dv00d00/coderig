@@ -441,6 +441,23 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         );
     }
 
+    // The loop DETAIL is source text ("relatedTeamId in relatedTeamIds") and cannot say what an element IS, so
+    // the resolved element type is a separate fact. Asserted over `foreach (var x in intArray)` because that is
+    // the shape a hand-rolled "unwrap IEnumerable<T>" gets wrong twice over — `var`, and an array.
+    [Test]
+    public async Task Invocation_reference_facts_carry_the_resolved_iteration_element_type()
+    {
+        var playground = await playgrounds.EntryPointEffectsAsync();
+        var result = playground.Result;
+
+        result.References!.ShouldContain(r =>
+            r.RefKind == "invocation"
+            && r.TargetSymbolId.Contains("StringGetAsync", StringComparison.Ordinal)
+            && r.EnclosingLoopKind == "foreach"
+            && r.EnclosingLoopElementType == "int"
+        );
+    }
+
     [Test]
     public async Task Mvc_and_minapi_entry_point_route_literals_are_captured()
     {

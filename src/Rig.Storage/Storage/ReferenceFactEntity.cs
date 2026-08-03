@@ -35,4 +35,9 @@ public sealed class ReferenceFactEntity
     // encoded predicate-text/polarity (FactStructuralContext.DecodeGuards), null == must-run. EnsureCreated
     // adds this column on a fresh index; old stores lack it and read as null (no guards).
     public string? EnclosingGuards { get; set; }
+
+    // Resolved element type of the nearest enclosing iteration context (ReferenceFact.EnclosingLoopElementType).
+    // Added with schema index v4 — the version gate rejects an older store outright, so there is no
+    // read-as-null compatibility path to preserve here.
+    public string? EnclosingLoopElementType { get; set; }
 }

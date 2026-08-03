@@ -132,7 +132,17 @@ public sealed record ReferenceFact(
     // polarity and joined. Null/empty == MUST-RUN — unconditional within the method (the spine). INTRA-
     // method only; the cumulative cross-method guard chain is a DERIVE-side composition. Decode with
     // FactStructuralContext.DecodeGuards. Null on stores indexed before this existed (read as no guards).
-    string? EnclosingGuards = null
+    string? EnclosingGuards = null,
+    // The RESOLVED ELEMENT TYPE of the nearest enclosing iteration context (open-generic FQN): Roslyn's
+    // GetForEachStatementInfo(..).ElementType for a `foreach`, the range-variable symbol's type for a query
+    // clause, the lambda parameter's type for an enumerating lambda. EnclosingLoopDetail above is SOURCE TEXT
+    // ("row in rows"), which says nothing about what a row IS; only this says whether a read beneath the loop is
+    // keyed on the iterated element's OWN type, which is the semantic half of the amortization question. It is
+    // also the only such signal available for a `lambda` context, whose detail degenerates to the method name
+    // ("x in Select"). Null for for/while/do (they iterate no collection), when the source type does not resolve,
+    // and when the element is an ANONYMOUS projection (`select new { p.PkProfile, .. }` has no nameable type) —
+    // that last case is a real limit, not an oversight: it is exactly where the lexical key path still works.
+    string? EnclosingLoopElementType = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -771,7 +781,10 @@ public sealed record FactInvocation(
     string? ArgumentNames = null,
     // CFG control-dependence guard set of this invocation's call-site (branch-aware-effects); carried onto
     // the DerivedEffect so `tree --view full --guards` can mark a guarded effect leaf. Null = must-run.
-    string? EnclosingGuards = null
+    string? EnclosingGuards = null,
+    // Resolved element type of the enclosing iteration context (see ReferenceFact.EnclosingLoopElementType).
+    // The SEMANTIC half of the self-keyed test, and for a `lambda` context the only half there is.
+    string? LoopElementType = null
 );
 
 // An effect re-derived from the reference index by matching an invocation target against the

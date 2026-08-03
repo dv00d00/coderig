@@ -14,10 +14,19 @@ public static class IterationContext
     // The iteration context around a call site. Kind is null when there is none. Identifiers are the names
     // REBOUND on each iteration (a foreach's variable, a query's range variables, an enumerating lambda's
     // parameters) — empty for for/while/do, which iterate while binding nothing. Source is the ITERATED
-    // EXPRESSION (the tail of "x in <expr>"), which is what a self-keyed read is self-keyed on.
-    public readonly record struct Context(string? Kind, string? Detail, IReadOnlyList<string> Identifiers, string Source);
+    // EXPRESSION (the tail of "x in <expr>"), which is what a self-keyed read is self-keyed on. ElementType is
+    // the RESOLVED type of the element — the semantic counterpart of Source, which is only source text, and the
+    // only such signal a `lambda` context has (its detail degenerates to "x in Select"). "" when unresolved, for
+    // for/while/do, and for an anonymous projection, which genuinely has no nameable element type.
+    public readonly record struct Context(
+        string? Kind,
+        string? Detail,
+        IReadOnlyList<string> Identifiers,
+        string Source,
+        string ElementType
+    );
 
-    public static readonly Context None = new(Kind: null, Detail: null, Identifiers: [], Source: "");
+    public static readonly Context None = new(Kind: null, Detail: null, Identifiers: [], Source: "", ElementType: "");
 
     // The iteration context of a call site, from the loop facts (EnclosingLoopKind/Detail) plus the
     // rule-declared enumerating-lambda contexts among its ancestor invocations.
@@ -29,7 +38,10 @@ public static class IterationContext
         string? loopKind,
         string? loopDetail,
         IReadOnlyList<FactStructuralContext.EnclosingInvocation> enclosingInvocations,
-        FactObservationRules rules
+        FactObservationRules rules,
+        // The loop STATEMENT's resolved element type (foreach/query). Optional so the intra-method caller, which
+        // has no use for it, needs no change; an enumerating lambda's element type rides the invocation chain.
+        string? loopElementType = null
     )
     {
         // The enumerating-lambda context: the innermost enclosing call that the rules declare ENUMERATES its
@@ -47,6 +59,7 @@ public static class IterationContext
         // positional `= ""` defaults do NOT apply and every string field is null. Normalize once here.
         var enumeratingParameter = enumerating.LambdaParameter ?? "";
         var enumeratingMethod = enumerating.MethodName ?? "";
+        var enumeratingElementType = enumerating.LambdaParameterType ?? "";
 
         var kind = loopKind ?? (enumeratingParameter.Length > 0 ? "lambda" : null);
         var detail = loopDetail ?? (enumeratingParameter.Length > 0 ? $"{enumeratingParameter} in {enumeratingMethod}" : null);
@@ -59,7 +72,15 @@ public static class IterationContext
             .Concat(SplitIdentifiers(enumeratingParameter))
             .Distinct(StringComparer.Ordinal)
             .ToList();
-        return new Context(Kind: kind, Detail: detail, Identifiers: identifiers, Source: SourceOf(detail));
+        // A loop STATEMENT wins the element type exactly as it wins the reported kind, so the two always describe
+        // the same context; the lambda's parameter type stands in only when there is no enclosing loop at all.
+        return new Context(
+            Kind: kind,
+            Detail: detail,
+            Identifiers: identifiers,
+            Source: SourceOf(detail),
+            ElementType: loopKind is not null ? loopElementType ?? "" : enumeratingElementType
+        );
     }
 
     // The identifiers rebound on every iteration, parsed from a loopDetail of the form

@@ -25,12 +25,19 @@ public static class FactStructuralContext
     // LambdaParameter is the comma-joined parameter list of this invocation's lambda ARGUMENT that
     // lexically contains the effect ("p", or "x, i" for an indexed overload) — the identifiers rebound
     // per element when the method enumerates. Both are "" when absent or unresolved.
+    // LambdaParameterType is the resolved type of that lambda's FIRST parameter — the ELEMENT type when the
+    // method enumerates (`profiles.Select(p => ..)` -> the profile type). It is the only element-type signal a
+    // lambda iteration context has: unlike a foreach/query its detail string degenerates to the method name
+    // ("p in Select"), so nothing else says WHAT is being iterated. First parameter only: that is the element for
+    // Select/Where/Any/ForEach and the indexed overloads alike; an `Aggregate((acc, x) => ..)` element sits
+    // SECOND and is therefore typed as the accumulator here — a known, narrow mis-read, not worth an arity table.
     public readonly record struct EnclosingInvocation(
         string ReceiverText,
         string ReceiverType,
         string MethodName,
         string DeclaringType = "",
-        string LambdaParameter = ""
+        string LambdaParameter = "",
+        string LambdaParameterType = ""
     );
 
     public static string? EncodeInvocations(IReadOnlyList<EnclosingInvocation> invocations) =>
@@ -39,7 +46,7 @@ public static class FactStructuralContext
             : string.Join(
                 ListSeparator.ToString(),
                 invocations.Select(i =>
-                    $"{i.ReceiverText}{FieldSeparator}{i.ReceiverType}{FieldSeparator}{i.MethodName}{FieldSeparator}{i.DeclaringType}{FieldSeparator}{i.LambdaParameter}"
+                    $"{i.ReceiverText}{FieldSeparator}{i.ReceiverType}{FieldSeparator}{i.MethodName}{FieldSeparator}{i.DeclaringType}{FieldSeparator}{i.LambdaParameter}{FieldSeparator}{i.LambdaParameterType}"
                 )
             );
 
@@ -56,18 +63,20 @@ public static class FactStructuralContext
         foreach (var entry in encoded!.Split(ListSeparator))
         {
             var fields = entry.Split(FieldSeparator);
-            // 3 fields = a store written before DeclaringType/LambdaParameter existed. Decode it rather
-            // than discard it, so the pre-existing fanout/retry observations keep working against an old
-            // store; the enumerating-method gate simply finds no lambda parameter until it is re-indexed.
-            if (fields.Length is 3 or 5)
+            // Field count IS the version: 3 = before DeclaringType/LambdaParameter, 5 = before
+            // LambdaParameterType, 6 = current. Decode the short forms rather than discard them, so the
+            // pre-existing fanout/retry observations keep working against an older store; the missing fields
+            // simply read as "" (no lambda parameter / no element type) until it is re-indexed.
+            if (fields.Length is 3 or 5 or 6)
             {
                 result.Add(
                     new EnclosingInvocation(
                         ReceiverText: fields[0],
                         ReceiverType: fields[1],
                         MethodName: fields[2],
-                        DeclaringType: fields.Length == 5 ? fields[3] : "",
-                        LambdaParameter: fields.Length == 5 ? fields[4] : ""
+                        DeclaringType: fields.Length >= 5 ? fields[3] : "",
+                        LambdaParameter: fields.Length >= 5 ? fields[4] : "",
+                        LambdaParameterType: fields.Length >= 6 ? fields[5] : ""
                     )
                 );
             }

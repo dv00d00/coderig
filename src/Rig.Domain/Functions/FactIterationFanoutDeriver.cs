@@ -39,9 +39,22 @@ public static class FactIterationFanoutDeriver
         // very collection being iterated has key cardinality N by construction — the self-keyed shape — which
         // is only detectable with the source in hand.
         string IteratedSource,
+        // The RESOLVED element type of that source (open-generic FQN). The semantic counterpart of IteratedSource
+        // and of KeyPath: iterate X and read X, and the key cardinality is N whatever the argument is named. It
+        // is also the ONLY iteration evidence a `lambda` anchor has — its IteratedSource degenerates to the
+        // enumerating method name ("Select"). "" for for/while/do, for an unresolved source, and for an anonymous
+        // projection, which is not a mis-extraction: that element genuinely is not an entity.
+        string ElementType,
         // The per-element identifier found in argument ArgumentIndex, or "" with index -1 when the site is
         // keyless (for/while/do, or an argument surface that captured nothing).
         string KeyToken,
+        // The FULL captured surface of that argument — `p.PkProfile`, not the bare `p` that KeyToken carries.
+        // KeyToken answers "does a per-element value cross this boundary"; only the PATH says WHICH value, and
+        // in MedDBase the self-keyed-vs-foreign-keyed distinction lives entirely in the member NAME
+        // (`p.PkProfile` = this element's own identity, cardinality N; `row.FkDepartmentCode` = a foreign
+        // reference into a bounded domain). Keeps the leading '~' of a reduced composite surface, which is
+        // load-bearing elsewhere (FactEffectDeriver rejects a marked value as an identity).
+        string KeyPath,
         int ArgumentIndex
     )
     {
@@ -66,14 +79,15 @@ public static class FactIterationFanoutDeriver
                 loopKind: inv.LoopKind,
                 loopDetail: inv.LoopDetail,
                 enclosingInvocations: FactStructuralContext.DecodeInvocations(inv.EnclosingInvocations),
-                rules: rules
+                rules: rules,
+                loopElementType: inv.LoopElementType
             );
             if (iteration.Kind is null)
             {
                 continue;
             }
 
-            var (keyToken, argumentIndex) = KeyOf(iteration.Identifiers, inv);
+            var (keyToken, keyPath, argumentIndex) = KeyOf(iteration.Identifiers, inv);
             fanouts.Add(
                 new IterationFanout(
                     Event: new DerivedEffect(
@@ -93,7 +107,9 @@ public static class FactIterationFanoutDeriver
                     IterationKind: iteration.Kind,
                     IterationDetail: iteration.Detail ?? iteration.Kind,
                     IteratedSource: iteration.Source,
+                    ElementType: iteration.ElementType,
                     KeyToken: keyToken,
+                    KeyPath: keyPath,
                     ArgumentIndex: argumentIndex
                 )
             );
@@ -115,15 +131,25 @@ public static class FactIterationFanoutDeriver
         return fanouts;
     }
 
-    // The FIRST argument position whose captured surface names a per-iteration identifier, and that identifier.
-    // First-match (not all matches) keeps the event grain one-per-call-site, which is what makes (file, line,
-    // callee) an identity the dataset can join on; a site that passes the element at two positions is a shape
-    // we have never needed to distinguish. ("", -1) when nothing matches — a keyless anchor, still emitted.
-    private static (string KeyToken, int ArgumentIndex) KeyOf(IReadOnlyList<string> identifiers, FactInvocation inv)
+    // The FIRST argument position whose captured surface names a per-iteration identifier: that identifier, the
+    // whole surface it was found in, and the position. First-match (not all matches) keeps the event grain
+    // one-per-call-site, which is what makes (file, line, callee) an identity the dataset can join on; a site
+    // that passes the element at two positions is a shape we have never needed to distinguish.
+    // ("", "", -1) when nothing matches — a keyless anchor, still emitted.
+    //
+    // The PATH is the matching surface verbatim (member path, reduced composite surface, or string template),
+    // NOT a reconstruction: `ArgumentNames[k]` is already `expression.ToString()` for a member access, so
+    // `Cache.New(p.PkProfile)` yields the path "p.PkProfile" while the token stays "p". Names are preferred over
+    // templates because a name is the member path the key discriminator needs; a template only wins where the
+    // element travels inside a string ("/vars/{id}") and there is no name at all.
+    private static (string KeyToken, string KeyPath, int ArgumentIndex) KeyOf(
+        IReadOnlyList<string> identifiers,
+        FactInvocation inv
+    )
     {
         if (identifiers.Count == 0)
         {
-            return ("", -1);
+            return ("", "", -1);
         }
 
         var names = Elements(inv.ArgumentNames);
@@ -135,9 +161,14 @@ public static class FactIterationFanoutDeriver
             var template = k < templates.Length ? templates[k] : null;
             foreach (var identifier in identifiers)
             {
-                if (IterationContext.ContainsToken(name, identifier) || IterationContext.ContainsToken(template, identifier))
+                if (IterationContext.ContainsToken(name, identifier))
                 {
-                    return (identifier, k);
+                    return (identifier, name!, k);
+                }
+
+                if (IterationContext.ContainsToken(template, identifier))
+                {
+                    return (identifier, template!, k);
                 }
             }
         }
@@ -146,16 +177,18 @@ public static class FactIterationFanoutDeriver
         // Index 0 by construction.
         foreach (var identifier in identifiers)
         {
-            if (
-                IterationContext.ContainsToken(inv.FirstArgName, identifier)
-                || IterationContext.ContainsToken(inv.FirstArgTemplate, identifier)
-            )
+            if (IterationContext.ContainsToken(inv.FirstArgName, identifier))
             {
-                return (identifier, 0);
+                return (identifier, inv.FirstArgName!, 0);
+            }
+
+            if (IterationContext.ContainsToken(inv.FirstArgTemplate, identifier))
+            {
+                return (identifier, inv.FirstArgTemplate!, 0);
             }
         }
 
-        return ("", -1);
+        return ("", "", -1);
     }
 
     // A stored JSON string?[] (ArgumentNames / ArgumentTemplates) to its elements; empty for null/blank or a

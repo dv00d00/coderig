@@ -1070,7 +1070,8 @@ public static class Reads
                 EnclosingScopes: r.EnclosingScopes,
                 ArgumentTemplates: r.ArgumentTemplates,
                 ArgumentNames: r.ArgumentNames,
-                EnclosingGuards: r.EnclosingGuards
+                EnclosingGuards: r.EnclosingGuards,
+                LoopElementType: r.EnclosingLoopElementType
             ))
             .ToListAsync(cancellationToken);
 

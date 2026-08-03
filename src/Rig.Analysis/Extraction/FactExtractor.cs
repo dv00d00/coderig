@@ -1275,7 +1275,8 @@ internal static class FactExtractor
                 // the override-dispatch fan. False for every ordinary call. (Detected by the caller.)
                 NonVirtual: nonVirtual,
                 // CFG-derived control-dependence guard set of this call-site within its method (null = must-run).
-                EnclosingGuards: enclosingGuards
+                EnclosingGuards: enclosingGuards,
+                EnclosingLoopElementType: structural.LoopElementType
             )
         );
     }
@@ -1598,6 +1599,7 @@ internal static class FactExtractor
         // loop/try/scope and no member-access invocation around it) allocates nothing here.
         string? loopKind = null;
         string? loopDetail = null;
+        string? loopElementType = null;
         List<FactStructuralContext.EnclosingInvocation>? enclosing = null;
         List<string>? catchTypes = null;
         List<FactStructuralContext.EnclosingScope>? scopes = null;
@@ -1610,6 +1612,10 @@ internal static class FactExtractor
                 case ForEachStatementSyntax forEach when loopKind is null:
                     loopKind = "foreach";
                     loopDetail = $"{forEach.Identifier.ValueText} in {forEach.Expression}";
+                    // Roslyn resolves the element type directly, and correctly for the shapes a hand-rolled
+                    // "unwrap IEnumerable<T>" would get wrong: `var`, a duck-typed GetEnumerator, an array, an
+                    // explicit-cast foreach over a non-generic IEnumerable.
+                    loopElementType = symbolCache.TypeDisplay(model.GetForEachStatementInfo(forEach).ElementType);
                     break;
                 case ForStatementSyntax when loopKind is null:
                     loopKind = "for";
@@ -1638,6 +1644,11 @@ internal static class FactExtractor
                 case QueryExpressionSyntax query when loopKind is null && !IsQuerySourceEvaluatedOnce(query, invocation):
                     loopKind = "query";
                     loopDetail = $"{string.Join(", ", QueryRangeVariables(query))} in {query.FromClause.Expression}";
+                    // The PRIMARY from clause's range-variable type, matching loopDetail's source expression —
+                    // the thing actually being iterated. Anonymous projections resolve to an unnameable type
+                    // here (`from p in profiles.Select(x => new { .. })`), which is information, not a failure:
+                    // the element genuinely is not an entity.
+                    loopElementType = symbolCache.TypeDisplay(QueryElementType(query.FromClause, model));
                     break;
 
                 case InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax memberAccess } enclosingCall:
@@ -1655,7 +1666,12 @@ internal static class FactExtractor
                                 ? ""
                                 : symbolCache.TypeDisplay((model.GetSymbolInfo(memberAccess).Symbol as IMethodSymbol)?.ContainingType)
                                     ?? "",
-                            LambdaParameter: lambdaParameter
+                            LambdaParameter: lambdaParameter,
+                            // Gated on the same "is there a lambda at all" test as DeclaringType, so the hot
+                            // ancestor-walk path over ordinary calls resolves no extra symbols.
+                            LambdaParameterType: lambdaParameter.Length == 0
+                                ? ""
+                                : EnclosingLambdaParameterType(enclosingCall, invocation, model, symbolCache)
                         )
                     );
                     break;
@@ -1698,6 +1714,7 @@ internal static class FactExtractor
         return new StructuralContext(
             LoopKind: loopKind,
             LoopDetail: loopDetail,
+            LoopElementType: loopElementType,
             EnclosingInvocations: enclosing is null ? null : FactStructuralContext.EncodeInvocations(enclosing),
             CatchTypes: catchTypes is null ? null : FactStructuralContext.EncodeList(catchTypes),
             EnclosingScopes: scopes is null ? null : FactStructuralContext.EncodeScopes(scopes)
@@ -1731,6 +1748,76 @@ internal static class FactExtractor
         }
 
         return "";
+    }
+
+    // The static type of the FIRST parameter of the lambda ARGUMENT of `call` that lexically contains `node` —
+    // the ELEMENT type when `call` enumerates. Same span-containment pairing as EnclosingLambdaParameter, so a
+    // nested `xs.Select(x => ys.Where(y => Fetch(y)))` types Where from `y` and Select from `x`. Null when the
+    // parameter's symbol or type does not resolve (an error type, an untyped discard).
+    private static string EnclosingLambdaParameterType(
+        InvocationExpressionSyntax call,
+        SyntaxNode node,
+        SemanticModel model,
+        SymbolStringCache symbolCache
+    )
+    {
+        foreach (var argument in call.ArgumentList.Arguments)
+        {
+            if (!argument.Span.Contains(node.Span))
+            {
+                continue;
+            }
+
+            var parameter = argument.Expression switch
+            {
+                SimpleLambdaExpressionSyntax simple => simple.Parameter,
+                ParenthesizedLambdaExpressionSyntax parenthesized => parenthesized.ParameterList.Parameters.FirstOrDefault(),
+                _ => null,
+            };
+
+            return parameter is null
+                ? ""
+                : symbolCache.TypeDisplay((model.GetDeclaredSymbol(parameter) as IParameterSymbol)?.Type) ?? "";
+        }
+
+        return "";
+    }
+
+    // The element type a query's PRIMARY `from` clause binds: the explicitly declared type when the clause has
+    // one (`from ProfileEntity p in ..`), else the element type of the source collection. GetDeclaredSymbol on a
+    // from clause yields an IRangeVariableSymbol, which carries NO type, so the type must come from the source.
+    private static ITypeSymbol? QueryElementType(FromClauseSyntax from, SemanticModel model) =>
+        from.Type is not null ? model.GetTypeInfo(from.Type).Type : ElementTypeOf(model.GetTypeInfo(from.Expression).Type);
+
+    // The T of a collection type: an array's element type, or the type argument of the IEnumerable<T> it is or
+    // implements (which covers IQueryable<T>, List<T>, an LLBLGen entity collection, and any custom sequence
+    // alike, since they all implement it). Null for a non-generic IEnumerable and for unresolved types.
+    private static ITypeSymbol? ElementTypeOf(ITypeSymbol? collection)
+    {
+        if (collection is IArrayTypeSymbol array)
+        {
+            return array.ElementType;
+        }
+
+        if (collection is not INamedTypeSymbol named)
+        {
+            return null;
+        }
+
+        if (named.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
+        {
+            return named.TypeArguments.FirstOrDefault();
+        }
+
+        foreach (var candidate in named.AllInterfaces)
+        {
+            if (candidate.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
+            {
+                return candidate.TypeArguments.FirstOrDefault();
+            }
+        }
+
+        return null;
     }
 
     // True when `node` sits inside the query's PRIMARY `from` source expression — the one position in a
@@ -1816,7 +1903,8 @@ internal static class FactExtractor
         string? LoopDetail,
         string? EnclosingInvocations,
         string? CatchTypes,
-        string? EnclosingScopes = null
+        string? EnclosingScopes = null,
+        string? LoopElementType = null
     );
 
     // The encoded control-dependence guard set of an effect-bearing call-site `node`, within its enclosing

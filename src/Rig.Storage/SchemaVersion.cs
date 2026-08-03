@@ -10,7 +10,11 @@ public static class SchemaVersion
     // reference_facts / type_relation_facts / dispatch_facts / the run+assembly registry).
     // v1->v2: persist compiler-owned allocation facts.
     // v2->v3: persist structured allocation mechanism, cardinality, and shallow-size evidence.
-    public const int Index = 3;
+    // v3->v4: persist the resolved ELEMENT TYPE of an iteration context — reference_facts
+    //         .EnclosingLoopElementType, plus a 6th LambdaParameterType field inside the encoded
+    //         EnclosingInvocations. The semantic half of the self-keyed read question: the loop DETAIL is
+    //         source text and cannot say what a "row" is, and a lambda context has no detail worth reading.
+    public const int Index = 4;
 
     // Bump when the GRAPH shape changes (call_edges / dispatch_edges / nodes / the symbol_fts /
     // ref_target_fts virtual tables — all built by GraphMaterializer).

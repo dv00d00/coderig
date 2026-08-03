@@ -30,6 +30,9 @@ internal static class CrossMethodNPlusOneDataset
     //     \t witnessMethod \t witnessFile \t witnessLine \t witnessProvider \t witnessOperation
     //     \t witnessResource \t witnessDepth \t anchorGuards
     //     \t dispatchBasis \t dispatchVia \t dispatchDegree \t recursive
+    //     \t keyPath \t elementType
+    // keyPath and elementType are APPENDED rather than slotted beside keyToken so the 1..22 positions of the
+    // first dataset stay valid — the two runs are meant to be comparable column-for-column.
     internal static IReadOnlyList<string> TsvRows(
         IReadOnlyList<FactInvocation> invocations,
         FactGraphData graph,
@@ -101,7 +104,14 @@ internal static class CrossMethodNPlusOneDataset
                     Clean(f.WitnessDispatchBasis),
                     Clean(f.WitnessDispatchVia),
                     f.WitnessDispatchDegree,
-                    anchor.Recursive ? "1" : "0"
+                    anchor.Recursive ? "1" : "0",
+                    // The two discriminator columns: WHICH per-element value crosses the boundary (the member
+                    // path, not the bare loop variable), and WHAT is being iterated (the resolved element type).
+                    // Both exist so the self-keyed-vs-foreign-keyed question is measurable — the lexical test
+                    // reads the path, the semantic test reads the element type, and neither was expressible
+                    // from the bare token alone.
+                    Clean(anchor.KeyPath),
+                    Clean(anchor.ElementType)
                 )
             );
         }

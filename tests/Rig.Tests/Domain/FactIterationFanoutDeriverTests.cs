@@ -35,7 +35,8 @@ public sealed class FactIterationFanoutDeriverTests
         string? enclosingInvocations = null,
         string? guards = null,
         string callee = "M:N.Helper.Load(System.Int64)",
-        string caller = "M:N.Page.Render"
+        string caller = "M:N.Page.Render",
+        string? elementType = null
     ) =>
         new(
             Target: callee,
@@ -47,7 +48,8 @@ public sealed class FactIterationFanoutDeriverTests
             EnclosingInvocations: enclosingInvocations,
             ArgumentNames: argumentNames,
             ArgumentTemplates: argumentTemplates,
-            EnclosingGuards: guards
+            EnclosingGuards: guards,
+            LoopElementType: elementType
         );
 
     [Test]
@@ -189,5 +191,119 @@ public sealed class FactIterationFanoutDeriverTests
             .ShouldHaveSingleItem();
 
         fanout.Event.EnclosingGuards.ShouldBe("row.IsDirty");
+    }
+
+    // The KEY PATH is the whole argument surface, not the bare loop variable the token carries. This is the
+    // distinction the amortization question turns on: `p.PkProfile` (the element's OWN identity, cardinality N,
+    // cannot amortize) and `p.FkDepartmentCode` (a foreign reference into a bounded domain, may amortize) are the
+    // SAME token `p` and only differ in the member name. A token-only dataset cannot tell them apart at all.
+    [Test]
+    [Arguments("""["p.PkProfile"]""", "p.PkProfile")]
+    [Arguments("""["p.FkDepartmentCode"]""", "p.FkDepartmentCode")]
+    public void The_key_path_carries_the_member_not_just_the_element(string argumentNames, string expected)
+    {
+        var fanout = FactIterationFanoutDeriver
+            .Derive([Call(loopKind: "foreach", loopDetail: "p in profiles", argumentNames: argumentNames)], Rules)
+            .ShouldHaveSingleItem();
+
+        fanout.KeyToken.ShouldBe("p");
+        fanout.KeyPath.ShouldBe(expected);
+    }
+
+    // The leading '~' marking a REDUCED COMPOSITE surface is load-bearing elsewhere (FactEffectDeriver rejects a
+    // marked value as a resource identity), so the path must carry it through verbatim rather than clean it up.
+    [Test]
+    public void A_composite_argument_surface_keeps_its_reduced_mark()
+    {
+        var fanout = FactIterationFanoutDeriver
+            .Derive(
+                [Call(loopKind: "foreach", loopDetail: "s in names", argumentNames: """["~NominalCodeFields.Name|s.Trim"]""")],
+                Rules
+            )
+            .ShouldHaveSingleItem();
+
+        fanout.KeyToken.ShouldBe("s");
+        fanout.KeyPath.ShouldBe("~NominalCodeFields.Name|s.Trim");
+    }
+
+    // A key matched only through the TEMPLATE has no member path; the template itself is then the surface the
+    // match was made on, and reporting "" would lose the only evidence there is.
+    [Test]
+    public void A_template_match_reports_the_template_as_the_path()
+    {
+        var fanout = FactIterationFanoutDeriver
+            .Derive([Call(loopKind: "foreach", loopDetail: "id in ids", argumentTemplates: """["/var/{id}"]""")], Rules)
+            .ShouldHaveSingleItem();
+
+        fanout.KeyPath.ShouldBe("/var/{id}");
+    }
+
+    [Test]
+    public void A_keyless_anchor_has_no_key_path() =>
+        FactIterationFanoutDeriver.Derive([Call(loopKind: "while", loopDetail: "while")], Rules).ShouldHaveSingleItem().KeyPath.ShouldBe("");
+
+    // The loop's element TYPE, which the source-text detail cannot supply: "row in rows" says nothing about what
+    // a row is. This is the semantic half of the self-keyed test.
+    [Test]
+    public void A_loop_carries_its_resolved_element_type()
+    {
+        var fanout = FactIterationFanoutDeriver
+            .Derive(
+                [Call(loopKind: "foreach", loopDetail: "p in profiles", argumentNames: """["p.PkProfile"]""", elementType: "N.ProfileEntity")],
+                Rules
+            )
+            .ShouldHaveSingleItem();
+
+        fanout.ElementType.ShouldBe("N.ProfileEntity");
+    }
+
+    // For a lambda anchor the element type is the ONLY iteration evidence there is: IteratedSource degenerates to
+    // the enumerating method name, so a semantic self-keyed test has nothing else to read.
+    [Test]
+    public void A_lambda_anchor_takes_its_element_type_from_the_lambda_parameter()
+    {
+        var enclosing = FactStructuralContext.EncodeInvocations([
+            new FactStructuralContext.EnclosingInvocation(
+                ReceiverText: "profiles",
+                ReceiverType: "System.Collections.Generic.IEnumerable`1",
+                MethodName: "Select",
+                DeclaringType: "System.Linq.Enumerable",
+                LambdaParameter: "p",
+                LambdaParameterType: "N.ProfileEntity"
+            ),
+        ]);
+
+        var fanout = FactIterationFanoutDeriver
+            .Derive([Call(loopKind: null, loopDetail: null, argumentNames: """["p.PkProfile"]""", enclosingInvocations: enclosing)], Rules)
+            .ShouldHaveSingleItem();
+
+        fanout.IterationKind.ShouldBe("lambda");
+        fanout.IteratedSource.ShouldBe("Select"); // useless on its own — hence the element type
+        fanout.ElementType.ShouldBe("N.ProfileEntity");
+        fanout.KeyPath.ShouldBe("p.PkProfile");
+    }
+
+    // An ANONYMOUS projection has no nameable element type, and that is the case the lexical key path exists for
+    // (Admin/Profile/Home2: `select new { p.PkProfile, l.PkLicense }` then `ProfileCache.New(p.PkProfile)`). The
+    // two signals are therefore not redundant — one fires where the other structurally cannot.
+    [Test]
+    public void An_anonymous_projection_has_no_element_type_but_still_has_a_key_path()
+    {
+        var fanout = FactIterationFanoutDeriver
+            .Derive(
+                [
+                    Call(
+                        loopKind: "query",
+                        loopDetail: "p, profile in profiles.ToList().DistinctOn(p => p.PkProfile)",
+                        argumentNames: """["p.PkProfile"]""",
+                        elementType: null
+                    ),
+                ],
+                Rules
+            )
+            .ShouldHaveSingleItem();
+
+        fanout.ElementType.ShouldBe("");
+        fanout.KeyPath.ShouldBe("p.PkProfile");
     }
 }
