@@ -266,6 +266,14 @@ public static class RuleSetLoader
             ResourceSpan = Concat(a.ResourceSpan, b.ResourceSpan),
             SerializationHazard = Concat(a.SerializationHazard, b.SerializationHazard),
             NPlusOne = Concat(a.NPlusOne, b.NPlusOne),
+            // Amplification (looped_effect display scope) concatenates like every other observation list, so a
+            // project overlay can APPEND providers to the shipped network-crossing default without restating it.
+            Amplification = Concat(a.Amplification, b.Amplification),
+            // EnumeratingMethods was MISSING here: two non-null observations sections merged to a section with
+            // EnumeratingMethods == null, silently dropping the builtin enumerating-lambda iteration contexts as
+            // soon as ANY overlay declared an `observations` key. Latent so far (no shipped overlay declares one),
+            // but the same trap the line above would have walked into.
+            EnumeratingMethods = Concat(a.EnumeratingMethods, b.EnumeratingMethods),
         };
     }
 
