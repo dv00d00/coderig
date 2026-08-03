@@ -229,6 +229,13 @@ internal sealed record SerializationHazardObservationRule(IReadOnlyList<string>?
 // discriminator over plain looped_effect. Projected to FactNPlusOneRule. Annotate-only.
 internal sealed record NPlusOneObservationRule(IReadOnlyList<string>? Providers, IReadOnlyList<string>? Operations);
 
+// A higher-order method that ENUMERATES its receiver, so its lambda body runs once per element and an
+// effect inside it is amplified exactly as a loop body is (`ids.Select(id => Fetch(id))`).
+// `declaringTypes` gates on the resolved target's containing type — the one dimension separating these
+// from SINGLE-SHOT lambda takers (Option.Map, Try, Lazy, Task.Run), which must not read as loops.
+// Projected to FactEnumeratingMethodRule. Annotate-only.
+internal sealed record EnumeratingMethodObservationRule(IReadOnlyList<string>? Methods, IReadOnlyList<string>? DeclaringTypes);
+
 internal sealed class AnalysisRulesDocument
 {
     public EntryPointRulesDocument? EntryPoints { get; set; }
@@ -303,6 +310,8 @@ internal sealed class ObservationsSection
     public List<SerializationHazardObservationRule>? SerializationHazard { get; set; }
 
     public List<NPlusOneObservationRule>? NPlusOne { get; set; }
+
+    public List<EnumeratingMethodObservationRule>? EnumeratingMethods { get; set; }
 }
 
 internal sealed class ProjectsSection

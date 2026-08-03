@@ -13,7 +13,7 @@ namespace Rig.Tests.Analysis;
 
 public sealed class CoreAllocationEffectTests
 {
-    private static readonly FactObservationRules EmptyObservations = new([], [], [], [], [], []);
+    private static readonly FactObservationRules EmptyObservations = new([], [], [], [], [], [], []);
 
     private static FactExtractionResult Extract(string source)
     {

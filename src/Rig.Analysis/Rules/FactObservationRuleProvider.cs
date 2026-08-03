@@ -46,7 +46,18 @@ internal static class FactObservationRuleProvider
         var nPlusOne = (doc.Observations?.NPlusOne ?? [])
             .Select(r => new FactNPlusOneRule(Providers: r.Providers ?? [], Operations: r.Operations ?? []))
             .ToArray();
+        var enumeratingMethods = (doc.Observations?.EnumeratingMethods ?? [])
+            .Select(r => new FactEnumeratingMethodRule(Methods: r.Methods ?? [], DeclaringTypes: r.DeclaringTypes ?? []))
+            .ToArray();
 
-        return new FactObservationRules(resilience, concurrency, ParallelFanout, resourceSpan, serializationHazard, nPlusOne);
+        return new FactObservationRules(
+            resilience,
+            concurrency,
+            ParallelFanout,
+            resourceSpan,
+            serializationHazard,
+            nPlusOne,
+            enumeratingMethods
+        );
     }
 }

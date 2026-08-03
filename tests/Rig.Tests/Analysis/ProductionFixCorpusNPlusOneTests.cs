@@ -64,4 +64,240 @@ public sealed class ProductionFixCorpusNPlusOneTests
         fix.Observations!.ShouldContain(o => o.Type == "looped_effect");
         result.ObservationsIn("ReadVars_Fix", "n_plus_1").ShouldBeEmpty();
     }
+
+    // The iteration context is not always a loop STATEMENT. MedDBase Admin/Profile/Home2 (trace
+    // 35bcafca0907910d3106c460f5d0afc7, 11,461 single-row PROFILE selects / 35s of DB time in one request)
+    // amplifies inside a LINQ QUERY EXPRESSION: `let profile = ProfileCache.New(p.PkProfile)` runs once per
+    // element of the source sequence, so the read is per-iteration with a key that varies — the identical
+    // defect shape to the #2892 foreach, expressed in query syntax. A `let` clause has no
+    // ForEach/For/WhileStatementSyntax ancestor, so the loop-statement-only ancestor walk saw no iteration
+    // context at all and NEITHER looped_effect NOR n_plus_1 fired. The constant-key variant must stay silent
+    // for the same hoistability reason as the foreach fix above.
+    [Test]
+    public void Query_expression_let_clause_is_an_iteration_context_varying_key_fires_n_plus_1()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace Admin
+            {
+                public sealed class ProfileHome
+                {
+                    // BUG (Home2): the key (id) varies per element -> one read per element -> N+1.
+                    public static System.Collections.Generic.List<string> Load_Bug(
+                        System.Net.Http.HttpClient client,
+                        System.Collections.Generic.IEnumerable<int> ids)
+                    {
+                        var q = from id in ids
+                                let body = client.GetStringAsync($"/profile/{id}").Result
+                                select body;
+                        return System.Linq.Enumerable.ToList(q);
+                    }
+
+                    // FIX: same query shape, CONSTANT key -> hoistable -> NOT an N+1.
+                    public static System.Collections.Generic.List<string> Load_Fix(
+                        System.Net.Http.HttpClient client,
+                        System.Collections.Generic.IEnumerable<int> ids)
+                    {
+                        var q = from id in ids
+                                let body = client.GetStringAsync("/profiles/all").Result
+                                select body;
+                        return System.Linq.Enumerable.ToList(q);
+                    }
+                }
+            }
+            """
+        );
+
+        var bug = result.EffectsIn("Load_Bug").Single(e => e.Provider == "http");
+        bug.Observations.ShouldNotBeNull();
+        bug.Observations!.ShouldContain(o => o.Type == "looped_effect");
+        bug.Observations!.ShouldContain(o => o.Type == "n_plus_1");
+
+        var fix = result.EffectsIn("Load_Fix").Single(e => e.Provider == "http");
+        fix.Observations.ShouldNotBeNull();
+        fix.Observations!.ShouldContain(o => o.Type == "looped_effect");
+        result.ObservationsIn("Load_Fix", "n_plus_1").ShouldBeEmpty();
+    }
+
+    // The PRIMARY `from` source is the one position in a query expression that is evaluated ONCE, so a read
+    // there is not amplified and must report NEITHER looped_effect NOR n_plus_1. Home2's real source
+    // expression is exactly this shape (`from p in profiles.ToList().DistinctOn(..)`) — treating a query as
+    // a blanket iteration context would misreport that single batched fetch as the per-element one, which
+    // would be precisely backwards: it is the FIX shape, not the bug.
+    [Test]
+    public void A_read_in_the_primary_from_source_runs_once_and_is_not_reported_as_looped()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace Admin
+            {
+                public sealed class BatchedLoad
+                {
+                    public static System.Collections.Generic.List<string> Load_Once(System.Net.Http.HttpClient client)
+                    {
+                        var q = from row in client.GetStringAsync("/profiles/all").Result.Split(',')
+                                select row.Trim();
+                        return System.Linq.Enumerable.ToList(q);
+                    }
+                }
+            }
+            """
+        );
+
+        result.EffectsIn("Load_Once").ShouldContain(e => e.Provider == "http");
+        result.ObservationsIn("Load_Once", "looped_effect").ShouldBeEmpty();
+        result.ObservationsIn("Load_Once", "n_plus_1").ShouldBeEmpty();
+    }
+
+    // A query rebinds EVERY variable it introduces, not just the `from` one — so a key built from a `let`
+    // is amplified exactly as much as one built from the range variable. This is why the iteration
+    // identifier is a SET rather than the single foreach variable; the finding should name `key`, the
+    // variable that actually varies, not the `from` variable that happens to be first.
+    [Test]
+    public void A_key_derived_from_a_let_variable_also_varies_per_element()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace Admin
+            {
+                public sealed class LetKeyed
+                {
+                    public static System.Collections.Generic.List<string> Load_Bug(
+                        System.Net.Http.HttpClient client,
+                        System.Collections.Generic.IEnumerable<int> ids)
+                    {
+                        var q = from id in ids
+                                let key = id + 1
+                                let body = client.GetStringAsync($"/profile/{key}").Result
+                                select body;
+                        return System.Linq.Enumerable.ToList(q);
+                    }
+                }
+            }
+            """
+        );
+
+        var nPlusOne = result.ObservationsIn("Load_Bug", "n_plus_1").ShouldHaveSingleItem();
+        nPlusOne.Context.ShouldBe("key");
+    }
+
+    // for/while/do amplify just as much, but carry no iteration identifier, so the varying-key
+    // discriminator has nothing to match. Deliberate: they stay covered by looped_effect alone rather than
+    // producing a keyless n_plus_1 guess. `do` is included because the ancestor walk originally omitted
+    // DoStatementSyntax entirely — a read in a do/while body reported no loop context at all.
+    [Test]
+    public void A_do_while_body_is_a_loop_context_but_yields_no_keyless_n_plus_1()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace Admin
+            {
+                public sealed class Paged
+                {
+                    public static void Drain(System.Net.Http.HttpClient client, int pages)
+                    {
+                        var page = 0;
+                        do
+                        {
+                            var body = client.GetStringAsync($"/page/{page}").Result;
+                            page++;
+                        }
+                        while (page < pages);
+                    }
+                }
+            }
+            """
+        );
+
+        result.ObservationsIn("Drain", "looped_effect").ShouldNotBeEmpty();
+        result.ObservationsIn("Drain", "n_plus_1").ShouldBeEmpty();
+    }
+
+    // Method-syntax LINQ is the same amplification with no loop STATEMENT and no query clause: the lambda
+    // handed to Select runs once per element. On MedDBase this shape outnumbers the query-syntax one ~4:1
+    // (193 vs 46 `Cache.New` call sites), so it is where most of the real read amplification lives.
+    [Test]
+    public void An_enumerating_lambda_is_an_iteration_context_varying_key_fires_n_plus_1()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace Admin
+            {
+                public sealed class Projected
+                {
+                    public static System.Collections.Generic.List<string> Load_Bug(
+                        System.Net.Http.HttpClient client,
+                        System.Collections.Generic.IEnumerable<int> ids)
+                    {
+                        return System.Linq.Enumerable.ToList(
+                            System.Linq.Enumerable.Select(ids, id => client.GetStringAsync($"/profile/{id}").Result));
+                    }
+
+                    public static System.Collections.Generic.List<string> Load_Fix(
+                        System.Net.Http.HttpClient client,
+                        System.Collections.Generic.IEnumerable<int> ids)
+                    {
+                        return System.Linq.Enumerable.ToList(
+                            System.Linq.Enumerable.Select(ids, id => client.GetStringAsync("/profiles/all").Result));
+                    }
+                }
+            }
+            """
+        );
+
+        var nPlusOne = result.ObservationsIn("Load_Bug", "n_plus_1").ShouldHaveSingleItem();
+        nPlusOne.Context.ShouldBe("id");
+
+        result.ObservationsIn("Load_Fix", "looped_effect").ShouldNotBeEmpty();
+        result.ObservationsIn("Load_Fix", "n_plus_1").ShouldBeEmpty();
+    }
+
+    // THE false-positive guard, and the reason the gate is the resolved DECLARING type rather than the
+    // method name: a single-shot lambda taker applies its function at most once, so an effect inside it is
+    // not amplified. LanguageExt's Option.Map is the case that matters here — MedDBase calls Map/Match/Bind
+    // pervasively, so a name-only gate ("Select"/"Map" anywhere) would bury the real findings. The custom
+    // `Select` proves the same point from the other side: the right NAME on the wrong declaring type must
+    // still not fire.
+    [Test]
+    public void Single_shot_lambda_takers_are_not_iteration_contexts()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            ProductionFixCorpus.LanguageExtStub
+                + """
+                namespace Admin
+                {
+                    public sealed class SingleShot
+                    {
+                        public static void Via_Option_Map(System.Net.Http.HttpClient client, LanguageExt.Option<int> id)
+                        {
+                            id.Map(x => client.GetStringAsync($"/profile/{x}").Result);
+                        }
+                    }
+
+                    public sealed class Box<A>
+                    {
+                        public A Value;
+                        // Right name, wrong declaring type — not System.Linq.Enumerable, so not enumerating.
+                        public B Select<B>(System.Func<A, B> f) => f(Value);
+                    }
+
+                    public sealed class CustomSelect
+                    {
+                        public static void Via_Custom_Select(System.Net.Http.HttpClient client, Box<int> box)
+                        {
+                            box.Select(x => client.GetStringAsync($"/profile/{x}").Result);
+                        }
+                    }
+                }
+                """
+        );
+
+        result.EffectsIn("Via_Option_Map").ShouldContain(e => e.Provider == "http");
+        result.ObservationsIn("Via_Option_Map", "looped_effect").ShouldBeEmpty();
+        result.ObservationsIn("Via_Option_Map", "n_plus_1").ShouldBeEmpty();
+
+        result.EffectsIn("Via_Custom_Select").ShouldContain(e => e.Provider == "http");
+        result.ObservationsIn("Via_Custom_Select", "looped_effect").ShouldBeEmpty();
+        result.ObservationsIn("Via_Custom_Select", "n_plus_1").ShouldBeEmpty();
+    }
 }

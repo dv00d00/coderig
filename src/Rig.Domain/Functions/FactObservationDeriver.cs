@@ -42,14 +42,42 @@ public static class FactObservationDeriver
     {
         var observations = new List<EffectObservationInfo>();
 
-        // looped_effect — the effect is lexically inside a loop (nearest enclosing loop).
-        if (loopKind is not null)
+        // The enumerating-lambda iteration context: the innermost enclosing call that the rules declare
+        // ENUMERATES its receiver and whose lambda argument contains this effect. `ids.Select(id =>
+        // Fetch(id))` amplifies exactly as `foreach (var id in ids) Fetch(id)` does, but has no loop
+        // STATEMENT ancestor, so the loop facts alone report no iteration at all. Rule-gated on the
+        // resolved declaring type, which is what keeps single-shot lambda takers (Option.Map, Try, Lazy,
+        // Task.Run) out. Innermost-first; first match wins, mirroring the other enclosing-invocation scans.
+        var enumerating = enclosingInvocations.FirstOrDefault(e =>
+            !string.IsNullOrEmpty(e.LambdaParameter)
+            && rules.EnumeratingMethods.Any(r =>
+                (r.Methods.Count == 0 || r.Methods.Contains(e.MethodName, StringComparer.Ordinal))
+                && (r.DeclaringTypes.Count == 0 || r.DeclaringTypes.Contains(e.DeclaringType, StringComparer.Ordinal))
+            )
+        );
+
+        // EnclosingInvocation is a record STRUCT, so a FirstOrDefault miss yields `default` — where the
+        // positional `= ""` defaults do NOT apply and every string field is null. Normalize once here
+        // rather than null-guarding each use.
+        var enumeratingParameter = enumerating.LambdaParameter ?? "";
+
+        // A loop STATEMENT wins the reported kind when both are present (it is the coarser, outer context
+        // and keeps existing output stable), but the identifiers UNION: in `foreach (var a in xs) ys.Select(y
+        // => Fetch(y))` both `a` and `y` are genuinely rebound per iteration, so a key built from either is
+        // amplified. Taking only the loop's identifier would miss the `y`-keyed read entirely.
+        var iterationKind = loopKind ?? (enumeratingParameter.Length > 0 ? "lambda" : null);
+        var iterationDetail =
+            loopDetail ?? (enumeratingParameter.Length > 0 ? $"{enumeratingParameter} in {enumerating.MethodName}" : null);
+
+        // looped_effect — the effect is lexically inside an iteration context (nearest enclosing loop, or a
+        // rule-declared enumerating lambda).
+        if (iterationKind is not null)
         {
             observations.Add(
                 new EffectObservationInfo(
                     Type: "looped_effect",
-                    Context: loopKind,
-                    Detail: loopDetail ?? loopKind,
+                    Context: iterationKind,
+                    Detail: iterationDetail ?? iterationKind,
                     Confidence: "high",
                     Basis: "compilation",
                     Reason: "effect_inside_loop"
@@ -227,13 +255,20 @@ public static class FactObservationDeriver
         // CONSTANT is hoistable and is NOT an n+1, so it must not fire. The discriminator is the loop
         // identifier (the foreach iteration variable) appearing in any of the call's argument surfaces
         // (first-arg name/template + all positional arg names/templates — an interpolated `$"/var/{id}"`
-        // reduces to "/var/{id}", preserving the {id} token). ANNOTATE-only. v1 fires only for foreach,
-        // whose loopDetail carries the identifier ("{identifier} in {expression}"); for/while loops have
-        // no identifier and are not matched here (looped_effect still covers them).
-        if (provider is not null && loopKind is not null && rules.NPlusOne.Count > 0)
+        // reduces to "/var/{id}", preserving the {id} token). ANNOTATE-only.
+        //
+        // The identifier set spans every iteration context that BINDS a name: a foreach's iteration
+        // variable, a query expression's range variables, and an enumerating lambda's parameters. They are
+        // unioned rather than preferred in order, because a lambda nested in a loop is rebound by both and
+        // a key from either varies. for/while/do bind nothing, so they carry no candidate and stay covered
+        // by looped_effect alone — deliberately, rather than emitting a keyless n_plus_1 guess.
+        if (provider is not null && iterationKind is not null && rules.NPlusOne.Count > 0)
         {
-            var loopIdentifier = ForeachIdentifier(loopKind, loopDetail);
-            if (loopIdentifier is not null)
+            var iterationIdentifiers = IterationIdentifiers(loopKind, loopDetail)
+                .Concat(SplitIdentifiers(enumeratingParameter))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            if (iterationIdentifiers.Count > 0)
             {
                 foreach (var rule in rules.NPlusOne)
                 {
@@ -247,13 +282,21 @@ public static class FactObservationDeriver
                         continue;
                     }
 
-                    if (KeyVariesWith(loopIdentifier, firstArgName, firstArgTemplate, argumentNames, argumentTemplates))
+                    // ANY per-iteration identifier in the key is enough — a query expression rebinds every
+                    // variable it introduces, so a key built from a `let` is just as amplified as one built
+                    // from the `from`. The matched identifier becomes the Context so the finding names the
+                    // variable that actually varies.
+                    var varying = iterationIdentifiers.FirstOrDefault(id =>
+                        KeyVariesWith(id, firstArgName, firstArgTemplate, argumentNames, argumentTemplates)
+                    );
+
+                    if (varying is not null)
                     {
                         observations.Add(
                             new EffectObservationInfo(
                                 Type: "n_plus_1",
-                                Context: loopIdentifier,
-                                Detail: loopDetail ?? loopKind,
+                                Context: varying,
+                                Detail: iterationDetail ?? iterationKind,
                                 Confidence: "high",
                                 Basis: "compilation",
                                 Reason: "looped_read_with_varying_key"
@@ -268,25 +311,33 @@ public static class FactObservationDeriver
         return observations;
     }
 
-    // The foreach iteration variable from a loopDetail of the form "{identifier} in {expression}" (e.g.
-    // "id in ids" -> "id"). Null for non-foreach loops (for/while carry no identifier) or a malformed
-    // detail — the n_plus_1 v1 fires only when a loop identifier is present.
-    private static string? ForeachIdentifier(string loopKind, string? loopDetail)
+    // The identifiers rebound on every iteration, parsed from a loopDetail of the form
+    // "{identifier}[, {identifier}…] in {expression}" — a `foreach` contributes its single iteration
+    // variable ("id in ids" -> ["id"]), a `query` contributes every range variable the query binds
+    // ("p, profile in profiles" -> ["p", "profile"]). Empty for `for`/`while`/`do`, which carry no
+    // identifier: their amplification is real but the varying-key discriminator has nothing to match, so
+    // they stay covered by looped_effect alone rather than producing a keyless n_plus_1 guess.
+    private static IReadOnlyList<string> IterationIdentifiers(string? loopKind, string? loopDetail)
     {
-        if (!string.Equals(loopKind, "foreach", StringComparison.Ordinal) || string.IsNullOrEmpty(loopDetail))
+        if (loopKind is not ("foreach" or "query") || string.IsNullOrEmpty(loopDetail))
         {
-            return null;
+            return [];
         }
 
         var inMarker = loopDetail!.IndexOf(" in ", StringComparison.Ordinal);
         if (inMarker <= 0)
         {
-            return null;
+            return [];
         }
 
-        var identifier = loopDetail.Substring(startIndex: 0, length: inMarker).Trim();
-        return identifier.Length == 0 ? null : identifier;
+        return SplitIdentifiers(loopDetail.Substring(startIndex: 0, length: inMarker));
     }
+
+    // A comma-separated identifier list ("p, profile", a lambda's "x, i") to its trimmed, non-empty parts.
+    private static IReadOnlyList<string> SplitIdentifiers(string? identifiers) =>
+        string.IsNullOrEmpty(identifiers)
+            ? []
+            : identifiers!.Split(',').Select(part => part.Trim()).Where(part => part.Length > 0).ToList();
 
     // True when the loop identifier appears as a whole-word token in any of the read's key-argument
     // surfaces: the first-argument member/identifier path, the first-argument string/interp template, or

@@ -51,8 +51,12 @@ public sealed record ReferenceFact(
     // --- Structural-context facts for the stage-2 observation deriver (P1c → P2b). Rule-agnostic
     //     raw structure mirroring the ancestor walks in the Roslyn EffectObservationExtractor;
     //     captured for invocation refs only (observations attach to invocation effects). ---
-    // Nearest enclosing loop kind ("foreach"|"for"|"while") and its detail string (for foreach,
-    // "{identifier} in {expression}"). Feeds looped_effect. Null when not inside a loop.
+    // Nearest enclosing iteration context ("foreach"|"for"|"while"|"do"|"query") and its detail string.
+    // For the identifier-bearing kinds the detail is "{identifier}[, {identifier}…] in {expression}":
+    // `foreach` contributes its one iteration variable, `query` (a LINQ query expression, whose body
+    // clauses run per element) contributes every range variable the query binds. Those identifiers are the
+    // n_plus_1 varying-key discriminator; for/while/do carry no identifier and feed looped_effect only.
+    // Null when not inside an iteration context.
     string? EnclosingLoopKind = null,
     string? EnclosingLoopDetail = null,
     // The chain of enclosing invocations (ancestor InvocationExpressions, innermost-first), each
@@ -846,13 +850,27 @@ public sealed record FactNPlusOneRule(
     IReadOnlyList<string> Operations // effect operations that count as a read (e.g. "GET", "read"); empty = any
 );
 
+// A higher-order method that ENUMERATES its receiver, so the lambda it is handed runs once per element:
+// `ids.Select(id => Fetch(id))` is the same read amplification as a foreach over `ids`, written in method
+// syntax. This is what separates an iterating lambda from a SINGLE-SHOT one — `Option.Map`, `Try`, `Lazy`,
+// `Task.Run` all take a lambda too, and treating those as loops would flood a LanguageExt-heavy codebase
+// with false positives. The gate is the resolved target's DECLARING type (an extension method in reduced
+// form declares on "System.Linq.Enumerable" regardless of the receiver's own type), which is both exact
+// and receiver-shape independent. Both lists must match; empty DeclaringTypes means "any declaring type"
+// (not recommended — it is the single dimension keeping single-shot lambdas out).
+public sealed record FactEnumeratingMethodRule(
+    IReadOnlyList<string> Methods, // enumerating method names (e.g. "Select", "Where", "ForEach")
+    IReadOnlyList<string> DeclaringTypes // FQNs declaring them (e.g. "System.Linq.Enumerable"); empty = any
+);
+
 public sealed record FactObservationRules(
     IReadOnlyList<FactResilienceRetryRule> ResilienceRetry,
     IReadOnlyList<FactConcurrencyHandledRule> ConcurrencyHandled,
     IReadOnlyList<FactParallelFanoutRule> ParallelFanout,
     IReadOnlyList<FactResourceSpanRule> ResourceSpan,
     IReadOnlyList<FactSerializationHazardRule> SerializationHazard,
-    IReadOnlyList<FactNPlusOneRule> NPlusOne
+    IReadOnlyList<FactNPlusOneRule> NPlusOne,
+    IReadOnlyList<FactEnumeratingMethodRule> EnumeratingMethods
 );
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).

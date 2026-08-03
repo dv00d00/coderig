@@ -1971,6 +1971,105 @@
         ],
         "operations": ["GET", "read", "row_read", "query", "fetch", "search", "index_read"]
       }
+    ],
+    "enumeratingMethods": [
+      {
+        "methods": [
+          "Select",
+          "SelectMany",
+          "Where",
+          "ForEach",
+          "Sum",
+          "Average",
+          "Min",
+          "Max",
+          "Count",
+          "Any",
+          "All",
+          "First",
+          "FirstOrDefault",
+          "Single",
+          "SingleOrDefault",
+          "Last",
+          "LastOrDefault",
+          "Aggregate",
+          "OrderBy",
+          "OrderByDescending",
+          "ThenBy",
+          "ThenByDescending",
+          "GroupBy",
+          "ToDictionary",
+          "ToLookup",
+          "TakeWhile",
+          "SkipWhile",
+          "DistinctBy",
+          "MaxBy",
+          "MinBy",
+          "Zip",
+          "Join",
+          "GroupJoin",
+          "LongCount",
+          "UnionBy",
+          "IntersectBy",
+          "ExceptBy",
+          "CountBy",
+          "AggregateBy",
+          "SelectAwait",
+          "WhereAwait"
+        ],
+        "declaringTypes": [
+          "System.Linq.Enumerable",
+          "System.Linq.Queryable",
+          "System.Linq.ParallelEnumerable",
+          "System.Linq.ImmutableArrayExtensions",
+          "System.Linq.AsyncEnumerable"
+        ]
+      },
+      {
+        "methods": [
+          "ForEach",
+          "ConvertAll",
+          "Find",
+          "FindAll",
+          "FindLast",
+          "FindIndex",
+          "FindLastIndex",
+          "Exists",
+          "TrueForAll",
+          "RemoveAll",
+          "Sort",
+          "Select",
+          "Where"
+        ],
+        "declaringTypes": [
+          "System.Collections.Generic.List<T>",
+          "System.Array",
+          "System.Collections.Immutable.ImmutableList<T>",
+          "System.Collections.Immutable.ImmutableArray<T>",
+          "System.Threading.Tasks.Parallel"
+        ]
+      },
+      {
+        "methods": ["Map", "Select", "Filter", "Where", "Iter", "Fold", "Bind", "Exists", "ForAll", "SelectMany", "Sum", "Average", "Count"],
+        "declaringTypes": [
+          "LanguageExt.Seq<A>",
+          "LanguageExt.Lst<A>",
+          "LanguageExt.Arr<A>",
+          "LanguageExt.Set<A>",
+          "LanguageExt.Set<OrdA, A>",
+          "LanguageExt.HashSet<A>",
+          "LanguageExt.HashSet<EqA, A>",
+          "LanguageExt.Map<K, V>",
+          "LanguageExt.Map<OrdK, K, V>",
+          "LanguageExt.HashMap<K, V>",
+          "LanguageExt.HashMap<EqK, K, V>",
+          "LanguageExt.Que<A>",
+          "LanguageExt.Stck<A>",
+          "LanguageExt.MapExtensions",
+          "LanguageExt.SeqExtensions",
+          "LanguageExt.EnumerableExtensions"
+        ]
+      }
     ]
   },
   "effectEmoji": {

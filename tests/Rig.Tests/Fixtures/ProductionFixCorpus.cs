@@ -45,6 +45,10 @@ public static class ProductionFixCorpus
             public struct Option<A>
             {
                 public bool IsSome => false;
+                // Single-shot: Map applies f to AT MOST ONE value, so an effect in the lambda is NOT
+                // amplified. The enumerating-method gate must exclude it — a LanguageExt-heavy codebase
+                // calls Map/Match/Bind everywhere, so admitting them would swamp n_plus_1 with noise.
+                public Option<B> Map<B>(System.Func<A, B> f) => default;
             }
         }
         """;

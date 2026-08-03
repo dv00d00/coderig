@@ -1563,12 +1563,42 @@ internal static class FactExtractor
                     loopDetail = "while";
                     break;
 
-                case InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax memberAccess }:
+                case DoStatementSyntax when loopKind is null:
+                    loopKind = "do";
+                    loopDetail = "do";
+                    break;
+
+                // A LINQ query expression iterates its source, so a call in a query BODY clause (let /
+                // where / select / orderby / secondary from) runs once per element — the same
+                // read-amplification surface as a loop statement, in query syntax. The `when` guard
+                // excludes the PRIMARY `from` source expression, which is evaluated ONCE (`from p in
+                // profiles.ToList()` — the ToList runs a single time, not per element); a false guard
+                // simply leaves loopKind null so the walk keeps looking at OUTER queries/loops.
+                // loopDetail keeps foreach's "{identifier} in {expression}" shape so renderers and the
+                // n_plus_1 identifier parser need no special case — with the comma-joined range
+                // variables in the identifier position, since EVERY variable a query binds (from, let,
+                // join, into) is rebound per element and can therefore carry a per-element key.
+                case QueryExpressionSyntax query when loopKind is null && !IsQuerySourceEvaluatedOnce(query, invocation):
+                    loopKind = "query";
+                    loopDetail = $"{string.Join(", ", QueryRangeVariables(query))} in {query.FromClause.Expression}";
+                    break;
+
+                case InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax memberAccess } enclosingCall:
+                    // The lambda parameter is pure syntax, so it is resolved first and used to gate the
+                    // one symbol resolution here: DeclaringType only ever feeds the enumerating-method
+                    // gate, which requires a lambda, so a call that does not wrap the effect in a lambda
+                    // argument (the overwhelming majority on this hot ancestor-walk path) skips it.
+                    var lambdaParameter = EnclosingLambdaParameter(enclosingCall, invocation);
                     (enclosing ??= []).Add(
                         new FactStructuralContext.EnclosingInvocation(
                             ReceiverText: memberAccess.Expression.ToString(),
                             ReceiverType: EnclosingReceiverType(memberAccess.Expression, model, symbolCache),
-                            MethodName: memberAccess.Name.Identifier.ValueText
+                            MethodName: memberAccess.Name.Identifier.ValueText,
+                            DeclaringType: lambdaParameter.Length == 0
+                                ? ""
+                                : symbolCache.TypeDisplay((model.GetSymbolInfo(memberAccess).Symbol as IMethodSymbol)?.ContainingType)
+                                    ?? "",
+                            LambdaParameter: lambdaParameter
                         )
                     );
                     break;
@@ -1615,6 +1645,79 @@ internal static class FactExtractor
             CatchTypes: catchTypes is null ? null : FactStructuralContext.EncodeList(catchTypes),
             EnclosingScopes: scopes is null ? null : FactStructuralContext.EncodeScopes(scopes)
         );
+    }
+
+    // The comma-joined parameters of the lambda ARGUMENT of `call` that lexically contains `node`, or ""
+    // when the effect is not inside a lambda handed to this call. Span containment identifies the right
+    // argument directly, so nested higher-order calls pair correctly without tracking walk state:
+    // `xs.Select(x => ys.Where(y => Fetch(y)))` gives Where→"y" and Select→"x", each from its own frame.
+    // All parameters are kept (not just the first) because the element is not always in position 0 —
+    // `Select((x, i) => …)` varies in both, and an `Aggregate((acc, x) => …)` element sits second.
+    private static string EnclosingLambdaParameter(InvocationExpressionSyntax call, SyntaxNode node)
+    {
+        foreach (var argument in call.ArgumentList.Arguments)
+        {
+            if (!argument.Span.Contains(node.Span))
+            {
+                continue;
+            }
+
+            return argument.Expression switch
+            {
+                SimpleLambdaExpressionSyntax simple => simple.Parameter.Identifier.ValueText,
+                ParenthesizedLambdaExpressionSyntax parenthesized => string.Join(
+                    ", ",
+                    parenthesized.ParameterList.Parameters.Select(p => p.Identifier.ValueText)
+                ),
+                _ => "",
+            };
+        }
+
+        return "";
+    }
+
+    // True when `node` sits inside the query's PRIMARY `from` source expression — the one position in a
+    // query expression that is evaluated ONCE rather than per element. `from p in profiles.ToList()` runs
+    // the ToList a single time, so a read there is not amplified and must not be reported as looped.
+    // Every other position (let / where / select / orderby / join keys / secondary from sources) runs per
+    // element. Span containment rather than a parent walk, so it holds however deeply the call is nested.
+    private static bool IsQuerySourceEvaluatedOnce(QueryExpressionSyntax query, SyntaxNode node) =>
+        query.FromClause.Expression.Span.Contains(node.Span);
+
+    // Every range variable the query BINDS, in source order: the primary `from`, then each body clause
+    // that introduces a name (`let`, a secondary `from`, a `join`/`join .. into`, and a `into`
+    // continuation). All of them are rebound per element, so any of them appearing in a read's key
+    // argument means that key varies per iteration — the n_plus_1 discriminator. Deconstruction patterns
+    // (`from (a, b) in pairs`) bind no single identifier and contribute nothing.
+    private static List<string> QueryRangeVariables(QueryExpressionSyntax query)
+    {
+        var variables = new List<string> { query.FromClause.Identifier.ValueText };
+
+        foreach (var descendant in query.DescendantNodes())
+        {
+            switch (descendant)
+            {
+                case FromClauseSyntax from:
+                    variables.Add(from.Identifier.ValueText);
+                    break;
+                case LetClauseSyntax let:
+                    variables.Add(let.Identifier.ValueText);
+                    break;
+                case JoinClauseSyntax join:
+                    variables.Add(join.Identifier.ValueText);
+                    if (join.Into is { } into)
+                    {
+                        variables.Add(into.Identifier.ValueText);
+                    }
+
+                    break;
+                case QueryContinuationSyntax continuation:
+                    variables.Add(continuation.Identifier.ValueText);
+                    break;
+            }
+        }
+
+        return variables.Where(v => !string.IsNullOrEmpty(v)).Distinct(StringComparer.Ordinal).ToList();
     }
 
     // The resource type of a `using` statement: the declared variable's type for

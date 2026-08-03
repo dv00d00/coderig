@@ -40,7 +40,7 @@ public sealed class SharedStateReadGateTests
         );
 
     // Empty observation rules — the gate is independent of structural-observation derivation.
-    private static FactObservationRules EmptyObservations() => new([], [], [], [], [], []);
+    private static FactObservationRules EmptyObservations() => new([], [], [], [], [], [], []);
 
     // The PAIRED cell: read AND written somewhere → survives the gate.
     private const string PairedCell = "F:App.GlobalCache.SharedCounter";

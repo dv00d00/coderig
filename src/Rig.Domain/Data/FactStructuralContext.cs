@@ -17,14 +17,30 @@ public static class FactStructuralContext
     // the receiver's resolved static type FQN ("" when unresolved, e.g. a static type access), and
     // the invoked method name. ReceiverText feeds parallel_fanout; ReceiverType feeds
     // resilience_retry.
-    public readonly record struct EnclosingInvocation(string ReceiverText, string ReceiverType, string MethodName);
+    // DeclaringType is the resolved TARGET method's containing type — for an extension method in reduced
+    // form this is the type declaring the extension (`ids.Select(..)` → "System.Linq.Enumerable"), a
+    // single stable FQN across every receiver shape (List, IEnumerable, arrays, IQueryable). That is what
+    // makes the enumerating-method gate both precise and high-recall: matching the RECEIVER type would
+    // need an open-ended list of sequence types and would still miss custom IEnumerables.
+    // LambdaParameter is the comma-joined parameter list of this invocation's lambda ARGUMENT that
+    // lexically contains the effect ("p", or "x, i" for an indexed overload) — the identifiers rebound
+    // per element when the method enumerates. Both are "" when absent or unresolved.
+    public readonly record struct EnclosingInvocation(
+        string ReceiverText,
+        string ReceiverType,
+        string MethodName,
+        string DeclaringType = "",
+        string LambdaParameter = ""
+    );
 
     public static string? EncodeInvocations(IReadOnlyList<EnclosingInvocation> invocations) =>
         invocations.Count == 0
             ? null
             : string.Join(
                 ListSeparator.ToString(),
-                invocations.Select(i => $"{i.ReceiverText}{FieldSeparator}{i.ReceiverType}{FieldSeparator}{i.MethodName}")
+                invocations.Select(i =>
+                    $"{i.ReceiverText}{FieldSeparator}{i.ReceiverType}{FieldSeparator}{i.MethodName}{FieldSeparator}{i.DeclaringType}{FieldSeparator}{i.LambdaParameter}"
+                )
             );
 
     public static IReadOnlyList<EnclosingInvocation> DecodeInvocations(string? encoded)
@@ -40,9 +56,20 @@ public static class FactStructuralContext
         foreach (var entry in encoded!.Split(ListSeparator))
         {
             var fields = entry.Split(FieldSeparator);
-            if (fields.Length == 3)
+            // 3 fields = a store written before DeclaringType/LambdaParameter existed. Decode it rather
+            // than discard it, so the pre-existing fanout/retry observations keep working against an old
+            // store; the enumerating-method gate simply finds no lambda parameter until it is re-indexed.
+            if (fields.Length is 3 or 5)
             {
-                result.Add(new EnclosingInvocation(ReceiverText: fields[0], ReceiverType: fields[1], MethodName: fields[2]));
+                result.Add(
+                    new EnclosingInvocation(
+                        ReceiverText: fields[0],
+                        ReceiverType: fields[1],
+                        MethodName: fields[2],
+                        DeclaringType: fields.Length == 5 ? fields[3] : "",
+                        LambdaParameter: fields.Length == 5 ? fields[4] : ""
+                    )
+                );
             }
         }
 
