@@ -601,18 +601,20 @@ public sealed record FactCacheCoherenceRule(
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
-// n_plus_1_cross_method POLICY: which effects count as a READ beneath a per-iteration call, and how far to
-// look. Opt-in — the detector fires ONLY when this section is present, mirroring cacheCoherence — because it
-// is a DATA-GATHERING instrument first: it emits one row per (looped call site x reachable read) pair, which is
-// the grain an amortization analysis needs and emphatically not a review surface.
+// cross_method_amplification POLICY: which effects count as a WITNESS beneath a per-iteration call, and how
+// far to look. Opt-in — the detector fires ONLY when this section is present, mirroring cacheCoherence.
+// N+1 (a repeated read) is just the subset where every witness is a read: the general finding is "a looped
+// call site whose closure reaches ANY gated effect" — sends, publishes, and store writes amplify identically.
 //
-// The read gate is deliberately a SEPARATE list from `observations.nPlusOne`: the intra-method detector is
-// calibrated, this one is not, and coupling them means a fix to one silently re-tunes the other. MaxDepth is
-// the reach bound (not a semantic gate — recall is monotone in depth, so depth is emitted as data);
-// MaxWitnessesPerAnchor 0 keeps the full cross product, >0 keeps the nearest-depth N per anchor.
-public sealed record FactCrossMethodNPlusOneRule(
-    IReadOnlyList<string> ReadProviders,
-    IReadOnlyList<string> ReadOperations,
+// `Witnesses` reuses the tier-2 amplification scope shape ({providers, operations}, empty = any). An EMPTY
+// witness list means ALL effects except `ExcludeWitnessProviders` — the all-IO mode — so the two dials are
+// "name what counts" or "name what doesn't". The gate is deliberately SEPARATE from `observations.nPlusOne`:
+// the intra-method detector is calibrated, this one is not, and coupling them means a fix to one silently
+// re-tunes the other. MaxDepth is the reach bound (not a semantic gate — recall is monotone in depth, so
+// depth is emitted as data); MaxWitnessesPerAnchor 0 keeps the full cross product, >0 the nearest-depth N.
+public sealed record FactCrossMethodAmplificationRule(
+    IReadOnlyList<FactAmplificationRule> Witnesses,
+    IReadOnlyList<string> ExcludeWitnessProviders,
     int MaxDepth = 6,
     int MaxWitnessesPerAnchor = 0,
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null

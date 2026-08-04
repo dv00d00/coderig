@@ -86,17 +86,17 @@ public static class HazardKinds
     // True when an observation TYPE is an amplification finding (tier 2).
     public static bool IsAmplification(string type) => Amplification.Contains(type);
 
-    // TIER 3 — CROSS-METHOD N+1 (`CrossMethodNPlusOne` / IsCrossMethod): a read reachable at or beneath a call
+    // TIER 3 — CROSS-METHOD N+1 (`CrossMethodAmplification` / IsCrossMethod): a read reachable at or beneath a call
     // issued once per loop element — the amplification the lexical tiers structurally cannot see (loop and read
     // live in different frames). Promoted (2026-08) from a machine-only dataset to a DISPLAYED finding at the
     // ANCHOR grain (one row per looped call site, nearest witness as evidence) after a stratified hand audit of
     // the post-v5 surface measured 93% TP+TP-weak precision. Kept OUT of `All`/IsHazard for the same reason
     // amplification is: every pre-existing hazard-keyed surface (tsv `hazard` rows, `rig impact` hazard deltas)
     // keeps its exact membership; this tier has its own section, marks, and opt-out.
-    public const string CrossMethodNPlusOne = "n_plus_1_cross_method";
+    public const string CrossMethodAmplification = "cross_method_amplification";
 
     // True when an observation TYPE is the cross-method N+1 finding (tier 3).
-    public static bool IsCrossMethod(string type) => string.Equals(type, CrossMethodNPlusOne, StringComparison.Ordinal);
+    public static bool IsCrossMethod(string type) => string.Equals(type, CrossMethodAmplification, StringComparison.Ordinal);
 
     // True when an observation TYPE is DISPLAYED as a finding in any tier. The one question the generic
     // "Observations on effects" block asks: a type that has its own section must not ALSO appear there as an

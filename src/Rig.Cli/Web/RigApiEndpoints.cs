@@ -249,7 +249,7 @@ internal static class RigApiEndpoints
             // ?amplification=false is the web mirror of the CLI's --no-amplification: it drops the looped_effect
             // (amplification-tier) marks and returns exactly the hazard set. Absent/true = on, matching the CLI
             // default; the marks come back in the same shape either way.
-            // ?crossMethod=false likewise drops the tier-3 n_plus_1_cross_method anchor marks. Absent/true = on.
+            // ?crossMethod=false likewise drops the tier-3 cross_method_amplification anchor marks. Absent/true = on.
             async (string? from, string? store, bool? amplification, bool? crossMethod) =>
             {
                 if (string.IsNullOrWhiteSpace(from))

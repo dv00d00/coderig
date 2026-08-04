@@ -309,9 +309,9 @@ A new rules section, mirroring `cacheCoherence`'s shape (a single object project
 `Fact…RuleProvider`), so the *policy* is data and only the operator is C#:
 
 ```jsonc
-"crossMethodNPlusOne": {
+"crossMethodAmplification": {
   "_doc": "presence-join(iteration_fanout, read, key-token, fwd-tree). Opt-in: absent section = detector off.",
-  "readProviders":  ["llblgen", "object_store", "db_command", "db_reader", "entity_cache", "repository", "http"],
+  "witnesses (formerly readProviders)":  ["llblgen", "object_store", "db_command", "db_reader", "entity_cache", "repository", "http"],
   "readOperations": ["read", "fetch", "query", "row_read", "execute", "GET"],
   "maxDepth": 6,
   "minTier": "medium",                       // "low" = the opt-in over-approximating surface
@@ -508,9 +508,9 @@ the rules gate. **Verification, all without touching the correlation deriver:**
 
 ### Slice 2 — the Presence operator + wiring at `medium`/`low`
 `CorrelationPolarity.Presence`, `CorrelationKeyMatch`, witness fields, `ReachesInfoFromEachSeed`. Wire
-`n_plus_1_cross_method` (a new `HazardKinds` member — deliberately a **distinct type string** from
+`cross_method_amplification` (a new `HazardKinds` member — deliberately a **distinct type string** from
 `n_plus_1`, so the intra-method detector's calibrated precision is not diluted and `rig impact` deltas stay
-attributable). Ships **opt-in** (`crossMethodNPlusOne` section absent = off, mirroring `cacheCoherence`).
+attributable). Ships **opt-in** (`crossMethodAmplification` section absent = off, mirroring `cacheCoherence`).
 **Verification:** FR-7 `cache_coherence` output byte-identical (the Absence path must not move); the §8
 oracle measurement; the §5 volume + audit gates.
 

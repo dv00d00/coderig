@@ -171,10 +171,10 @@ function Trunc(node) {
 // change and only the amplification types (see HazardKinds.Amplification) are listed here.
 const CONF_RANK = { high: 0, medium: 1, low: 2 };
 const AMPLIFICATION_TYPES = new Set(["looped_effect"]);
-// Tier 3 — cross-method amplification (HazardKinds.CrossMethodNPlusOne): a looped call site whose closure
+// Tier 3 — cross-method amplification (HazardKinds.CrossMethodAmplification): a looped call site whose closure
 // reaches a rules-gated effect (network calls by default — the gate is data, never just "reads"). Marked on
 // the CALLER method (where a human would fix the loop); Sites = looped call sites in that method.
-const CROSS_METHOD_TYPE = "n_plus_1_cross_method";
+const CROSS_METHOD_TYPE = "cross_method_amplification";
 function HazardMark(marks) {
   if (!marks || !marks.length) return null;
   const fmt = (ms) =>

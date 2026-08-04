@@ -32,7 +32,7 @@ public static class HazardsService
         // client change — the client only labels them (their Type is looped_effect, which is what distinguishes
         // them from the hazard set: HazardKinds.IsHazard(looped_effect) is false by design).
         bool amplification = true,
-        // TIER 3 (cross-method amplification, HazardKinds.CrossMethodNPlusOne): anchor-grain marks on the
+        // TIER 3 (cross-method amplification, HazardKinds.CrossMethodAmplification): anchor-grain marks on the
         // CALLER method of each looped call site whose closure reaches a rules-gated effect (network calls by
         // default — the gate is data, not "reads"). ON by default when the rules declare the section;
         // `?crossMethod=false` opts out.
@@ -121,10 +121,10 @@ public static class HazardsService
 
         // Tier-3 cross-method amplification: anchor-grain findings marked on the CALLER method (where a human
         // would fix the loop). A third source folded into the same mark stream; the client only labels the type.
-        if (crossMethod && rules.CrossMethodNPlusOne is { } xm)
+        if (crossMethod && rules.CrossMethodAmplification is { } xm)
         {
-            var anchors = Effects.CrossMethodNPlusOneDataset.AnchorFindings(
-                Effects.CrossMethodNPlusOneDataset.Pairs(
+            var anchors = Effects.CrossMethodAmplificationDataset.AnchorFindings(
+                Effects.CrossMethodAmplificationDataset.Pairs(
                     invocations: await Rig.Storage.Queries.Reads.LoadInvocationRefsAsync(context),
                     graph: await Rig.Storage.Queries.Reads.LoadShapedGraphAsync(context: context, rules: rules),
                     effects: hazardEffects,
@@ -138,7 +138,7 @@ public static class HazardsService
                     .GroupBy(a => a.Caller)
                     .Select(g => new HazardMark(
                         MethodId: g.Key,
-                        Type: HazardKinds.CrossMethodNPlusOne,
+                        Type: HazardKinds.CrossMethodAmplification,
                         Confidence: g.OrderBy(a => ConfidenceRank(a.Confidence)).First().Confidence,
                         Sites: g.Count()
                     ))

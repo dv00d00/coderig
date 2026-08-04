@@ -68,7 +68,7 @@ public static class RuleSetLoader
             Handoff = FactHandoffRuleProvider.Project(doc),
             Redirect = FactRedirectRuleProvider.Project(doc),
             CacheCoherence = FactCacheCoherenceRuleProvider.Project(doc),
-            CrossMethodNPlusOne = FactCrossMethodNPlusOneRuleProvider.Project(doc),
+            CrossMethodAmplification = FactCrossMethodAmplificationRuleProvider.Project(doc),
             StaticInitCapture = FactStaticInitCaptureRuleProvider.Project(doc),
             Factory = FactGenericFactoryRuleProvider.Project(doc),
             Cut = FactTraversalCutRuleProvider.Project(doc),
@@ -189,7 +189,7 @@ public static class RuleSetLoader
         acc.HandoffDispatchers = Concat(acc.HandoffDispatchers, next.HandoffDispatchers);
         acc.RedirectRules = Concat(acc.RedirectRules, next.RedirectRules);
         acc.CacheCoherence = next.CacheCoherence ?? acc.CacheCoherence;
-        acc.CrossMethodNPlusOne = next.CrossMethodNPlusOne ?? acc.CrossMethodNPlusOne;
+        acc.CrossMethodAmplification = next.CrossMethodAmplification ?? acc.CrossMethodAmplification;
         acc.StaticInitCapture = next.StaticInitCapture ?? acc.StaticInitCapture;
         acc.DeliveryRules = Concat(acc.DeliveryRules, next.DeliveryRules);
         acc.StaticDiMappings = Concat(acc.StaticDiMappings, next.StaticDiMappings);

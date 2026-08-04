@@ -140,14 +140,16 @@ internal sealed record CacheCoherenceRule(
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
-// n_plus_1_cross_method POLICY (JSON authoring shape of the `crossMethodNPlusOne` section): the read gate
-// (`readProviders` x `readOperations`) that decides what counts as a read beneath a per-iteration call, the
-// reach bound `maxDepth`, and `maxWitnessesPerAnchor` (0 = the full anchor x witness cross product — the
-// dataset grain). Projected to FactCrossMethodNPlusOneRule. One object, not a list (last-writer-wins). Opt-in:
-// an absent section leaves the detector off.
-internal sealed record CrossMethodNPlusOneRule(
-    IReadOnlyList<string> ReadProviders,
-    IReadOnlyList<string>? ReadOperations = null,
+// cross_method_amplification POLICY (JSON authoring shape of the `crossMethodAmplification` section): the
+// witness gate (`witnesses`, same {providers, operations} groups as `observations.amplification`) that
+// decides what counts as an amplified effect beneath a per-iteration call, the reach bound `maxDepth`, and
+// `maxWitnessesPerAnchor` (0 = the full anchor x witness cross product — the dataset grain). An EMPTY or
+// omitted `witnesses` list means ALL effects except `excludeWitnessProviders` (defaulted at projection to
+// the intrinsic/memory providers). Projected to FactCrossMethodAmplificationRule. One object, not a list
+// (last-writer-wins). Opt-in: an absent SECTION leaves the detector off.
+internal sealed record CrossMethodAmplificationRule(
+    IReadOnlyList<AmplificationObservationRule>? Witnesses = null,
+    IReadOnlyList<string>? ExcludeWitnessProviders = null,
     int? MaxDepth = null,
     int? MaxWitnessesPerAnchor = null,
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
@@ -275,9 +277,9 @@ internal sealed class AnalysisRulesDocument
     // invalidation method names for the FR-7 cache-coherence graph hazard (see CacheCoherenceRule).
     public CacheCoherenceRule? CacheCoherence { get; set; }
 
-    // Top-level key "crossMethodNPlusOne": a SINGLE object declaring the read gate + reach bound for the
-    // n_plus_1_cross_method presence correlation (see CrossMethodNPlusOneRule). Absent = detector off.
-    public CrossMethodNPlusOneRule? CrossMethodNPlusOne { get; set; }
+    // Top-level key "crossMethodAmplification": a SINGLE object declaring the read gate + reach bound for the
+    // cross_method_amplification presence correlation (see CrossMethodAmplificationRule). Absent = detector off.
+    public CrossMethodAmplificationRule? CrossMethodAmplification { get; set; }
 
     // Top-level key "staticInitCapture": a SINGLE object declaring the mutable-source resource patterns for
     // the static_init_capture hazard (see StaticInitCaptureRule).

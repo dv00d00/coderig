@@ -2,7 +2,7 @@
 
 ## Problem — the pair model is a pit
 
-`n_plus_1_cross_method` materializes (anchor × witness) rows. That forces a grain choice that is
+`cross_method_amplification` materializes (anchor × witness) rows. That forces a grain choice that is
 wrong at every setting:
 
 - `maxWitnessesPerAnchor: 0` — full cross product, 56,646 rows on MedDBase. A dataset, not a finding

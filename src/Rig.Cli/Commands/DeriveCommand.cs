@@ -238,14 +238,14 @@ internal static class DeriveCommand
                 .ToList();
         }
 
-        // --- n_plus_1_cross_method: the PRESENCE correlation over iteration-fanout pseudo-events (a read
+        // --- cross_method_amplification: the PRESENCE correlation over iteration-fanout pseudo-events (a read
         //     reachable at or beneath a call issued once per element). Opt-in — only when the
-        //     `crossMethodNPlusOne` rule section is present, mirroring cacheCoherence. Emitted as its OWN tsv
+        //     `crossMethodAmplification` rule section is present, mirroring cacheCoherence. Emitted as its OWN tsv
         //     row type, never as a HazardFinding: step 1 is a dataset at (anchor x witness) grain, and folding
         //     it into the Hazards view would swamp it and re-tune `rig impact`'s hazard deltas. Sees the
         //     UNFILTERED effects for the same reason cache_coherence does — --only/--exclude is presentation.
-        var crossMethodPairs = rules.CrossMethodNPlusOne is { } xm
-            ? CrossMethodNPlusOneDataset.Pairs(
+        var crossMethodPairs = rules.CrossMethodAmplification is { } xm
+            ? CrossMethodAmplificationDataset.Pairs(
                 invocations: await Reads.LoadInvocationRefsAsync(context),
                 graph: shapedGraph,
                 effects: unfilteredEffects,
@@ -253,11 +253,11 @@ internal static class DeriveCommand
                 rule: xm
             )
             : [];
-        var crossMethodRows = CrossMethodNPlusOneDataset.TsvRows(crossMethodPairs);
-        // The DISPLAYED grain (tier 3, HazardKinds.CrossMethodNPlusOne): one finding per anchor call site, CHA
+        var crossMethodRows = CrossMethodAmplificationDataset.TsvRows(crossMethodPairs);
+        // The DISPLAYED grain (tier 3, HazardKinds.CrossMethodAmplification): one finding per anchor call site, CHA
         // fan-out collapsed to the nearest-depth witness. The human view prints these; the pair rows above stay
         // the machine dataset.
-        var crossMethodAnchors = CrossMethodNPlusOneDataset.AnchorFindings(crossMethodPairs);
+        var crossMethodAnchors = CrossMethodAmplificationDataset.AnchorFindings(crossMethodPairs);
 
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
@@ -294,7 +294,7 @@ internal static class DeriveCommand
                 io.TextOutput.Output.WriteLine(AmplificationTsvRow(a));
             }
 
-            // See CrossMethodNPlusOneDataset for the column reference. Empty unless the rule section is present.
+            // See CrossMethodAmplificationDataset for the column reference. Empty unless the rule section is present.
             foreach (var row in crossMethodRows)
             {
                 io.TextOutput.Output.WriteLine(row);

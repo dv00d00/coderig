@@ -26,10 +26,10 @@ public sealed record RuleSet
     // DeriveCommand). A single object; null when the `cacheCoherence` section is absent.
     public FactCacheCoherenceRule? CacheCoherence { get; init; }
 
-    // n_plus_1_cross_method POLICY (the read gate + the reach bound + the witness grain) for the PRESENCE
+    // cross_method_amplification POLICY (the read gate + the reach bound + the witness grain) for the PRESENCE
     // instance of the generic effect-correlation deriver (wired in DeriveCommand). A single object; null when
-    // the `crossMethodNPlusOne` section is absent. Opt-in — absent section = detector off.
-    public FactCrossMethodNPlusOneRule? CrossMethodNPlusOne { get; init; }
+    // the `crossMethodAmplification` section is absent. Opt-in — absent section = detector off.
+    public FactCrossMethodAmplificationRule? CrossMethodAmplification { get; init; }
 
     // static_init_capture POLICY (the project-specific mutable-source resource patterns) for the
     // static-init-capture detector (wired in DeriveCommand). A single object; null when the

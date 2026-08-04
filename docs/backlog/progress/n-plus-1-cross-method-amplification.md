@@ -84,8 +84,8 @@ What shipped:
   `CorrelationFinding` (Absence output byte-identical, FR-7 `cache_coherence` unmoved at 4).
 * `IterationContext` — the iteration-context union and the whole-word key test, extracted so the intra-method
   detector and this one cannot drift.
-* Opt-in rules section `crossMethodNPlusOne` (absent = off, mirroring `cacheCoherence`) and a
-  `derive --format tsv` row type `n_plus_1_cross_method` at **(anchor x witness) grain** — the full cross
+* Opt-in rules section `crossMethodAmplification` (absent = off, mirroring `cacheCoherence`) and a
+  `derive --format tsv` row type `cross_method_amplification` at **(anchor x witness) grain** — the full cross
   product, which is what a cross-tab needs and emphatically not a review surface. NOT a `HazardKinds` member:
   admitting it would swamp the Hazards view and move `rig impact`'s hazard deltas.
 
@@ -95,3 +95,12 @@ are all emitted as COLUMNS so step 2 can measure what each explains.
 
 The dataset and its descriptive breakdown live in `meddbase-analysis` (the grounded-roadmap side), per the
 existing split. Step 2 is the analysis; step 3 derives the rules.
+
+## 2026-08-04 — renamed + widened to general amplification (no back-compat)
+
+The rule section is now `crossMethodAmplification`, the finding type `cross_method_amplification`, and the
+gate is `witnesses: [{providers, operations}]` (the tier-2 `observations.amplification` shape) plus
+`excludeWitnessProviders`. An empty/omitted `witnesses` list = ALL effects except the exclusions (default:
+alloc, throw, shared_state, config) — the all-IO mode. Rationale: N+1 is the read subset of the general
+finding; the read-only gate demonstrably hid looped SENDS (echo:tell / queue:publish / smtp / http:POST)
+during the 2026-08-04 MedDBase hotspot triage. Old key/fields are DROPPED, not aliased.

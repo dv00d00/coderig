@@ -6,7 +6,7 @@ namespace Rig.Tests.Domain;
 
 // Polarity=Presence over the same generic correlation operator FR-7 uses at Polarity=Absence: flag anchors that
 // HAVE a companion on their forward closure, and carry the WITNESS that made them fire. The instance under test
-// is n_plus_1_cross_method — anchor = the iteration-fanout pseudo-event (whose EnclosingSymbolId is the CALLEE,
+// is cross_method_amplification — anchor = the iteration-fanout pseudo-event (whose EnclosingSymbolId is the CALLEE,
 // so the reach means "at or beneath the per-iteration call"), companion = any read.
 //
 // The Absence path must not move: its findings carry NULL in every witness field, which is what keeps the FR-7

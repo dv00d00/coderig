@@ -3,7 +3,7 @@ using Rig.Domain.Functions;
 
 namespace Rig.Cli.Effects;
 
-// `n_plus_1_cross_method` — the PRESENCE instance of the generic effect-correlation deriver:
+// `cross_method_amplification` — the PRESENCE instance of the generic effect-correlation deriver:
 // presence-join(iteration_fanout, read, fwd-tree <= maxDepth). It answers "is a read reachable at or beneath a
 // call that is issued once per element", which the shipped lexical n_plus_1 structurally cannot see (the
 // iteration context and the read live in different frames).
@@ -16,16 +16,16 @@ namespace Rig.Cli.Effects;
 // decision to be made ON this evidence, not before it. The eventual FINDING grain will be one row per anchor
 // (the cross product is ~40x larger), which is why these rows carry their own type string and are NOT hazard
 // findings — they must not dilute the calibrated intra-method n_plus_1 or move `rig impact` attribution.
-internal static class CrossMethodNPlusOneDataset
+internal static class CrossMethodAmplificationDataset
 {
-    // The row type — TIER 3 of the findings catalog (HazardKinds.CrossMethodNPlusOne), still deliberately
+    // The row type — TIER 3 of the findings catalog (HazardKinds.CrossMethodAmplification), still deliberately
     // DISTINCT from HazardKinds.NPlusOne and NOT a member of HazardKinds.All: the tsv dataset stays at
     // (anchor x witness) grain, the DISPLAYED finding is the AnchorFinding grain, and neither may dilute the
     // calibrated intra-method hazards or move `rig impact`'s hazard deltas.
-    internal const string RowType = HazardKinds.CrossMethodNPlusOne;
+    internal const string RowType = HazardKinds.CrossMethodAmplification;
 
     // TSV column reference (tab-separated, one row per (anchor, witness) pair):
-    //   n_plus_1_cross_method
+    //   cross_method_amplification
     //     \t anchorFile \t anchorLine \t anchorMethod(CALLER — the human site) \t callee
     //     \t iterationKind \t iterationDetail \t keyToken \t argIndex \t iteratedSource
     //     \t witnessMethod \t witnessFile \t witnessLine \t witnessProvider \t witnessOperation
@@ -86,7 +86,7 @@ internal static class CrossMethodNPlusOneDataset
         FactGraphData graph,
         IReadOnlyList<DerivedEffect> effects,
         FactObservationRules observationRules,
-        FactCrossMethodNPlusOneRule rule
+        FactCrossMethodAmplificationRule rule
     )
     {
         var fanouts = FactIterationFanoutDeriver.Derive(invocations, observationRules);
@@ -113,7 +113,7 @@ internal static class CrossMethodNPlusOneDataset
                 CompanionNormalize: new NormalizeSpec(),
                 Polarity: CorrelationPolarity.Presence,
                 KeyMatch: CorrelationKeyMatch.PropagatedKeyToken,
-                Companions: ReadPredicates(rule),
+                Companions: WitnessPredicates(rule, effects),
                 ExcludeEnclosingNamespaceSuffix: rule.ExcludeEnclosingNamespaceSuffix,
                 MaxDepth: rule.MaxDepth,
                 MaxWitnessesPerAnchor: rule.MaxWitnessesPerAnchor
@@ -180,16 +180,41 @@ internal static class CrossMethodNPlusOneDataset
         return rows;
     }
 
-    // The read gate as correlation predicates: the provider x operation cross product, or provider-only (any
-    // operation) when the rule names no operations.
-    private static IReadOnlyList<EffectPredicate> ReadPredicates(FactCrossMethodNPlusOneRule rule)
+    // The witness gate as correlation predicates. Each witness group expands to its provider x operation
+    // cross product (empty operations = any operation of that provider). An EMPTY witness list is the all-IO
+    // mode: one provider-only predicate per DISTINCT provider present in the effect stream, minus the rule's
+    // exclusions — discovered from the data rather than hardcoded, so a new effect rule is in scope the day
+    // it ships. A group with operations but NO providers expands across the same discovered provider set.
+    // The iteration-fanout pseudo-provider is always excluded: anchors must never witness each other.
+    private static IReadOnlyList<EffectPredicate> WitnessPredicates(
+        FactCrossMethodAmplificationRule rule,
+        IReadOnlyList<DerivedEffect> effects
+    )
     {
-        if (rule.ReadOperations.Count == 0)
+        var excluded = new HashSet<string>(rule.ExcludeWitnessProviders, StringComparer.Ordinal) { FactIterationFanoutDeriver.Provider };
+        var discovered = effects
+            .Select(e => e.Provider)
+            .Where(p => !string.IsNullOrEmpty(p) && !excluded.Contains(p))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (rule.Witnesses.Count == 0)
         {
-            return rule.ReadProviders.Select(p => new EffectPredicate(p)).ToList();
+            return discovered.Select(p => new EffectPredicate(p)).ToList();
         }
 
-        return rule.ReadProviders.SelectMany(p => rule.ReadOperations.Select(o => new EffectPredicate(p, o))).ToList();
+        var predicates = new List<EffectPredicate>();
+        foreach (var w in rule.Witnesses)
+        {
+            var providers = w.Providers.Count > 0 ? w.Providers : discovered;
+            predicates.AddRange(
+                w.Operations.Count == 0
+                    ? providers.Select(p => new EffectPredicate(p))
+                    : providers.SelectMany(p => w.Operations.Select(o => new EffectPredicate(p, o)))
+            );
+        }
+
+        return predicates;
     }
 
     private static string AnchorId(string filePath, int line, string? callee) => $"{filePath}{line}{callee}";
