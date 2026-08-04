@@ -107,6 +107,16 @@ public static class FactEffectDeriver
         var results = new List<DerivedEffect>();
         foreach (var inv in invocations)
         {
+            // QUOTED code (a lambda converted to Expression<>, an IQueryable clause) never executes as C# —
+            // a nav-property getter in `where p.Nav.X == y` becomes a SQL join, not a call — so it derives
+            // no invocation effect. Constructor effects are deliberately NOT gated this way: `new Dto(x.A)`
+            // in a select PROJECTION executes per row at materialization. Known limit: a client-evaluated
+            // method call in a final projection is missed too — rare, and the sound direction.
+            if (inv.InExpressionTree)
+            {
+                continue;
+            }
+
             // Inlined, index-based ParseMethod with a candidate-name early-out: extract the method name
             // first (the cheap part), reject non-candidates before touching the declaring type. Mirrors
             // ParseMethod exactly for the accepted case.
@@ -203,7 +213,8 @@ public static class FactEffectDeriver
                         firstArgName: inv.FirstArgName,
                         firstArgTemplate: inv.FirstArgTemplate,
                         argumentNames: inv.ArgumentNames,
-                        argumentTemplates: inv.ArgumentTemplates
+                        argumentTemplates: inv.ArgumentTemplates,
+                        loopBindType: inv.LoopBindType
                     );
 
                 results.Add(
@@ -252,6 +263,12 @@ public static class FactEffectDeriver
 
             foreach (var inv in invocations)
             {
+                // Same quoted-code gate as the invocation arm above.
+                if (inv.InExpressionTree)
+                {
+                    continue;
+                }
+
                 foreach (var rule in wrapperRules)
                 {
                     if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))

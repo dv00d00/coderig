@@ -41,9 +41,35 @@ public static class IterationContext
         FactObservationRules rules,
         // The loop STATEMENT's resolved element type (foreach/query). Optional so the intra-method caller, which
         // has no use for it, needs no change; an enumerating lambda's element type rides the invocation chain.
-        string? loopElementType = null
+        string? loopElementType = null,
+        // The declaring type of a `query` context's bind method (ReferenceFact.EnclosingLoopBindType). Gates
+        // whether the query is ITERATION at all — see the enumerating gate below. Null = unresolved/absent,
+        // which fails OPEN (the query stays a loop), so old stores and unresolvable binds keep prior behavior.
+        string? loopBindType = null
     )
     {
+        // The enumerating gate for QUERY syntax — the same discipline the lambda path applies below via
+        // rules.EnumeratingMethods, aimed at the same failure: query comprehensions over a single-value monad
+        // (Validation / Either / Option / a first-party state monad) bind AT MOST ONCE and are not loops, yet
+        // their syntax is identical to a real query over a collection. The discriminator is the DECLARING TYPE
+        // of the bind method the compiler chose (System.Linq.Enumerable for a collection, the monad's own
+        // extension class otherwise), matched against the SAME allow-list that keeps Option.Map out of lambda
+        // contexts — one list governs both syntaxes, and a monad nobody has named yet falls out by default.
+        // A rule with EMPTY DeclaringTypes means "any declaring type" and keeps the gate vacuously open, same
+        // as its meaning on the lambda path.
+        if (
+            loopKind == "query"
+            && !string.IsNullOrEmpty(loopBindType)
+            && !rules.EnumeratingMethods.Any(r =>
+                r.DeclaringTypes.Count == 0 || r.DeclaringTypes.Contains(loopBindType!, StringComparer.Ordinal)
+            )
+        )
+        {
+            loopKind = null;
+            loopDetail = null;
+            loopElementType = null;
+        }
+
         // The enumerating-lambda context: the innermost enclosing call that the rules declare ENUMERATES its
         // receiver and whose lambda argument contains this site. Rule-gated on the resolved declaring type,
         // which is what keeps single-shot lambda takers (Option.Map, Try, Lazy, Task.Run) out.

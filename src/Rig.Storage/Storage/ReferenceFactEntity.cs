@@ -40,4 +40,13 @@ public sealed class ReferenceFactEntity
     // Added with schema index v4 — the version gate rejects an older store outright, so there is no
     // read-as-null compatibility path to preserve here.
     public string? EnclosingLoopElementType { get; set; }
+
+    // Declaring type of a `query` iteration context's bind method (ReferenceFact.EnclosingLoopBindType) —
+    // the enumerating-vs-monadic discriminator. Added with schema index v5 (version-gated, no null-compat path).
+    public string? EnclosingLoopBindType { get; set; }
+
+    // True when the reference sits inside QUOTED code (ReferenceFact.InExpressionTree) — an Expression<>
+    // lambda or an IQueryable clause; such a reference derives no invocation effect and anchors no iteration.
+    // Added with schema index v5.
+    public bool InExpressionTree { get; set; }
 }

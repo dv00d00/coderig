@@ -75,12 +75,20 @@ public static class FactIterationFanoutDeriver
                 continue;
             }
 
+            // QUOTED code never executes as C# — a call in an IQueryable clause is translated by the
+            // provider, not issued per element — so it can anchor nothing.
+            if (inv.InExpressionTree)
+            {
+                continue;
+            }
+
             var iteration = IterationContext.Of(
                 loopKind: inv.LoopKind,
                 loopDetail: inv.LoopDetail,
                 enclosingInvocations: FactStructuralContext.DecodeInvocations(inv.EnclosingInvocations),
                 rules: rules,
-                loopElementType: inv.LoopElementType
+                loopElementType: inv.LoopElementType,
+                loopBindType: inv.LoopBindType
             );
             if (iteration.Kind is null)
             {

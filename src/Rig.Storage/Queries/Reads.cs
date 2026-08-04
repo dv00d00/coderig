@@ -1071,7 +1071,9 @@ public static class Reads
                 ArgumentTemplates: r.ArgumentTemplates,
                 ArgumentNames: r.ArgumentNames,
                 EnclosingGuards: r.EnclosingGuards,
-                LoopElementType: r.EnclosingLoopElementType
+                LoopElementType: r.EnclosingLoopElementType,
+                LoopBindType: r.EnclosingLoopBindType,
+                InExpressionTree: r.InExpressionTree
             ))
             .ToListAsync(cancellationToken);
 

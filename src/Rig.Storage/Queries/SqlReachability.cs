@@ -276,7 +276,8 @@ public static class SqlReachability
             SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
                    r.FirstArgumentTemplate, r.FirstArgumentType, r.EnclosingLoopKind, r.EnclosingLoopDetail,
                    r.EnclosingInvocations, r.EnclosingCatchTypes, r.TypeArguments, r.FirstArgumentName,
-                   r.ArgumentTemplates, r.ArgumentNames, r.EnclosingGuards, r.EnclosingLoopElementType
+                   r.ArgumentTemplates, r.ArgumentNames, r.EnclosingGuards, r.EnclosingLoopElementType,
+                   r.EnclosingLoopBindType, r.InExpressionTree
             FROM reference_facts r JOIN reach_set s ON r.EnclosingSymbolId = s.sym
             WHERE r.RefKind = 'invocation';
             """,
@@ -301,7 +302,9 @@ public static class SqlReachability
                         ArgumentTemplates: reader.IsDBNull(13) ? null : reader.GetString(13),
                         ArgumentNames: reader.IsDBNull(14) ? null : reader.GetString(14),
                         EnclosingGuards: reader.IsDBNull(15) ? null : reader.GetString(15),
-                        LoopElementType: reader.IsDBNull(16) ? null : reader.GetString(16)
+                        LoopElementType: reader.IsDBNull(16) ? null : reader.GetString(16),
+                        LoopBindType: reader.IsDBNull(17) ? null : reader.GetString(17),
+                        InExpressionTree: !reader.IsDBNull(18) && reader.GetBoolean(18)
                     )
                 ),
             cancellationToken

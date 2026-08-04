@@ -142,7 +142,22 @@ public sealed record ReferenceFact(
     // ("x in Select"). Null for for/while/do (they iterate no collection), when the source type does not resolve,
     // and when the element is an ANONYMOUS projection (`select new { p.PkProfile, .. }` has no nameable type) —
     // that last case is a real limit, not an oversight: it is exactly where the lexical key path still works.
-    string? EnclosingLoopElementType = null
+    string? EnclosingLoopElementType = null,
+    // The DECLARING TYPE of the method a `query` iteration context BINDS to (open-generic FQN): query syntax
+    // compiles to Select/SelectMany/Where calls, and Roslyn resolves WHICH overload — `System.Linq.Enumerable`
+    // for a real collection, the monad's own extension class for `from x in validation …`. This is the same
+    // discriminator the enumerating-lambda gate already uses for METHOD syntax (EnclosingInvocation
+    // .DeclaringType + the enumeratingMethods allow-list): a comprehension over a single-value monad
+    // (Validation/Either/Option/a first-party Tal) binds ≤1 time and is NOT a loop, and only the bind's
+    // declaring type can say so — the syntax is identical. Null for non-query contexts and when no clause
+    // symbol resolves (derive fails OPEN: an unresolved bind is still treated as iteration).
+    string? EnclosingLoopBindType = null,
+    // True when this reference sits inside QUOTED code — a lambda converted to `Expression<TDelegate>`, or a
+    // query clause whose bind method takes Expression<> parameters (an IQueryable query). Quoted code is DATA
+    // handed to a provider (translated to SQL/whatever), it NEVER executes as C#: a nav-property getter in a
+    // `where p.Nav.X == y` clause is a SQL join, not a call. Effect and iteration-anchor derivation skip such
+    // references (a semantic property of the language, not a rule). False on stores indexed before this flag.
+    bool InExpressionTree = false
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -784,7 +799,14 @@ public sealed record FactInvocation(
     string? EnclosingGuards = null,
     // Resolved element type of the enclosing iteration context (see ReferenceFact.EnclosingLoopElementType).
     // The SEMANTIC half of the self-keyed test, and for a `lambda` context the only half there is.
-    string? LoopElementType = null
+    string? LoopElementType = null,
+    // Declaring type of the `query` context's bind method (see ReferenceFact.EnclosingLoopBindType). Feeds the
+    // IterationContext enumerating gate: a comprehension binding onto a non-enumerating type (a single-value
+    // monad) is not iteration. Null = no query context or unresolved (gate fails open).
+    string? LoopBindType = null,
+    // The reference is QUOTED code (see ReferenceFact.InExpressionTree) — never executes as C#, so it derives
+    // no effect and anchors no iteration fanout.
+    bool InExpressionTree = false
 );
 
 // An effect re-derived from the reference index by matching an invocation target against the

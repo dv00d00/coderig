@@ -1276,7 +1276,9 @@ internal static class FactExtractor
                 NonVirtual: nonVirtual,
                 // CFG-derived control-dependence guard set of this call-site within its method (null = must-run).
                 EnclosingGuards: enclosingGuards,
-                EnclosingLoopElementType: structural.LoopElementType
+                EnclosingLoopElementType: structural.LoopElementType,
+                EnclosingLoopBindType: structural.LoopBindType,
+                InExpressionTree: structural.InExpressionTree
             )
         );
     }
@@ -1600,6 +1602,8 @@ internal static class FactExtractor
         string? loopKind = null;
         string? loopDetail = null;
         string? loopElementType = null;
+        string? loopBindType = null;
+        var inExpressionTree = false;
         List<FactStructuralContext.EnclosingInvocation>? enclosing = null;
         List<string>? catchTypes = null;
         List<FactStructuralContext.EnclosingScope>? scopes = null;
@@ -1608,6 +1612,17 @@ internal static class FactExtractor
         {
             switch (ancestor)
             {
+                // QUOTED code: a lambda whose conversion target is Expression<TDelegate> is an expression
+                // TREE — the body is data handed to a provider, it never executes as C#. ANY quoted ancestor
+                // quotes everything beneath it (a Func<> lambda nested inside an Expression<> lambda is still
+                // part of the tree), so the flag latches on the first hit and later (outer) lambdas that
+                // convert to plain delegates cannot clear it. Checked here (one resolution per lambda
+                // ancestor) rather than per reference kind, so every fact captured with structural context
+                // carries it uniformly.
+                case AnonymousFunctionExpressionSyntax lambda when !inExpressionTree && IsExpressionTreeConversion(lambda, model):
+                    inExpressionTree = true;
+                    break;
+
                 // Nearest enclosing loop only — first one found wins; later (outer) loops are ignored.
                 case ForEachStatementSyntax forEach when loopKind is null:
                     loopKind = "foreach";
@@ -1641,14 +1656,35 @@ internal static class FactExtractor
                 // n_plus_1 identifier parser need no special case — with the comma-joined range
                 // variables in the identifier position, since EVERY variable a query binds (from, let,
                 // join, into) is rebound per element and can therefore carry a per-element key.
-                case QueryExpressionSyntax query when loopKind is null && !IsQuerySourceEvaluatedOnce(query, invocation):
-                    loopKind = "query";
-                    loopDetail = $"{string.Join(", ", QueryRangeVariables(query))} in {query.FromClause.Expression}";
-                    // The PRIMARY from clause's range-variable type, matching loopDetail's source expression —
-                    // the thing actually being iterated. Anonymous projections resolve to an unnameable type
-                    // here (`from p in profiles.Select(x => new { .. })`), which is information, not a failure:
-                    // the element genuinely is not an entity.
-                    loopElementType = symbolCache.TypeDisplay(QueryElementType(query.FromClause, model));
+                case QueryExpressionSyntax query when !IsQuerySourceEvaluatedOnce(query, invocation):
+                    var bind = QueryBindMethod(query, invocation, model);
+                    if (loopKind is null)
+                    {
+                        loopKind = "query";
+                        loopDetail = $"{string.Join(", ", QueryRangeVariables(query))} in {query.FromClause.Expression}";
+                        // The PRIMARY from clause's range-variable type, matching loopDetail's source expression —
+                        // the thing actually being iterated. Anonymous projections resolve to an unnameable type
+                        // here (`from p in profiles.Select(x => new { .. })`), which is information, not a failure:
+                        // the element genuinely is not an entity.
+                        loopElementType = symbolCache.TypeDisplay(QueryElementType(query.FromClause, model));
+                        // The declaring type of the method the query BINDS to — System.Linq.Enumerable for a
+                        // real collection, the monad's own extension class for a comprehension over
+                        // Validation/Option/a state monad. The derive-side enumerating gate (IterationContext)
+                        // needs it because the SYNTAX of the two is identical and only the bind can tell a
+                        // loop from a single-shot monadic bind. Null when no clause symbol resolves — the
+                        // gate fails open, so an unresolved bind still counts as iteration.
+                        loopBindType = bind is null ? null : symbolCache.TypeDisplay((bind.ReducedFrom ?? bind).ContainingType);
+                    }
+
+                    // A query whose binds take Expression<> parameters (an IQueryable query) QUOTES its clause
+                    // bodies: a call in `where p.Nav.X == y` is compiled to an expression tree and translated
+                    // by the provider, never executed as C#. Latches like the lambda case above, and is
+                    // checked on EVERY query ancestor (not just the nearest loop) for the same reason.
+                    if (!inExpressionTree && bind is not null && BindsExpressionTrees(bind))
+                    {
+                        inExpressionTree = true;
+                    }
+
                     break;
 
                 case InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax memberAccess } enclosingCall:
@@ -1715,6 +1751,8 @@ internal static class FactExtractor
             LoopKind: loopKind,
             LoopDetail: loopDetail,
             LoopElementType: loopElementType,
+            LoopBindType: loopBindType,
+            InExpressionTree: inExpressionTree,
             EnclosingInvocations: enclosing is null ? null : FactStructuralContext.EncodeInvocations(enclosing),
             CatchTypes: catchTypes is null ? null : FactStructuralContext.EncodeList(catchTypes),
             EnclosingScopes: scopes is null ? null : FactStructuralContext.EncodeScopes(scopes)
@@ -1780,6 +1818,51 @@ internal static class FactExtractor
 
         return "";
     }
+
+    // The method a query expression BINDS to, preferring the clause that CONTAINS `node` (the clause whose
+    // execution semantics govern the reference), falling back to the final select/group and then the first
+    // body clause that resolves. Query syntax is sugar over Select/SelectMany/Where/… calls and Roslyn
+    // records which overload each clause bound — the ONLY signal that distinguishes `from x in xs` (a loop)
+    // from `from x in validation` (a single-shot monadic bind), and whether the clause bodies are QUOTED
+    // (the bind takes Expression<> parameters). Null when nothing resolves (a degenerate identity query, an
+    // error type) — callers fail open.
+    private static IMethodSymbol? QueryBindMethod(QueryExpressionSyntax query, SyntaxNode node, SemanticModel model)
+    {
+        IMethodSymbol? BindOf(SyntaxNode clause) =>
+            clause switch
+            {
+                QueryClauseSyntax q => model.GetQueryClauseInfo(q).OperationInfo.Symbol as IMethodSymbol,
+                SelectOrGroupClauseSyntax sg => model.GetSymbolInfo(sg).Symbol as IMethodSymbol,
+                _ => null,
+            };
+
+        // The innermost clause containing the reference, if it resolves.
+        foreach (var clause in query.Body.Clauses.Cast<SyntaxNode>().Append(query.Body.SelectOrGroup))
+        {
+            if (clause.Span.Contains(node.Span) && BindOf(clause) is { } containing)
+            {
+                return containing;
+            }
+        }
+
+        // Any clause that resolves — for the single-shot question every bind in one comprehension declares on
+        // the same monad, so which clause answers is immaterial.
+        return BindOf(query.Body.SelectOrGroup) ?? query.Body.Clauses.Select(BindOf).FirstOrDefault(m => m is not null);
+    }
+
+    // True when the lambda's conversion target is Expression<TDelegate> — the body is an expression TREE
+    // (quoted code handed to a provider), not an executable delegate.
+    private static bool IsExpressionTreeConversion(AnonymousFunctionExpressionSyntax lambda, SemanticModel model) =>
+        model.GetTypeInfo(lambda).ConvertedType is INamedTypeSymbol { Arity: 1 } converted
+        && converted.OriginalDefinition.ToDisplayString() == "System.Linq.Expressions.Expression<TDelegate>";
+
+    // True when the resolved query bind takes its selector/predicate as Expression<> (the Queryable shape) —
+    // every clause body of such a query is quoted.
+    private static bool BindsExpressionTrees(IMethodSymbol bind) =>
+        (bind.ReducedFrom ?? bind).Parameters.Any(p =>
+            p.Type is INamedTypeSymbol { Arity: 1 } named
+            && named.OriginalDefinition.ToDisplayString() == "System.Linq.Expressions.Expression<TDelegate>"
+        );
 
     // The element type a query's PRIMARY `from` clause binds: the explicitly declared type when the clause has
     // one (`from ProfileEntity p in ..`), else the element type of the source collection. GetDeclaredSymbol on a
@@ -1902,7 +1985,9 @@ internal static class FactExtractor
         string? EnclosingInvocations,
         string? CatchTypes,
         string? EnclosingScopes = null,
-        string? LoopElementType = null
+        string? LoopElementType = null,
+        string? LoopBindType = null,
+        bool InExpressionTree = false
     );
 
     // The encoded control-dependence guard set of an effect-bearing call-site `node`, within its enclosing

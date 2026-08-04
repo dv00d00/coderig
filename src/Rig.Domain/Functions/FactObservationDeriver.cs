@@ -43,7 +43,10 @@ public static class FactObservationDeriver
         string? firstArgName = null,
         string? firstArgTemplate = null,
         string? argumentNames = null,
-        string? argumentTemplates = null
+        string? argumentTemplates = null,
+        // The `query` context's bind declaring type (FactInvocation.LoopBindType) — feeds the IterationContext
+        // enumerating gate so a monadic comprehension is not reported as a loop. Null fails open.
+        string? loopBindType = null
     )
     {
         var observations = new List<EffectObservationInfo>();
@@ -52,7 +55,7 @@ public static class FactObservationDeriver
         // enumerating-lambda contexts among the ancestor invocations (`ids.Select(id => Fetch(id))` amplifies
         // exactly as `foreach (var id in ids) Fetch(id)` does but has no loop STATEMENT ancestor). Shared with
         // the cross-method iteration-fanout deriver — see IterationContext on why it is not inlined here.
-        var iteration = IterationContext.Of(loopKind, loopDetail, enclosingInvocations, rules);
+        var iteration = IterationContext.Of(loopKind, loopDetail, enclosingInvocations, rules, loopBindType: loopBindType);
         var iterationKind = iteration.Kind;
         var iterationDetail = iteration.Detail;
 
