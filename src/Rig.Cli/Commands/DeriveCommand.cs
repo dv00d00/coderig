@@ -244,8 +244,8 @@ internal static class DeriveCommand
         //     row type, never as a HazardFinding: step 1 is a dataset at (anchor x witness) grain, and folding
         //     it into the Hazards view would swamp it and re-tune `rig impact`'s hazard deltas. Sees the
         //     UNFILTERED effects for the same reason cache_coherence does — --only/--exclude is presentation.
-        var crossMethodRows = rules.CrossMethodNPlusOne is { } xm
-            ? CrossMethodNPlusOneDataset.TsvRows(
+        var crossMethodPairs = rules.CrossMethodNPlusOne is { } xm
+            ? CrossMethodNPlusOneDataset.Pairs(
                 invocations: await Reads.LoadInvocationRefsAsync(context),
                 graph: shapedGraph,
                 effects: unfilteredEffects,
@@ -253,6 +253,11 @@ internal static class DeriveCommand
                 rule: xm
             )
             : [];
+        var crossMethodRows = CrossMethodNPlusOneDataset.TsvRows(crossMethodPairs);
+        // The DISPLAYED grain (tier 3, HazardKinds.CrossMethodNPlusOne): one finding per anchor call site, CHA
+        // fan-out collapsed to the nearest-depth witness. The human view prints these; the pair rows above stay
+        // the machine dataset.
+        var crossMethodAnchors = CrossMethodNPlusOneDataset.AnchorFindings(crossMethodPairs);
 
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
@@ -333,14 +338,40 @@ internal static class DeriveCommand
         //     --no-amplification or when nothing in scope is looped. ---
         WriteAmplification(io.TextOutput.Output, amplificationFindings, opts.Limit);
 
-        // The cross-method dataset is a machine artifact (see CrossMethodNPlusOneDataset): the human view gets
-        // its size and the flag that emits it, never the rows — 74k pairs is not a review surface.
-        if (crossMethodRows.Count > 0)
+        // --- Cross-method N+1 (tier 3): the ANCHOR-grain finding view — one row per looped call site, nearest
+        //     witness as evidence, depth-tiered confidence. Terse by design (grouped by witness provider:op with
+        //     per-anchor lines capped by --limit); the full (anchor x witness) dataset stays a tsv artifact. ---
+        if (crossMethodAnchors.Count > 0)
         {
-            io.TextOutput.Output.WriteLine();
-            io.TextOutput.Output.WriteLine(
-                $"{CrossMethodNPlusOneDataset.RowType}: {crossMethodRows.Count} (anchor x witness) pair(s) — emit with --format tsv"
-            );
+            var output = io.TextOutput.Output;
+            output.WriteLine();
+            // Ubiquitous language: the finding is AMPLIFICATION of whatever effects the rules gate names —
+            // network calls by default, occasionally allocs — never just "reads"/"writes" (misleading).
+            output.WriteLine($"Cross-method amplification ({crossMethodAnchors.Count} looped call site(s) with a gated effect beneath):");
+            foreach (
+                var group in crossMethodAnchors
+                    .GroupBy(a => $"{a.WitnessProvider}:{a.WitnessOperation}")
+                    .OrderByDescending(g => g.Count())
+                    .ThenBy(g => g.Key, StringComparer.Ordinal)
+            )
+            {
+                output.WriteLine($"{Indent.L1}{group.Key}  ({group.Count()} anchor(s))");
+                foreach (var a in group.OrderBy(x => x.WitnessDepth).ThenBy(x => x.FilePath, StringComparer.Ordinal).Take(opts.Limit))
+                {
+                    output.WriteLine(
+                        $"{Indent.L2}{ShortenPath(a.FilePath)}:{a.Line}  🔁[{a.IterationKind}] -> {ShortName(a.WitnessResource)}  d{a.WitnessDepth} [{a.Confidence}]"
+                    );
+                }
+
+                if (group.Count() > opts.Limit)
+                {
+                    output.WriteLine(
+                        $"{Indent.L2}… {group.Count() - opts.Limit} more (raise --limit, or --format tsv for the full dataset)"
+                    );
+                }
+            }
+
+            output.WriteLine($"{Indent.L1}({crossMethodRows.Count} (anchor x witness) pair(s) in the tsv dataset)");
         }
 
         // --- STRUCTURAL observations attached to effects (parallel_fanout / lock_held_across_effect /

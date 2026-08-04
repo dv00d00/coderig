@@ -18,10 +18,11 @@ namespace Rig.Cli.Effects;
 // findings — they must not dilute the calibrated intra-method n_plus_1 or move `rig impact` attribution.
 internal static class CrossMethodNPlusOneDataset
 {
-    // The row type, deliberately DISTINCT from HazardKinds.NPlusOne. Not a member of HazardKinds.All: these are
-    // dataset rows, and admitting them to the hazard catalog would put tens of thousands of them into the
-    // Hazards view and into every `rig impact` hazard delta.
-    internal const string RowType = "n_plus_1_cross_method";
+    // The row type — TIER 3 of the findings catalog (HazardKinds.CrossMethodNPlusOne), still deliberately
+    // DISTINCT from HazardKinds.NPlusOne and NOT a member of HazardKinds.All: the tsv dataset stays at
+    // (anchor x witness) grain, the DISPLAYED finding is the AnchorFinding grain, and neither may dilute the
+    // calibrated intra-method hazards or move `rig impact`'s hazard deltas.
+    internal const string RowType = HazardKinds.CrossMethodNPlusOne;
 
     // TSV column reference (tab-separated, one row per (anchor, witness) pair):
     //   n_plus_1_cross_method
@@ -33,7 +34,54 @@ internal static class CrossMethodNPlusOneDataset
     //     \t keyPath \t elementType
     // keyPath and elementType are APPENDED rather than slotted beside keyToken so the 1..22 positions of the
     // first dataset stay valid — the two runs are meant to be comparable column-for-column.
-    internal static IReadOnlyList<string> TsvRows(
+    // One DISPLAYED finding per anchor CALL SITE — the grain a human reviews (see
+    // docs/backlog/todo/amplification-context-propagation.md). Dedupes the (anchor x witness) rows twice over:
+    // the witness cap comes from the rule's MaxWitnessesPerAnchor, and CHA fan-out (one row per candidate
+    // callee of the SAME call site) collapses here to the nearest-depth representative, because graph
+    // multiplicity is plumbing, not findings. Confidence is DEPTH-tiered: a depth-0/1 witness (the read is in
+    // the callee's own body or one hop down) is a far stronger claim under path-insensitive reach than a
+    // depth-5 one — this exact surface calibrated 2026-08-04 at 93% TP+TP-weak on a stratified hand audit.
+    internal sealed record AnchorFinding(
+        string Caller,
+        string FilePath,
+        int Line,
+        string IterationKind,
+        string WitnessProvider,
+        string WitnessOperation,
+        string WitnessResource,
+        int WitnessDepth
+    )
+    {
+        public string Confidence =>
+            WitnessDepth <= 1 ? "high"
+            : WitnessDepth <= 4 ? "medium"
+            : "low";
+    }
+
+    internal static IReadOnlyList<AnchorFinding> AnchorFindings(
+        IReadOnlyList<(CorrelationFinding Finding, FactIterationFanoutDeriver.IterationFanout Anchor)> pairs
+    ) =>
+        pairs
+            .GroupBy(p => (p.Finding.FilePath, p.Finding.Line))
+            .Select(g => g.OrderBy(p => p.Finding.WitnessDepth).ThenBy(p => p.Finding.Method, StringComparer.Ordinal).First())
+            .Select(p => new AnchorFinding(
+                Caller: p.Anchor.Caller,
+                FilePath: p.Finding.FilePath,
+                Line: p.Finding.Line,
+                IterationKind: p.Anchor.IterationKind,
+                WitnessProvider: p.Finding.WitnessProvider ?? "",
+                WitnessOperation: p.Finding.WitnessOperation ?? "",
+                WitnessResource: p.Finding.WitnessResourceKey ?? "",
+                // Always populated on presence findings; 0 (the strongest tier) only as a defensive fallback.
+                WitnessDepth: p.Finding.WitnessDepth ?? 0
+            ))
+            .OrderBy(f => f.FilePath, StringComparer.Ordinal)
+            .ThenBy(f => f.Line)
+            .ToList();
+
+    // The correlation run, ONCE — TsvRows and AnchorFindings are both pure projections of these pairs, so a
+    // caller that wants both (derive) never pays the reach join twice.
+    internal static IReadOnlyList<(CorrelationFinding Finding, FactIterationFanoutDeriver.IterationFanout Anchor)> Pairs(
         IReadOnlyList<FactInvocation> invocations,
         FactGraphData graph,
         IReadOnlyList<DerivedEffect> effects,
@@ -72,7 +120,7 @@ internal static class CrossMethodNPlusOneDataset
             )
         );
 
-        var rows = new List<string>(findings.Count);
+        var pairs = new List<(CorrelationFinding, FactIterationFanoutDeriver.IterationFanout)>(findings.Count);
         foreach (var f in findings)
         {
             if (!anchorOf.TryGetValue(AnchorId(f.FilePath, f.Line, f.Method), out var anchor))
@@ -80,6 +128,19 @@ internal static class CrossMethodNPlusOneDataset
                 continue; // unreachable in practice: every anchor came from a fanout event
             }
 
+            pairs.Add((f, anchor));
+        }
+
+        return pairs;
+    }
+
+    internal static IReadOnlyList<string> TsvRows(
+        IReadOnlyList<(CorrelationFinding Finding, FactIterationFanoutDeriver.IterationFanout Anchor)> pairs
+    )
+    {
+        var rows = new List<string>(pairs.Count);
+        foreach (var (f, anchor) in pairs)
+        {
             rows.Add(
                 string.Join(
                     "\t",

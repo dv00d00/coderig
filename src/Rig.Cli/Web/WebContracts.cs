@@ -32,7 +32,11 @@ internal sealed record TreeNodeDto(
     // hides (with FoldHidden = the hidden node count). Absent (null Fold*) when no rule matched or ?raw=true.
     string? FoldKind = null, // "opaque" | "collapse"
     string? FoldLabel = null, // the rule's human label, e.g. "charge-band pricing engine"
-    int FoldHidden = 0 // number of descendant nodes folded away (collapse only; 0 for opaque)
+    int FoldHidden = 0, // number of descendant nodes folded away (collapse only; 0 for opaque)
+    // The reaching edge's iteration context ("id in ids"), null when the call is not made from a loop. The
+    // client FOLDS this down the tree: every effect beneath a loop edge renders amplified (computed at render
+    // time, never materialized per child — see amplification-context-propagation).
+    string? Loop = null
 );
 
 internal sealed record TreeResponseDto(string From, bool Matched, IReadOnlyList<TreeNodeDto> Roots);

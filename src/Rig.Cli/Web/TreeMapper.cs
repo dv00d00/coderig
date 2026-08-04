@@ -132,7 +132,8 @@ internal static class TreeMapper
             Children: children,
             FoldKind: foldKind,
             FoldLabel: foldLabel,
-            FoldHidden: foldHidden
+            FoldHidden: foldHidden,
+            Loop: node.LoopKind is null ? null : (string.IsNullOrEmpty(node.LoopDetail) ? node.LoopKind : node.LoopDetail)
         );
 
     // Aggregate a raw "provider:operation" multiset into distinct EffectDto with site counts + glyph — the same

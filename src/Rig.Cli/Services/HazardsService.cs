@@ -31,7 +31,12 @@ public static class HazardsService
         // Amplification marks come back in the SAME HazardMark shape, so the tree overlay renders them with no
         // client change — the client only labels them (their Type is looped_effect, which is what distinguishes
         // them from the hazard set: HazardKinds.IsHazard(looped_effect) is false by design).
-        bool amplification = true
+        bool amplification = true,
+        // TIER 3 (cross-method amplification, HazardKinds.CrossMethodNPlusOne): anchor-grain marks on the
+        // CALLER method of each looped call site whose closure reaches a rules-gated effect (network calls by
+        // default — the gate is data, not "reads"). ON by default when the rules declare the section;
+        // `?crossMethod=false` opts out.
+        bool crossMethod = true
     )
     {
         var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules ?? [], loadedPaths: out var loadedPaths);
@@ -102,7 +107,7 @@ public static class HazardsService
                 .Where(f => treeMethods.Contains(f.Enclosing))
             : [];
 
-        return effectFindings
+        var marks = effectFindings
             .Concat(graphFindings)
             .Concat(amplificationFindings)
             .GroupBy(f => (f.Enclosing, f.Type))
@@ -113,6 +118,34 @@ public static class HazardsService
                 Sites: g.Count()
             ))
             .ToList();
+
+        // Tier-3 cross-method amplification: anchor-grain findings marked on the CALLER method (where a human
+        // would fix the loop). A third source folded into the same mark stream; the client only labels the type.
+        if (crossMethod && rules.CrossMethodNPlusOne is { } xm)
+        {
+            var anchors = Effects.CrossMethodNPlusOneDataset.AnchorFindings(
+                Effects.CrossMethodNPlusOneDataset.Pairs(
+                    invocations: await Rig.Storage.Queries.Reads.LoadInvocationRefsAsync(context),
+                    graph: await Rig.Storage.Queries.Reads.LoadShapedGraphAsync(context: context, rules: rules),
+                    effects: hazardEffects,
+                    observationRules: rules.Observations,
+                    rule: xm
+                )
+            );
+            marks.AddRange(
+                anchors
+                    .Where(a => treeMethods.Contains(a.Caller))
+                    .GroupBy(a => a.Caller)
+                    .Select(g => new HazardMark(
+                        MethodId: g.Key,
+                        Type: HazardKinds.CrossMethodNPlusOne,
+                        Confidence: g.OrderBy(a => ConfidenceRank(a.Confidence)).First().Confidence,
+                        Sites: g.Count()
+                    ))
+            );
+        }
+
+        return marks;
     }
 
     private static void CollectMethods(TraceNode node, HashSet<string> into)

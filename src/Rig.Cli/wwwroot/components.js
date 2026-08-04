@@ -171,6 +171,10 @@ function Trunc(node) {
 // change and only the amplification types (see HazardKinds.Amplification) are listed here.
 const CONF_RANK = { high: 0, medium: 1, low: 2 };
 const AMPLIFICATION_TYPES = new Set(["looped_effect"]);
+// Tier 3 — cross-method amplification (HazardKinds.CrossMethodNPlusOne): a looped call site whose closure
+// reaches a rules-gated effect (network calls by default — the gate is data, never just "reads"). Marked on
+// the CALLER method (where a human would fix the loop); Sites = looped call sites in that method.
+const CROSS_METHOD_TYPE = "n_plus_1_cross_method";
 function HazardMark(marks) {
   if (!marks || !marks.length) return null;
   const fmt = (ms) =>
@@ -178,11 +182,17 @@ function HazardMark(marks) {
       .sort((a, b) => a.type.localeCompare(b.type))
       .map((m) => `${m.type}(${m.confidence})${m.sites > 1 ? "×" + m.sites : ""}`)
       .join(", ");
-  const haz = marks.filter((m) => !AMPLIFICATION_TYPES.has(m.type));
+  const haz = marks.filter((m) => !AMPLIFICATION_TYPES.has(m.type) && m.type !== CROSS_METHOD_TYPE);
   const amp = marks.filter((m) => AMPLIFICATION_TYPES.has(m.type));
+  const xm = marks.filter((m) => m.type === CROSS_METHOD_TYPE);
   const parts = [];
   if (haz.length) parts.push("⚠ " + fmt(haz));
   if (amp.length) parts.push("🔁 Amplification: " + fmt(amp));
+  if (xm.length)
+    parts.push(
+      "🔁↓ Cross-method: " +
+        xm.map((m) => `${m.sites} looped call site(s) (${m.confidence})`).join(", "),
+    );
   const label = parts.join("  ");
   return h("span", { class: "haz", title: label }, label);
 }
@@ -232,7 +242,10 @@ function Rollup(agg) {
 // TreeNode(node, depth, ctx): recursive. Returns { el, agg } — agg is the subtree effect rollup, bubbled up
 // so each ancestor can show what its folded branch touches. ctx = {view, mode, tokens, collapseLevel,
 // signatures, predicates, hazards, hazById}. Collapse ≥ level hides children in the DOM (one click reveals).
-function TreeNode(node, depth, ctx) {
+// `amp` = number of loop edges on the path INTO this node (the amplification context, folded at render
+// time — every effect beneath a loop edge is issued once per iteration of each crossing, so it renders
+// with 🔁↑n rather than storing anything per child).
+function TreeNode(node, depth, ctx, amp = 0) {
   // prune gate: "changed only" (diff overlay) beats the paths gate; else paths prunes to effectful branches.
   const gate = ctx.changedOnly
     ? (c) => subtreeHasDiff(c, ctx)
@@ -264,6 +277,7 @@ function TreeNode(node, depth, ctx) {
           ? "−"
           : "";
 
+  const myAmp = amp + (node.loop ? 1 : 0);
   const own = filterEffects(node.effects, ctx.mode, ctx.tokens);
   const agg = new Map();
   accInto(agg, own);
@@ -276,7 +290,7 @@ function TreeNode(node, depth, ctx) {
   const childEls = [];
   if (hasKids) {
     for (const c of kids) {
-      const r = TreeNode(c, depth + 1, ctx);
+      const r = TreeNode(c, depth + 1, ctx, myAmp);
       childEls.push(r.el);
       r.agg.forEach((v) => accInto(agg, [v])); // bubble descendant effects into this node's rollup
     }
@@ -324,7 +338,20 @@ function TreeNode(node, depth, ctx) {
       ? h("span", { class: "sites" }, `${node.callSites}×`)
       : null,
     FoldBadge(node),
+    node.loop
+      ? h("span", { class: "fanout", title: "called once per element of: " + node.loop }, "🔁[" + node.loop + "]")
+      : null,
     EffectGlyphs(own),
+    myAmp > 0 && own.length
+      ? h(
+          "span",
+          {
+            class: "fanout",
+            title: myAmp + " loop edge(s) on the path — these effects execute once per iteration of each",
+          },
+          "🔁↑" + myAmp,
+        )
+      : null,
     ctx.predicates && node.guards
       ? h(
           "span",
