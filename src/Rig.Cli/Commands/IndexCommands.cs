@@ -108,7 +108,7 @@ internal static class IndexCommands
         };
         var time = new Option<bool>("--time")
         {
-            Description = "Print a per-phase timing breakdown (workspace build, compile+read, extract, save, graph).",
+            Description = "Print a per-phase timing breakdown (workspace build, compile+read+extract, save, graph).",
         };
         // The design-time-build cache is ON BY DEFAULT (validated on MedDBase via --verify-build-cache, 2026-06-20):
         // a project whose build inputs are unchanged skips the dominant build phase. --reuse-build-cache is kept

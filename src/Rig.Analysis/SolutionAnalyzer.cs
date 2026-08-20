@@ -23,8 +23,8 @@ public static class SolutionAnalyzer
         int? parallelism = null,
         // Drop test projects (by name convention) from the indexed set (the index default).
         bool excludeTests = false,
-        // Optional per-phase timing collector (rig index --time). Records rules-load, extract, and
-        // projections here; the loader records workspace-build / wire-generators / compile+read.
+        // Optional per-phase timing collector (rig index --time). Records projections here; the loader
+        // records workspace-build / wire-generators / the fused compile+read+extract pass.
         PhaseTimings? timings = null,
         // Directory for the design-time-build cache (rig index --reuse-build-cache). Null = disabled.
         string? buildCacheDir = null,
@@ -40,10 +40,15 @@ public static class SolutionAnalyzer
         var solutionFullPath = Path.GetFullPath(solutionPath);
         var phase = timings is null ? null : Stopwatch.StartNew();
 
+        // The DI method-name set is a pure function of the rules — built once for the run so each file's
+        // DI pass can syntactically reject non-registration invocations before paying a semantic bind.
+        var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
+
         progress?.Invoke("Loading solution");
         var sourceSet = await SolutionSourceLoader.LoadAsync(
             solutionPath: solutionFullPath,
             rules: rules,
+            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism),
             cancellationToken: cancellationToken,
             progress: progress,
             scopeProjectPaths: scopeProjectPaths,
@@ -61,7 +66,6 @@ public static class SolutionAnalyzer
             sourceSet: sourceSet,
             rules: rules,
             projectIdentity: projectIdentity,
-            parallelism: parallelism,
             progress: progress,
             timings: timings,
             phase: phase
@@ -93,9 +97,11 @@ public static class SolutionAnalyzer
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
         RigWorkspace? retained = null;
+        var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
         var sourceSet = await SolutionSourceLoader.LoadAsync(
             solutionPath: solutionFullPath,
             rules: rules,
+            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism),
             cancellationToken: cancellationToken,
             progress: progress,
             parallelism: parallelism,
@@ -112,7 +118,6 @@ public static class SolutionAnalyzer
             sourceSet: sourceSet,
             rules: rules,
             projectIdentity: null,
-            parallelism: null,
             progress: progress,
             timings: null,
             phase: null
@@ -120,7 +125,7 @@ public static class SolutionAnalyzer
         return (result, retained!);
     }
 
-    // SPIKE seam (incremental indexing): re-runs the compile+read pass and fact extraction over an
+    // SPIKE seam (incremental indexing): re-runs the compile+read+extract pass over an
     // already-built (possibly incrementally edited) Solution — no Buildalyzer, no workspace assembly.
     // Pairs with AnalyzeRetainingWorkspaceAsync: retain the workspace, WithDocumentText, then this.
     internal static async Task<AnalysisResult> ExtractFromSolutionAsync(
@@ -132,10 +137,12 @@ public static class SolutionAnalyzer
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
+        var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
         var sourceSet = await SolutionSourceLoader.ReadSolutionSourcesAsync(
             solution: solution,
             solutionPath: solutionFullPath,
             rules: rules,
+            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism: null),
             cancellationToken: cancellationToken,
             progress: progress
         );
@@ -145,7 +152,6 @@ public static class SolutionAnalyzer
             sourceSet: sourceSet,
             rules: rules,
             projectIdentity: null,
-            parallelism: null,
             progress: progress,
             timings: null,
             phase: null
@@ -244,9 +250,21 @@ public static class SolutionAnalyzer
             }
         }
 
+        // Extract NOW, while the compilations bound above are alive, in the same OrdinalIgnoreCase
+        // FilePath order the whole-solution pass uses — then drop the SourceModels (slice 2: nothing
+        // downstream may retain a SemanticModel or red root).
+        var orderedSources = sources.OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
+        var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
+        var extractionResults = ExtractProject(orderedSources, rules, diMethodNames, parallelism: null);
+        var extractedSources = new List<ExtractedSource>(orderedSources.Count);
+        for (var i = 0; i < orderedSources.Count; i++)
+        {
+            extractedSources.Add(new ExtractedSource(orderedSources[i].ProjectName, orderedSources[i].FilePath, extractionResults[i]));
+        }
+
         var sourceSet = new SolutionSourceSet(
             sourceFiles.OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            sources.OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
+            extractedSources
         );
 
         return ExtractFromSourceSet(
@@ -255,77 +273,64 @@ public static class SolutionAnalyzer
             sourceSet: sourceSet,
             rules: rules,
             projectIdentity: null,
-            parallelism: null,
             progress: progress,
             timings: null,
             phase: null
         );
     }
 
-    // The fact-extraction back half of AnalyzeAsync, factored out (unchanged) so the spike seams above
-    // can run the EXACT production extraction over a source set they loaded themselves.
+    // Per-PROJECT extraction sink (live-background-index slice 2), invoked by the loader while that
+    // project's Compilation is alive. Returns one result per model, positionally. The loader drops the
+    // SourceModels the moment this returns — nothing here may retain one.
+    //
+    // Parallel.For into pre-allocated slots (NOT AsParallel().AsOrdered()): writing result[i] for
+    // source[i] keeps the output deterministic by input position — which the FactIndex surrogate keys
+    // depend on — WITHOUT PLINQ's order-preserving merge. Distinct slots per iteration, so no write races.
+    // This runs NESTED inside the loader's Parallel.ForEachAsync over projects at the same cap;
+    // Parallel queues to the thread pool rather than creating threads, so total concurrency stays
+    // pool-bounded, not DOP².
+    private static SourceExtractionResult[] ExtractProject(
+        IReadOnlyList<SourceModel> models,
+        RuleSet rules,
+        IReadOnlySet<string> diMethodNames,
+        int? parallelism
+    )
+    {
+        // PER PROJECT, not per run: the cache keys are strong ISymbol references, and a source symbol
+        // reaches its owning CSharpCompilation — so a run-global instance pins every compilation in the
+        // solution for the whole run. Every memo is a pure function of its key, so a per-project instance
+        // emits byte-identical strings; it becomes unreachable when this returns.
+        var symbolCache = new SymbolStringCache();
+        var results = new SourceExtractionResult[models.Count];
+        Parallel.For(
+            fromInclusive: 0,
+            toExclusive: models.Count,
+            new ParallelOptions { MaxDegreeOfParallelism = parallelism ?? Environment.ProcessorCount },
+            i => results[i] = ExtractSource(models[i], rules, symbolCache, diMethodNames)
+        );
+        return results;
+    }
+
+    // The fact-ASSEMBLY back half of AnalyzeAsync: concatenate the per-file extraction results the
+    // loader already produced (facts are extracted per project, inside the loader's compile+read+extract
+    // pass, while each project's Compilation is alive — see ExtractProject). By the time this runs the
+    // source set is Roslyn-free: no SemanticModel, no syntax root, nothing pinning a compilation.
     private static AnalysisResult ExtractFromSourceSet(
         string solutionPath,
         string solutionFullPath,
         SolutionSourceSet sourceSet,
         RuleSet rules,
         string? projectIdentity,
-        int? parallelism,
         Action<string>? progress,
         PhaseTimings? timings,
         Stopwatch? phase
     )
     {
-        // Start the extraction clock fresh after the loader's phases so it isn't double-counted.
+        // Start the projection clock fresh after the loader's phases so it isn't double-counted.
         phase?.Restart();
-        var sources = sourceSet.IndexedSources;
+        var extractionResults = sourceSet.ExtractedSources.Select(e => e.Facts).ToArray();
 
-        progress?.Invoke($"Extracting observations from {sources.Count} indexed source files");
-
-        // Parallel.For into pre-allocated slots (NOT AsParallel().AsOrdered()): writing result[i] for
-        // source[i] keeps the output deterministic by input position — which the FactIndex surrogate keys
-        // depend on — WITHOUT PLINQ's order-preserving merge, which buffers/reorders completed results and
-        // added synchronization + retained-memory overhead on the hot extract path. Distinct slots per
-        // iteration, so no write races.
-        var extracted = 0;
-        var extractionResults = new SourceExtractionResult[sources.Count];
-        // ONE shared DocID memo across the whole parallel extraction: each symbol's DocID is computed once
-        // for the run (not once per reference site), and every fact gets the one shared string instance.
-        var symbolCache = new SymbolStringCache();
-        // The DI method-name set, built once for the run so each file's DI pass can syntactically reject
-        // non-registration invocations before paying a semantic bind (see DiRegistrationExtractor).
-        var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
-
-        Parallel.For(
-            fromInclusive: 0,
-            toExclusive: sources.Count,
-            new ParallelOptions { MaxDegreeOfParallelism = parallelism ?? Environment.ProcessorCount },
-            i =>
-            {
-                extractionResults[i] = ExtractSource(sources[i], rules, symbolCache, diMethodNames);
-                var current = Interlocked.Increment(ref extracted);
-                if (ShouldReportProgress(current: current, total: sources.Count))
-                {
-                    progress?.Invoke($"Extracted {current}/{sources.Count} source files");
-                }
-            }
-        );
-
-        if (phase is not null)
-        {
-            timings!.Record("extract", phase.Elapsed);
-            phase.Restart();
-        }
-
-        // Extraction is done — the SemanticModels/SyntaxTrees in the SourceModels are never read again
-        // (projections + interning below work off the plain-fact arrays). Release the Roslyn graph they
-        // pin NOW so it can collect before the save/graph phases instead of co-residing with them. A
-        // pre-save heap dump (gcroot) showed the compilations stay rooted via TWO independent paths:
-        //   (a) the AdhocWorkspace's SolutionCompilationState (incremental source-generator DriverStateTable), and
-        //   (b) THIS extract Parallel.For's closure, still captured on a parked thread-pool thread.
-        // So both must go: Dispose the workspace, AND clear the shared SourceModel list — emptying it frees
-        // the SourceModels (and their semantic models) out from under the lingering closure and sourceSet alike.
-
+        progress?.Invoke($"Assembling facts from {extractionResults.Length} extracted source files");
         progress?.Invoke("Building projections");
 
         // Pre-size the concatenated lists to the exact total (one cheap O(1)-per-result count pass) so the
@@ -364,9 +369,6 @@ public static class SolutionAnalyzer
             typeRelationFacts.AddRange(result.TypeRelations);
             dispatchFacts.AddRange(result.Dispatch);
             allocationFacts.AddRange(result.Allocations);
-            // Release each per-file result as it is consumed so it can collect DURING the concat, instead of
-            // all per-file arrays staying alive until the loop ends (then co-resident with the merged lists).
-            extractionResults[i] = null!;
         }
 
         // Mine XML service descriptor files (e.g. App_Data/Common/Xml/Services/*.xml) and
@@ -401,10 +403,14 @@ public static class SolutionAnalyzer
                 + $"{referenceFacts.Count} references, {allDiRegistrations.Length} di registrations"
         );
 
-        // Memory-profiling pause (RIG_PROFILE_PAUSE): here the Roslyn workspace, every project's
-        // compilation, and every file's SemanticModel are STILL ROOTED via sourceSet.IndexedSources,
-        // alongside the just-built fact arrays — the true co-resident peak. A gcdump now shows that
-        // whole live set. No-op unless the env var is set.
+        // Memory-profiling pause (RIG_PROFILE_PAUSE). Since slice 2 the source set is Roslyn-free: no
+        // SemanticModel or red root is rooted here any more — per-file models die inside the loader's
+        // per-project pass, so the co-resident peak this pause used to capture now occurs DURING
+        // compile+read+extract, not at this seam. The pause point (and its label, which measurement
+        // scripts key on) is kept so before/after gcdumps land at the same program point; what may still
+        // be live here is a workspace RETAINED by a caller (AnalyzeRetainingWorkspaceAsync), whose
+        // compilations are exactly what slice 2 deliberately does not release. No-op unless the env var
+        // is set.
         ProfilingPause.MaybePause("extract-peak (roslyn live)");
 
         // For project-level indexing, record the specific project path
@@ -426,11 +432,6 @@ public static class SolutionAnalyzer
             DispatchFacts: dispatchFacts,
             AllocationFacts: allocationFacts
         );
-    }
-
-    private static bool ShouldReportProgress(int current, int total)
-    {
-        return current == 1 || current == total || current % 100 == 0;
     }
 
     private static SourceExtractionResult ExtractSource(

@@ -10,7 +10,7 @@ namespace Rig.Analysis.Extraction;
 // times AND retain a fresh duplicate string for each — so caching by symbol is a CPU win on the hot extract
 // path (compute each DocID once) AND a peak-memory win on the retained fact strings (one shared instance).
 //
-// Shared across the whole run's parallel per-file extraction, hence concurrent. Keyed by
+// Scoped to ONE project (slice 2): its keys are strong ISymbol refs, so a run-long instance pinned every Compilation's parallel per-file extraction, hence concurrent. Keyed by
 // SymbolEqualityComparer.Default, which ignores exactly what a DocID ignores (nullability/tuple names), so
 // two symbols that compare equal always produce the same DocID — sharing one entry is correctness-safe.
 //

@@ -33,6 +33,12 @@ internal static class SolutionSourceLoader
     public static async Task<SolutionSourceSet> LoadAsync(
         string solutionPath,
         RuleSet rules,
+        // Per-PROJECT extraction sink (live-background-index slice 2), invoked while that project's
+        // Compilation is alive. Receives the project's SourceModels in the loader's per-file order and
+        // returns one result per model, POSITIONALLY. The loader drops every SourceModel the moment this
+        // returns, so the callee must NOT retain one — that retention (a SemanticModel + red root per file
+        // for the whole run) is exactly what this seam removes.
+        Func<IReadOnlyList<SourceModel>, SourceExtractionResult[]> extractProject,
         CancellationToken cancellationToken,
         Action<string>? progress = null,
         // When non-null, only projects whose normalised full path is in this set are built and
@@ -49,7 +55,7 @@ internal static class SolutionSourceLoader
         // Drop test projects (by name convention) before their design-time build — --no-tests.
         bool excludeTests = false,
         // Optional per-phase timing collector (rig index --time). Records workspace-build,
-        // wire-generators, and the fused compile+read pass. Null = no timing.
+        // wire-generators, and the fused compile+read+extract pass. Null = no timing.
         PhaseTimings? timings = null,
         // Directory for the design-time-build cache (rig index --reuse-build-cache). Null = disabled.
         string? buildCacheDir = null,
@@ -115,6 +121,7 @@ internal static class SolutionSourceLoader
             solution: workspace.CurrentSolution,
             solutionPath: solutionPath,
             rules: rules,
+            extractProject: extractProject,
             cancellationToken: cancellationToken,
             progress: progress,
             parallelism: parallelism,
@@ -122,15 +129,17 @@ internal static class SolutionSourceLoader
         );
     }
 
-    // The compile+read pass over an already-assembled Roslyn Solution: per C# project, get the
-    // compilation, collect error diagnostics, and read the sources into SourceModels. Extracted from
+    // The compile+read+extract pass over an already-assembled Roslyn Solution: per C# project, get the
+    // compilation, collect error diagnostics, read the sources into SourceModels, run `extractProject`
+    // over them while the compilation is alive, and keep only the plain fact records. Extracted from
     // LoadAsync so the SPIKE seam above can re-run it over a RETAINED workspace's (possibly
-    // incrementally edited) CurrentSolution without re-running Buildalyzer. Behaviour is identical to
-    // the historical inline pass.
+    // incrementally edited) CurrentSolution without re-running Buildalyzer.
     internal static async Task<SolutionSourceSet> ReadSolutionSourcesAsync(
         Solution solution,
         string solutionPath,
         RuleSet rules,
+        // See LoadAsync: the per-project extraction sink. SourceModels do not survive this call.
+        Func<IReadOnlyList<SourceModel>, SourceExtractionResult[]> extractProject,
         CancellationToken cancellationToken,
         Action<string>? progress = null,
         int? parallelism = null,
@@ -179,7 +188,7 @@ internal static class SolutionSourceLoader
         // evicted and REBUILT across the parallel traversal — reported after the phase, like the build summary.
         var perProjectCompile = timings is null
             ? null
-            : new ConcurrentBag<(string Name, double CompileSec, double DiagSec, double ReadSec)>();
+            : new ConcurrentBag<(string Name, double CompileSec, double DiagSec, double ReadSec, double ExtractSec)>();
 
         var first = csharpProjects[0];
         var rest = csharpProjects.Skip(1);
@@ -196,7 +205,9 @@ internal static class SolutionSourceLoader
         if (phase is not null)
         {
             var compileReadWall = phase.Elapsed;
-            timings!.Record("compile+read", compileReadWall);
+            // Fused phase (slice 2): extraction now runs per project inside this pass, while each
+            // project's Compilation is alive — there is no separate `extract` wall interval any more.
+            timings!.Record("compile+read+extract", compileReadWall);
             ReportCompileSummary(progress, perProjectCompile!, compileReadWall, parallelism ?? DefaultParallelism);
         }
 
@@ -222,9 +233,12 @@ internal static class SolutionSourceLoader
             }
         }
 
+        // The OrdinalIgnoreCase FilePath sort is FACT-IDENTITY-BEARING, byte-for-byte: the *FactIndex
+        // surrogate keys are list positions over this order, and FactGraphProjection/Reads dedupe methods
+        // with an order-sensitive GroupBy(SymbolId).First(). Do not "simplify" the comparer or the key.
         return new SolutionSourceSet(
             projectResults.SelectMany(r => r.SourceFiles).OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
+            projectResults.SelectMany(r => r.Extracted).OrderBy(e => e.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
         );
 
         async ValueTask ProcessProject(Project project, CancellationToken ct)
@@ -249,17 +263,26 @@ internal static class SolutionSourceLoader
 
             var diagSec = watch?.Elapsed.TotalSeconds ?? 0;
             watch?.Restart();
-            projectResults.Add(
-                await LoadProjectSourcesAsync(
-                    solutionPath: solutionPath,
-                    project: project,
-                    compilation: compilation,
-                    rules: rules,
-                    progress: progress,
-                    cancellationToken: ct
+            var loadResult = await LoadProjectSourcesAsync(
+                solutionPath: solutionPath,
+                project: project,
+                compilation: compilation,
+                rules: rules,
+                extractProject: extractProject,
+                progress: progress,
+                cancellationToken: ct
+            );
+            projectResults.Add(loadResult);
+            var readAndExtractSec = watch?.Elapsed.TotalSeconds ?? 0;
+            perProjectCompile?.Add(
+                (
+                    project.Name,
+                    compileSec,
+                    diagSec,
+                    Math.Max(val1: 0, val2: readAndExtractSec - loadResult.ExtractSeconds),
+                    loadResult.ExtractSeconds
                 )
             );
-            perProjectCompile?.Add((project.Name, compileSec, diagSec, watch?.Elapsed.TotalSeconds ?? 0));
 
             var current = Interlocked.Increment(ref analyzedProjects);
             ReportProgress(progress, $"Analyzed project {current}/{csharpProjects.Length}: {project.Name}");
@@ -730,7 +753,7 @@ internal static class SolutionSourceLoader
     // separate work view, same shape as ReportBuildSummary.
     private static void ReportCompileSummary(
         Action<string>? progress,
-        ConcurrentBag<(string Name, double CompileSec, double DiagSec, double ReadSec)> perProject,
+        ConcurrentBag<(string Name, double CompileSec, double DiagSec, double ReadSec, double ExtractSec)> perProject,
         TimeSpan wall,
         int parallelism
     )
@@ -744,14 +767,15 @@ internal static class SolutionSourceLoader
         var compile = items.Sum(p => p.CompileSec);
         var diag = items.Sum(p => p.DiagSec);
         var read = items.Sum(p => p.ReadSec);
-        var sumCpu = compile + diag + read;
+        var extract = items.Sum(p => p.ExtractSec);
+        var sumCpu = compile + diag + read + extract;
         var effective = wall.TotalSeconds > 0 ? sumCpu / wall.TotalSeconds : 0;
         var slowest = string.Join(", ", items.OrderByDescending(p => p.CompileSec).Take(5).Select(p => $"{p.Name} {p.CompileSec:0.0}s"));
 
         progress(
-            $"compile+read: {items.Length} project(s) | wall {wall.TotalSeconds:0.0}s | "
+            $"compile+read+extract: {items.Length} project(s) | wall {wall.TotalSeconds:0.0}s | "
                 + $"Σcpu {sumCpu:0.0}s (≠ wall; ~{effective:0.0}x parallel @ cap {parallelism}) | "
-                + $"Σ getCompilation {compile:0.0}s / Σ diagnostics {diag:0.0}s / Σ read {read:0.0}s"
+                + $"Σ getCompilation {compile:0.0}s / Σ diagnostics {diag:0.0}s / Σ read {read:0.0}s / Σ extract {extract:0.0}s"
         );
         progress($"  slowest getCompilation: {slowest}");
     }
@@ -1263,10 +1287,13 @@ internal static class SolutionSourceLoader
         Project project,
         Compilation compilation,
         RuleSet rules,
+        Func<IReadOnlyList<SourceModel>, SourceExtractionResult[]> extractProject,
         Action<string>? progress,
         CancellationToken cancellationToken
     )
     {
+        // Per-file models live ONLY inside this method (slice 2): built here, handed to extractProject
+        // while `compilation` is alive, and dropped on return. They must never escape.
         var sources = new List<SourceModel>();
         var sourceFiles = new List<SourceFileInfo>();
 
@@ -1353,7 +1380,28 @@ internal static class SolutionSourceLoader
             sources.Add(generated);
         }
 
-        return new ProjectSourceLoadResult(sourceFiles, sources);
+        // Extract NOW, while this project's compilation(s) — including the generated documents'
+        // generatedCompilation — are still alive, then keep only the plain fact records. Generated
+        // documents were appended to `sources` above, so they are extracted here too, BEFORE the models
+        // are dropped; losing them would silently drop the clientpage_proxy discriminator facts.
+        var extractWatch = Stopwatch.StartNew();
+        var extractionResults = extractProject(sources);
+        var extractSeconds = extractWatch.Elapsed.TotalSeconds;
+        if (extractionResults.Length != sources.Count)
+        {
+            throw new InvalidOperationException(
+                $"extractProject returned {extractionResults.Length} result(s) for {sources.Count} source model(s) "
+                    + $"in '{project.Name}' — results must be positional, one per model."
+            );
+        }
+
+        var extracted = new ExtractedSource[sources.Count];
+        for (var i = 0; i < sources.Count; i++)
+        {
+            extracted[i] = new ExtractedSource(sources[i].ProjectName, sources[i].FilePath, extractionResults[i]);
+        }
+
+        return new ProjectSourceLoadResult(sourceFiles, extracted, extractSeconds);
     }
 
     // Wires source-generator ProjectReferences (OutputItemType="Analyzer") onto each referencing
@@ -1641,7 +1689,14 @@ internal static class SolutionSourceLoader
 
     private sealed class FrameworkSelectionException(string message) : InvalidOperationException(message);
 
-    private sealed record ProjectSourceLoadResult(IReadOnlyList<SourceFileInfo> SourceFiles, IReadOnlyList<SourceModel> Sources);
+    // Roslyn-free: one project's classification rows + extracted facts (ExtractSeconds = time spent inside
+    // the extractProject callback, reported in the compile summary). The SourceModels this was built from
+    // are dropped before this record is constructed.
+    private sealed record ProjectSourceLoadResult(
+        IReadOnlyList<SourceFileInfo> SourceFiles,
+        IReadOnlyList<ExtractedSource> Extracted,
+        double ExtractSeconds
+    );
 
     // Loads source-generator/analyzer DLLs and — crucially — REDIRECTS their Microsoft.CodeAnalysis*
     // (+ Immutable/Metadata) references to the HOST's already-loaded copies. A generator compiled
