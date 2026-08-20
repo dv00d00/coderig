@@ -68,11 +68,12 @@ public static class SolutionAnalyzer
         );
     }
 
-    // SPIKE seam (incremental indexing): AnalyzeAsync, but hands the built AdhocWorkspace back to the
+    // SPIKE seam (incremental indexing): AnalyzeAsync, but hands the built RigWorkspace back to the
     // caller instead of letting it go out of scope, so a document edit can be applied in-memory
-    // (Solution.WithDocumentText) and re-extracted via ExtractFromSolutionAsync. The caller owns the
-    // workspace's lifetime. Behaviour of the returned AnalysisResult is identical to AnalyzeAsync.
-    internal static async Task<(AnalysisResult Result, AdhocWorkspace Workspace)> AnalyzeRetainingWorkspaceAsync(
+    // (Solution.WithDocumentText / RigWorkspace.ChangeDocumentText) and re-extracted via
+    // ExtractFromSolutionAsync. The caller owns the workspace's lifetime. Behaviour of the returned
+    // AnalysisResult is identical to AnalyzeAsync.
+    internal static async Task<(AnalysisResult Result, RigWorkspace Workspace)> AnalyzeRetainingWorkspaceAsync(
         string solutionPath,
         RuleSet rules,
         CancellationToken cancellationToken = default,
@@ -80,7 +81,7 @@ public static class SolutionAnalyzer
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
-        AdhocWorkspace? retained = null;
+        RigWorkspace? retained = null;
         var sourceSet = await SolutionSourceLoader.LoadAsync(
             solutionPath: solutionFullPath,
             rules: rules,

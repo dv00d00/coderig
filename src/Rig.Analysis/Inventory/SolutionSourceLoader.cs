@@ -58,11 +58,12 @@ internal static class SolutionSourceLoader
         // Run the MSBuild `Restore` target before each design-time build (rig index --restore). OFF by
         // default: it is the dominant cost of the build phase and rig indexes an already-built tree.
         bool restore = false,
-        // SPIKE seam (incremental indexing): when non-null, receives the built AdhocWorkspace (after
+        // SPIKE seam (incremental indexing): when non-null, receives the built RigWorkspace (after
         // generator wiring, before the compile+read pass) so a caller can RETAIN it, apply an in-memory
-        // document edit (Solution.WithDocumentText) and re-extract via ReadSolutionSourcesAsync. The
-        // callback takes OWNERSHIP of the workspace's lifetime; LoadAsync never disposed it anyway.
-        Action<AdhocWorkspace>? retainWorkspace = null
+        // document edit (Solution.WithDocumentText / RigWorkspace.ChangeDocumentText) and re-extract via
+        // ReadSolutionSourcesAsync. The callback takes OWNERSHIP of the workspace's lifetime; LoadAsync
+        // never disposed it anyway.
+        Action<RigWorkspace>? retainWorkspace = null
     )
     {
         var maxParallelism = Math.Max(val1: 1, val2: parallelism ?? DefaultParallelism);
@@ -74,7 +75,7 @@ internal static class SolutionSourceLoader
         // loading old-style ToolsVersion="4.0" projects. The crash is specific to the
         // MSBuildWorkspace in-process loader — plain msbuild.exe is unaffected, which is why
         // this out-of-process path works. (Roslyn PR #83477 merged 2026-05-07 for milestone
-        // 18.8; NOT in our pinned Microsoft.CodeAnalysis 5.3.0 (~18.3), and still reported in
+        // 18.8; NOT in our pinned Microsoft.CodeAnalysis 5.6.0 (Directory.Packages.props), and still reported in
         // released SDK 10.0.200 — see dotnet/roslyn#82931, dotnet/sdk#53383. Revisit a
         // MSBuildWorkspace switch only after upgrading onto a shipped 18.8+.)
         // addProjectReferences:false loads project-to-project references from their compiled
@@ -254,6 +255,7 @@ internal static class SolutionSourceLoader
                     project: project,
                     compilation: compilation,
                     rules: rules,
+                    progress: progress,
                     cancellationToken: ct
                 )
             );
@@ -264,7 +266,7 @@ internal static class SolutionSourceLoader
         }
     }
 
-    private static AdhocWorkspace BuildWorkspace(
+    private static RigWorkspace BuildWorkspace(
         string solutionPath,
         RuleSet rules,
         Action<string>? progress,
@@ -791,9 +793,9 @@ internal static class SolutionSourceLoader
             || name.Contains(".Tests.", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static AdhocWorkspace BuildWorkspaceFromResults(IReadOnlyList<ProjectBuildInfo> projects, int parallelism)
+    private static RigWorkspace BuildWorkspaceFromResults(IReadOnlyList<ProjectBuildInfo> projects, int parallelism)
     {
-        var workspace = new AdhocWorkspace();
+        var workspace = new RigWorkspace();
 
         // Pass 1 — assign stable ProjectIds keyed by normalised project path so cross-project
         // references can be resolved in pass 2 without depending on ordering.
@@ -1261,6 +1263,7 @@ internal static class SolutionSourceLoader
         Project project,
         Compilation compilation,
         RuleSet rules,
+        Action<string>? progress,
         CancellationToken cancellationToken
     )
     {
@@ -1329,12 +1332,12 @@ internal static class SolutionSourceLoader
 
         // Also index SOURCE-GENERATED documents (Roslyn source generators wired as analyzer refs,
         // e.g. RequestResponseProxyGenerator emitting <Page>Proxy : ProxyBase). These are NOT in
-        // project.Documents, and AdhocWorkspace.GetSourceGeneratedDocumentsAsync does not execute
+        // project.Documents, and the workspace's GetSourceGeneratedDocumentsAsync does not execute
         // generators in this design-time-build setup (it returns nothing). So drive the generators
         // explicitly with a CSharpGeneratorDriver over the project compilation and index the trees it
         // produces — that's what makes the generated proxy base-type facts (the clientpage_proxy
         // effect gate's discriminator) exist.
-        foreach (var generated in await RunSourceGeneratorsAsync(project, compilation, cancellationToken))
+        foreach (var generated in await RunSourceGeneratorsAsync(project, compilation, progress, cancellationToken))
         {
             sourceFiles.Add(
                 new SourceFileInfo(
@@ -1360,7 +1363,7 @@ internal static class SolutionSourceLoader
     // generator project; only references that actually expose generators are added. Best-effort: a
     // generator project that can't emit or load is skipped (it just won't contribute generated types).
     private static async Task WireGeneratorAnalyzersAsync(
-        AdhocWorkspace workspace,
+        RigWorkspace workspace,
         Action<string>? progress,
         CancellationToken cancellationToken
     )
@@ -1386,7 +1389,7 @@ internal static class SolutionSourceLoader
                 if (!emittedDllByGeneratorPath.TryGetValue(key: generatorProjectPath, value: out var dllPath))
                 {
                     dllPath = projectByPath.TryGetValue(generatorProjectPath, out var generatorId)
-                        ? await EmitCompilationToTempAsync(solution.GetProject(generatorId)!, cancellationToken)
+                        ? await EmitCompilationToTempAsync(solution.GetProject(generatorId)!, progress, cancellationToken)
                         : null;
                     emittedDllByGeneratorPath[generatorProjectPath] = dllPath;
                 }
@@ -1419,24 +1422,52 @@ internal static class SolutionSourceLoader
 
     // Emits a project's compilation to a temp DLL so its source generators can be loaded as an analyzer
     // reference. Returns null when the compilation is unavailable or fails to emit (then the generator
-    // is simply not wired). The temp file is left for the process lifetime (OS temp cleanup).
-    private static async Task<string?> EmitCompilationToTempAsync(Project project, CancellationToken cancellationToken)
+    // is simply not wired) — and REPORTS why on the progress channel, because a silently-unwired
+    // generator means its generated types are missing from the index with no trace. In a resident
+    // workspace that silence would outlive a single index and poison every subsequent query, so the
+    // degradation must be visible. Still degrades (never throws). The temp file is left for the
+    // process lifetime (OS temp cleanup).
+    private static async Task<string?> EmitCompilationToTempAsync(
+        Project project,
+        Action<string>? progress,
+        CancellationToken cancellationToken
+    )
     {
         try
         {
             var compilation = await project.GetCompilationAsync(cancellationToken);
             if (compilation is null)
             {
+                ReportProgress(
+                    progress,
+                    $"WARN: generator project '{project.Name}' produced no compilation — its source generators will NOT run (generated types will be missing)"
+                );
                 return null;
             }
 
             var tempDll = Path.Combine(Path.GetTempPath(), $"rig-gen-{project.AssemblyName}-{Guid.NewGuid():N}.dll");
             await using var stream = File.Create(tempDll);
             var emitResult = compilation.Emit(stream, cancellationToken: cancellationToken);
-            return emitResult.Success ? tempDll : null;
+            if (!emitResult.Success)
+            {
+                var firstError = emitResult.Diagnostics.FirstOrDefault(d => d.Severity == DiagnosticSeverity.Error);
+                ReportProgress(
+                    progress,
+                    $"WARN: generator project '{project.Name}' failed to emit — its source generators will NOT run "
+                        + $"(generated types will be missing): {firstError?.ToString() ?? "no error diagnostic reported"}"
+                );
+                return null;
+            }
+
+            return tempDll;
         }
-        catch
+        catch (Exception ex)
         {
+            ReportProgress(
+                progress,
+                $"WARN: generator project '{project.Name}' emit threw — its source generators will NOT run "
+                    + $"(generated types will be missing): {ex.GetType().Name}: {ex.Message.Split('\n')[0].Trim()}"
+            );
             return null;
         }
     }
@@ -1444,11 +1475,14 @@ internal static class SolutionSourceLoader
     // Executes the project's Roslyn source generators (from its analyzer references) against its
     // compilation and returns a SourceModel per generated syntax tree, with a semantic model bound to
     // the generator-updated compilation. Projects with no generators (the common case) return empty
-    // after a cheap check. Generator failures are swallowed (best-effort) so one bad generator can't
-    // fail the whole index.
+    // after a cheap check. A generator failure still degrades to [] (best-effort — one bad generator
+    // must not fail the whole index) but is REPORTED on the progress channel: silently-dropped
+    // generated documents are invisible recall loss, and in a resident workspace the silence would
+    // persist for the process lifetime, not just one index.
     private static async Task<IReadOnlyList<SourceModel>> RunSourceGeneratorsAsync(
         Project project,
         Compilation compilation,
+        Action<string>? progress,
         CancellationToken cancellationToken
     )
     {
@@ -1496,9 +1530,15 @@ internal static class SolutionSourceLoader
             }
             return results;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Best-effort: a misbehaving generator must not abort indexing of the real source.
+            // Best-effort: a misbehaving generator must not abort indexing of the real source — but the
+            // dropped generated documents must be VISIBLE, not silent.
+            ReportProgress(
+                progress,
+                $"WARN: source generator run failed for '{project.Name}' — its generated documents are skipped "
+                    + $"(generated types will be missing): {ex.GetType().Name}: {ex.Message.Split('\n')[0].Trim()}"
+            );
             return [];
         }
     }

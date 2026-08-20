@@ -10,7 +10,7 @@ using Shouldly;
 namespace Rig.Tests.Analysis;
 
 // SPIKE: gate for a resident/incremental indexing architecture. Question under test — does
-// re-extracting over an INCREMENTALLY-UPDATED Roslyn solution (the retained AdhocWorkspace from the
+// re-extracting over an INCREMENTALLY-UPDATED Roslyn solution (the retained RigWorkspace from the
 // cold load, plus one Solution.WithDocumentText edit) produce facts IDENTICAL to a cold full-solution
 // index of the same tree state? A negative result is a valid outcome: the test's job on divergence is
 // to print the exact symmetric difference, not to pass.
@@ -156,7 +156,13 @@ public sealed class IncrementalExtractionSpikeTests
         foreach (var r in result.References ?? [])
         {
             lines.Add(
-                $"ref  | {r.TargetSymbolId} | {r.RefKind} | encl={r.EnclosingSymbolId ?? ""} | {Normalize(r.FilePath, root)}:{r.Line}"
+                // TargetAssembly + TargetInSource are in the tuple DELIBERATELY: they are the two fields a
+                // duplicate-assembly-identity regression moves while every DocID stays byte-identical (the
+                // failure class the `--no-closure` experiment demonstrated — a type visible as BOTH a live
+                // compilation and a metadata DLL stops binding and the edge is silently dropped). Comparing
+                // DocIDs alone is blind to exactly the hazard this architecture is most exposed to.
+                $"ref  | {r.TargetSymbolId} | {r.RefKind} | encl={r.EnclosingSymbolId ?? ""} | "
+                    + $"asm={r.TargetAssembly} | inSource={r.TargetInSource} | {Normalize(r.FilePath, root)}:{r.Line}"
             );
         }
 
