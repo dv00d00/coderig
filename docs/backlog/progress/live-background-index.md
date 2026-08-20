@@ -201,6 +201,58 @@ exactly (fails in the full suite, passes in isolation). Cheap confirmation: log
    corruption risk it first appeared. But contiguity is an accident of path sorting (`MedDBase.Pages` has
    no common source root), so nothing may depend on it.
 
+## DECISION 2026-08-20 — the coarse-vs-gated binary is premature; make it a policy swap
+
+The slice-4 design (`docs/spikes/slice4-surface-hash-gate-design.md`) argues coarse invalidation is NOT good
+enough and the surface-hash gate must ship as one indivisible slice. Its measurements over 564 real `.cs`
+edits are the best data we have, and two of them correct this document:
+
+- **The median edit is not cheap under coarse.** "median cascade 6 of 187 assemblies" counts PROJECTS; those 6
+  projects are a median **3,366 files — 27% of the codebase** — because **79.1%** of cascades pull in
+  `MedDBase.Pages` (2,595 files) or `DataAccessTier` (2,475). Gated: median **1** file.
+- **The hub rationale was the weaker half.** Only 8.7% of edits land in a 51+-dependent assembly and only
+  26.5% of those are body-only, so the gate erases a 50+-project cascade for just **13 of 564 edits (2.3%)**.
+  The gate's value is the MEDIAN, not the tail. This document previously said the opposite.
+
+Also load-bearing, and a correction to EVERY cascade measurement in this program including my own: the
+dependents graph derived from `reference_facts` is a **lower bound** (218 assemblies / 1,846 edges) — a csproj
+reference with no observed use produces no edge. The real graph is MSBuild's `ProjectReferences`.
+
+### Why neither branch is the answer yet
+
+Both branches assume **file count is the cost driver**. It is not, and nothing in the program has measured the
+thing that is. From the cold-index telemetry: the whole `extract` phase is **36.6s for all ~12,369 files**
+(~3ms/file), while `compile+read` is 48.4s wall / 646s CPU for 224 projects (~2.9s CPU per project). So the
+cost of a cascade is dominated by **how many project COMPILATIONS must re-bind**, not by how many files are
+re-extracted. A 3,366-file coarse cascade may well be ~10-15s of mostly-parallel work — slower than gated, but
+nowhere near the "quarter of the codebase" framing implies, and possibly inside budget for a BACKGROUND task.
+
+Nobody has converted the file counts into seconds. The resident-workspace trial
+(`tests/Rig.Tests/Analysis/ResidentWorkspaceTrial.cs`) measures exactly that: warm-workspace re-extract of the
+whole solution, from which per-project re-bind and per-file extract costs both fall out.
+
+### The decision
+
+1. **Build slice 3 with a PLUGGABLE dirty-set policy** — an interface taking changed file paths and returning
+   the documents to re-extract. Coarse (project + transitive dependents, over the MSBuild reference graph) is
+   the first implementation; the surface-hash gate becomes a second implementation of the same interface. The
+   coarse-vs-gated choice becomes a **policy swap decided by measurement**, not an architectural fork decided
+   by argument. This costs one interface.
+2. **Converging overlay + disclosure, so cascade latency never blocks an answer.** On an edit: re-extract the
+   edited file(s) IMMEDIATELY (correct by construction — the retained Solution holds every dependency as live
+   source, so the edited file's own binding is fully resolved), serve queries at once while DISCLOSING which
+   projects are not yet reconciled, and run the cascade in the background until the disclosure clears. This
+   converts cascade cost from a latency problem into a disclosure problem, which is what rig already does for
+   `~heuristic` dispatch and the "NOT a real call" fan-out. It is also why slice 5 is load-bearing architecture
+   rather than a nicety.
+3. **Decide the default policy on the trial numbers**, then ship the surface hash as the optimization that
+   shrinks background work and removes the disclosure window — with the four widenings the design identifies
+   (declaration-text hash, MSBuild reference graph, `IsIterator`, assembly attributes) and `--verify-cascade-gate`.
+
+Note the design's own data supports the converging shape: **59.4% of file-edits are body-only**, so in the
+majority of cases the background cascade will find nothing changed — the disclosure window is usually a false
+alarm, which is exactly the cheap-to-tolerate failure mode, and exactly what the surface hash later removes.
+
 ## PLAN — sequenced build slices
 
 Each slice is independently useful, has its own acceptance check, and does not depend on the next one landing.
