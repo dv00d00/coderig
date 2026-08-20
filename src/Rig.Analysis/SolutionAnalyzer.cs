@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using Microsoft.CodeAnalysis;
 using Rig.Analysis.Extraction;
 using Rig.Analysis.Inventory;
 using Rig.Analysis.Rules;
 using Rig.Domain.Data;
+using RuleSet = Rig.Domain.Data.RuleSet;
 
 namespace Rig.Analysis;
 
@@ -53,6 +55,99 @@ public static class SolutionAnalyzer
             verifyBuildCache: verifyBuildCache,
             restore: restore
         );
+        return ExtractFromSourceSet(
+            solutionPath: solutionPath,
+            solutionFullPath: solutionFullPath,
+            sourceSet: sourceSet,
+            rules: rules,
+            projectIdentity: projectIdentity,
+            parallelism: parallelism,
+            progress: progress,
+            timings: timings,
+            phase: phase
+        );
+    }
+
+    // SPIKE seam (incremental indexing): AnalyzeAsync, but hands the built AdhocWorkspace back to the
+    // caller instead of letting it go out of scope, so a document edit can be applied in-memory
+    // (Solution.WithDocumentText) and re-extracted via ExtractFromSolutionAsync. The caller owns the
+    // workspace's lifetime. Behaviour of the returned AnalysisResult is identical to AnalyzeAsync.
+    internal static async Task<(AnalysisResult Result, AdhocWorkspace Workspace)> AnalyzeRetainingWorkspaceAsync(
+        string solutionPath,
+        RuleSet rules,
+        CancellationToken cancellationToken = default,
+        Action<string>? progress = null
+    )
+    {
+        var solutionFullPath = Path.GetFullPath(solutionPath);
+        AdhocWorkspace? retained = null;
+        var sourceSet = await SolutionSourceLoader.LoadAsync(
+            solutionPath: solutionFullPath,
+            rules: rules,
+            cancellationToken: cancellationToken,
+            progress: progress,
+            retainWorkspace: workspace => retained = workspace
+        );
+        var result = ExtractFromSourceSet(
+            solutionPath: solutionPath,
+            solutionFullPath: solutionFullPath,
+            sourceSet: sourceSet,
+            rules: rules,
+            projectIdentity: null,
+            parallelism: null,
+            progress: progress,
+            timings: null,
+            phase: null
+        );
+        return (result, retained!);
+    }
+
+    // SPIKE seam (incremental indexing): re-runs the compile+read pass and fact extraction over an
+    // already-built (possibly incrementally edited) Solution — no Buildalyzer, no workspace assembly.
+    // Pairs with AnalyzeRetainingWorkspaceAsync: retain the workspace, WithDocumentText, then this.
+    internal static async Task<AnalysisResult> ExtractFromSolutionAsync(
+        Microsoft.CodeAnalysis.Solution solution,
+        string solutionPath,
+        RuleSet rules,
+        CancellationToken cancellationToken = default,
+        Action<string>? progress = null
+    )
+    {
+        var solutionFullPath = Path.GetFullPath(solutionPath);
+        var sourceSet = await SolutionSourceLoader.ReadSolutionSourcesAsync(
+            solution: solution,
+            solutionPath: solutionFullPath,
+            rules: rules,
+            cancellationToken: cancellationToken,
+            progress: progress
+        );
+        return ExtractFromSourceSet(
+            solutionPath: solutionPath,
+            solutionFullPath: solutionFullPath,
+            sourceSet: sourceSet,
+            rules: rules,
+            projectIdentity: null,
+            parallelism: null,
+            progress: progress,
+            timings: null,
+            phase: null
+        );
+    }
+
+    // The fact-extraction back half of AnalyzeAsync, factored out (unchanged) so the spike seams above
+    // can run the EXACT production extraction over a source set they loaded themselves.
+    private static AnalysisResult ExtractFromSourceSet(
+        string solutionPath,
+        string solutionFullPath,
+        SolutionSourceSet sourceSet,
+        RuleSet rules,
+        string? projectIdentity,
+        int? parallelism,
+        Action<string>? progress,
+        PhaseTimings? timings,
+        Stopwatch? phase
+    )
+    {
         // Start the extraction clock fresh after the loader's phases so it isn't double-counted.
         phase?.Restart();
         var sources = sourceSet.IndexedSources;

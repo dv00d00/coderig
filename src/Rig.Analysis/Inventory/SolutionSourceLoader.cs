@@ -57,7 +57,12 @@ internal static class SolutionSourceLoader
         bool verifyBuildCache = false,
         // Run the MSBuild `Restore` target before each design-time build (rig index --restore). OFF by
         // default: it is the dominant cost of the build phase and rig indexes an already-built tree.
-        bool restore = false
+        bool restore = false,
+        // SPIKE seam (incremental indexing): when non-null, receives the built AdhocWorkspace (after
+        // generator wiring, before the compile+read pass) so a caller can RETAIN it, apply an in-memory
+        // document edit (Solution.WithDocumentText) and re-extract via ReadSolutionSourcesAsync. The
+        // callback takes OWNERSHIP of the workspace's lifetime; LoadAsync never disposed it anyway.
+        Action<AdhocWorkspace>? retainWorkspace = null
     )
     {
         var maxParallelism = Math.Max(val1: 1, val2: parallelism ?? DefaultParallelism);
@@ -103,8 +108,38 @@ internal static class SolutionSourceLoader
             phase.Restart();
         }
 
-        var workspaceCSharpProjects = workspace
-            .CurrentSolution.Projects.Where(p => p.Language == LanguageNames.CSharp)
+        retainWorkspace?.Invoke(workspace);
+
+        return await ReadSolutionSourcesAsync(
+            solution: workspace.CurrentSolution,
+            solutionPath: solutionPath,
+            rules: rules,
+            cancellationToken: cancellationToken,
+            progress: progress,
+            parallelism: parallelism,
+            timings: timings
+        );
+    }
+
+    // The compile+read pass over an already-assembled Roslyn Solution: per C# project, get the
+    // compilation, collect error diagnostics, and read the sources into SourceModels. Extracted from
+    // LoadAsync so the SPIKE seam above can re-run it over a RETAINED workspace's (possibly
+    // incrementally edited) CurrentSolution without re-running Buildalyzer. Behaviour is identical to
+    // the historical inline pass.
+    internal static async Task<SolutionSourceSet> ReadSolutionSourcesAsync(
+        Solution solution,
+        string solutionPath,
+        RuleSet rules,
+        CancellationToken cancellationToken,
+        Action<string>? progress = null,
+        int? parallelism = null,
+        PhaseTimings? timings = null
+    )
+    {
+        var phase = timings is null ? null : Stopwatch.StartNew();
+
+        var workspaceCSharpProjects = solution
+            .Projects.Where(p => p.Language == LanguageNames.CSharp)
             .OrderBy(p => p.Name, StringComparer.Ordinal)
             .ToArray();
 

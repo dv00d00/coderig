@@ -85,6 +85,16 @@ internal static class IndexCommands
         var rules = CommonOptions.Rules();
         var identity = new Option<string?>("--identity") { Description = "Store identity for an append (multi-solution) index." };
         var from = new Option<string?>("--from") { Description = "Index only the entry project's transitive closure (one workspace)." };
+        // SPIKE (incremental-index architecture): with --from, index the entry project ALONE as source and
+        // let every dependency load as a METADATA DLL instead of a live ProjectReference. This is the
+        // "changed-as-source, unchanged-as-metadata" partition docs/incremental-indexing.md specifies as the
+        // execution model for incremental re-indexing; the flag exists to measure whether that partition is
+        // FACT-IDENTICAL to a full-solution index for the project being re-extracted. See the note in
+        // BuildProjectReferences about duplicate assembly identity — the hazard this measures.
+        var noClosure = new Option<bool>("--no-closure")
+        {
+            Description = "Spike: with --from, index ONLY the entry project as source (dependencies load as metadata DLLs).",
+        };
         var parallelism = new Option<int?>("--parallelism") { Description = "Max concurrent project analyses." };
         var framework = new Option<string?>("--framework")
         {
@@ -134,6 +144,7 @@ internal static class IndexCommands
             rules,
             identity,
             from,
+            noClosure,
             parallelism,
             framework,
             merge,
@@ -156,6 +167,7 @@ internal static class IndexCommands
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         identity: pr.GetValue(identity),
                         fromProject: pr.GetValue(from) is { } f ? Path.GetFullPath(f) : null,
+                        noClosure: pr.GetValue(noClosure),
                         parallelism: pr.GetValue(parallelism),
                         framework: pr.GetValue(framework),
                         merge: pr.GetValue(merge),
@@ -189,6 +201,7 @@ internal static class IndexCommands
         IReadOnlyList<string> extraRules,
         string? identity,
         string? fromProject,
+        bool noClosure,
         int? parallelism,
         string? framework,
         bool merge,
@@ -237,6 +250,17 @@ internal static class IndexCommands
             if (scopeProjectPaths is null)
             {
                 return 2;
+            }
+
+            // SPIKE --no-closure: collapse the scope to the ENTRY PROJECT ONLY. The loader's in-set closure
+            // (TransitiveInSetClosure) then contains just this project, so its dependencies are no longer
+            // live ProjectReferences and fall through to the metadata-DLL arm of BuildProjectReferences —
+            // exactly one assembly identity per dependency, from its built output. Nothing in the loader
+            // changes; the partition is entirely a function of what the scope set contains.
+            if (noClosure)
+            {
+                scopeProjectPaths = new HashSet<string>([fromProject], StringComparer.OrdinalIgnoreCase);
+                output.WriteLine($"Spike --no-closure: source set = 1 project; dependencies load as metadata DLLs.");
             }
         }
 
