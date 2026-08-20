@@ -1,9 +1,14 @@
 ## Rules-only effect / detector gaps (no engine change)
 
-**Status:** TODO / MEDDBASE-DEPENDENT — only F4 remains open; everything else below is resolved (shipped,
+**Status:** TODO / MEDDBASE-CALIBRATION (inputs AVAILABLE — see the un-park note below) — only F4 remains open; everything else below is resolved (shipped,
 verified correct as-is, parked as a documented known-FP, or attempted-and-reverted on real-store
 calibration). F4 replaces the MedDBase `rig.rules.json` inbox-name list with a suffix convention and requires
-that repo's rules/store for acceptance. Moved back to `todo/` 2026-07-19 while those inputs are unavailable.
+that repo's rules/store for acceptance.
+
+**Un-parked 2026-08-20:** the 2026-07-19 "inputs unavailable" premise no longer holds. `c:/git/meddbase-analysis`
+holds `rig.rules.json` + `deployments.json` and `.rig/` stores through **`ae2cdb64e1cb`** (2026-08-18, 3.9 GB,
+`LATEST`); source at `c:/git/meddbase-main-application` (`9f83dab5b7`). F4 is UNBLOCKED — it is a rules-only edit plus a
+re-derive (no re-index), so it is one of the cheapest open items in the backlog.
 **Source:** extracted from `docs/rig-review-issues.md`, 2026-06-25 (VS-G8, VS-G9 partial, VS-G6 partial,
 VS-C2, VS-C4, VS-G14, F4 suffix-match, plus VS-C1/VS-G10/VS-G11 rule-layer follow-ons)
 

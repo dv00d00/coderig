@@ -1,8 +1,14 @@
 # `lazy_init_race` precision tightening (calibration: 57.5% → ~92%)
 
-**Status:** TODO / MEDDBASE-DEPENDENT — bucket #1 ✅ SHIPPED (2026-07-02); bucket #2 needs condition
-extraction plus a MedDBase re-index and source-backed recalibration. Moved back to `todo/` 2026-07-19 while
-those inputs are unavailable. · **Found:** 2026-06-26 (adversarial source verification of all 40 MedDBase
+**Status:** TODO / MEDDBASE-CALIBRATION (inputs AVAILABLE — see the un-park note below) — bucket #1 ✅ SHIPPED (2026-07-02); bucket #2 needs condition
+extraction plus a MedDBase re-index and source-backed recalibration.
+
+**Un-parked 2026-08-20:** the 2026-07-19 "inputs unavailable" premise no longer holds. `c:/git/meddbase-analysis`
+holds `rig.rules.json` + `deployments.json` and `.rig/` stores through **`ae2cdb64e1cb`** (2026-08-18, 3.9 GB,
+`LATEST`); source at `c:/git/meddbase-main-application` (`9f83dab5b7`). Bucket #2 is
+UNBLOCKED, but sequenced, not drive-by: condition extraction is an extraction change, so it needs a full
+re-index (`rig index <MedDBase.slnx> --rules rig.rules.json` from `meddbase-analysis`, ~3 min on the warm
+dtb cache) before the 40-site recalibration can be re-run. · **Found:** 2026-06-26 (adversarial source verification of all 40 MedDBase
 sites) · **Family:** detector-precision
 
 ## Shipped: bucket #1 — the lock-enclosed tier (2026-07-02)
