@@ -26,9 +26,7 @@ public sealed class ExtractionStreamingTests
         foreach (var root in new[] { typeof(SolutionSourceSet), typeof(ExtractedSource), typeof(SourceExtractionResult) })
         {
             var offenders = RoslynReachableFrom(root);
-            offenders.ShouldBeEmpty(
-                $"{root.Name} must be Roslyn-free after the load, but reaches: {string.Join(", ", offenders)}"
-            );
+            offenders.ShouldBeEmpty($"{root.Name} must be Roslyn-free after the load, but reaches: {string.Join(", ", offenders)}");
         }
 
         // The retention field itself is gone, by name and by payload type.
@@ -105,14 +103,16 @@ public sealed class ExtractionStreamingTests
 
         var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath, rules);
 
-        // The DeepChain symbol oracle (docs/backlog/progress/live-background-index.md: 34 symbols) —
-        // verified against a real run of this build. The REFERENCE count is deliberately not pinned:
+        // The DeepChain symbol oracle — verified against a real run of this build. Was 34 (the
+        // docs/backlog/progress/live-background-index.md number); 51 since the playground gained the
+        // cross-project dispatch scaffolding (INotifier/ChannelBase/EmailChannel/PushChannel) for
+        // ResidentIndexScaleTests. The REFERENCE count is deliberately not pinned:
         // it depends on restore state (a restored copy adds obj/ AssemblyInfo attribute references the
         // unrestored 42-reference oracle arm lacks), so the stable identity checks here are the symbol
         // count, the cross-project bindings below, and the emit order.
         var symbols = result.Symbols ?? [];
         var references = result.References ?? [];
-        symbols.Count.ShouldBe(34);
+        symbols.Count.ShouldBe(51);
 
         // Anti-vacuity: the key cross-project bindings must resolve through the streamed per-project
         // extraction exactly as they did through the retained-model pass (mirrors the spike baseline).

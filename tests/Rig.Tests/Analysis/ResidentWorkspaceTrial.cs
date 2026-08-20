@@ -127,6 +127,54 @@ public sealed class ResidentWorkspaceTrial
                 + $"  | workingSet {Process.GetCurrentProcess().WorkingSet64 / (1024.0 * 1024 * 1024):F2} GB"
         );
 
+        // ---- ARM 3: the SLO measurement — one file edit through ResidentIndex (per-file, not whole-solution) ----
+        // Arms 1 and 2 measure whole-solution re-extract, which is the WRONG instrument for the resident
+        // question in two ways: it doubles the fact set (two full AnalysisResults alive at once, ~2.4M refs
+        // each) so its memory growth is an artefact of the harness rather than of the design, and it re-binds
+        // all 226 compilations so its time is an upper bound nothing in the resident path ever pays. This arm
+        // measures what the resident host actually does per keystroke-batch.
+        var index = new Rig.Analysis.Inventory.ResidentIndex(
+            workspace: workspace,
+            baseResult: coldResult,
+            solutionPath: solutionPath,
+            rules: rules
+        );
+
+        var editWatch = Stopwatch.StartNew();
+        await index.ApplyEditAsync(document.FilePath!, editedText);
+        editWatch.Stop();
+        var unreconciled = index.UnreconciledProjects.Count;
+
+        var mergeWatch = Stopwatch.StartNew();
+        var eagerFacts = index.CurrentFacts;
+        mergeWatch.Stop();
+
+        Say(
+            $"[trial] ARM 3 eager per-file edit : {editWatch.Elapsed.TotalSeconds:F2}s"
+                + $"  | merge {mergeWatch.Elapsed.TotalSeconds:F2}s"
+                + $"  | {Counts(eagerFacts)}"
+                + $"  | {unreconciled} project(s) unreconciled"
+                + $"  | workingSet {Process.GetCurrentProcess().WorkingSet64 / (1024.0 * 1024 * 1024):F2} GB"
+        );
+
+        var reconcileWatch = Stopwatch.StartNew();
+        await index.ReconcileAsync();
+        reconcileWatch.Stop();
+        var reconciledFacts = index.CurrentFacts;
+
+        Say(
+            $"[trial] ARM 3 cascade reconcile   : {reconcileWatch.Elapsed.TotalSeconds:F1}s"
+                + $"  | {Counts(reconciledFacts)}"
+                + $"  | {index.UnreconciledProjects.Count} still unreconciled"
+                + $"  | workingSet {Process.GetCurrentProcess().WorkingSet64 / (1024.0 * 1024 * 1024):F2} GB"
+        );
+
+        Say(
+            $"[trial] SLO (edit -> servable)    : {editWatch.Elapsed.TotalSeconds + mergeWatch.Elapsed.TotalSeconds:F2}s"
+                + $"  vs {warmWatch.Elapsed.TotalSeconds:F1}s whole-solution re-extract"
+                + $"  vs {coldWatch.Elapsed.TotalSeconds:F1}s cold index"
+        );
+
         var saved = coldWatch.Elapsed.TotalSeconds - warmWatch.Elapsed.TotalSeconds;
         var ratio = warmWatch.Elapsed.TotalSeconds <= 0 ? 0 : coldWatch.Elapsed.TotalSeconds / warmWatch.Elapsed.TotalSeconds;
         Say($"[trial] RESIDENT CEILING        : {saved:F1}s saved ({ratio:F1}x) — before any per-file scoping");

@@ -20,10 +20,11 @@ namespace Rig.Analysis.Inventory;
 // Overlay grain and the replace-not-append rule: the overlay is keyed by FILE PATH, and every fact
 // kind that carries a FilePath (symbols, references, allocations, DI registrations, source-file rows)
 // is REPLACED per file when merging — a stale row for a re-extracted file is a ghost fact, the worst
-// bug this class can have. TypeRelationFact/DispatchFact carry NO FilePath, so the merged tables are
-// recomputed WHOLE from the merged symbol set at merge time (see MergeFacts) instead of being spliced
-// per file. Each re-extraction call covers exactly ONE file path (all its linked DocumentIds at once),
-// so an overlay entry's relation/dispatch lists are exactly that file's emissions.
+// bug this class can have. TypeRelationFact/DispatchFact carry NO FilePath, so they cannot be replaced
+// per file: the merged tables are the UNION of base and overlay rows, de-duplicated on each fact's
+// full identity tuple (see MergeFacts for why a row is NEVER dropped by symbol, and the ghost trade
+// that buys). Each re-extraction call covers exactly ONE file path (all its linked DocumentIds at
+// once), so an overlay entry's relation/dispatch lists are exactly that file's emissions.
 internal sealed class ResidentIndex : IDisposable
 {
     private readonly RigWorkspace _workspace;
@@ -211,48 +212,35 @@ internal sealed class ResidentIndex : IDisposable
             .Concat(overlayEntries.SelectMany(e => e.Allocations))
             .ToArray();
 
-        // --- TypeRelations/Dispatch carry NO FilePath: recompute the merged tables WHOLE from the
-        // merged symbol set rather than attributing base rows to files.
+        // --- TypeRelations/Dispatch carry NO FilePath, so a base row CANNOT be attributed to the file
+        // that emitted it. UNION the base rows with the overlay's, de-duplicated on each fact's full
+        // identity tuple — NEVER drop a base row by symbol.
         //
-        // The key fact making this sound for relations: FactExtractor emits a type's relations at the
-        // type's DECLARATION, so a base relation is stale only if its TypeSymbolId is declared in an
-        // overlaid file — in which case the overlay entry for that file re-emits the current set.
-        // `declaredInOverlaid` is built from BOTH base symbols (types the overlaid files USED to
-        // declare — a type deleted by the edit must drop its relations) and overlay symbols (types
-        // they declare NOW).
+        // Why never drop: an earlier cut dropped base rows whose endpoint symbol was declared in an
+        // overlaid file, expecting the overlay to re-emit them. But the EMITTING site of these facts is
+        // not recoverable from the fact, and it is routinely a DIFFERENT file from either endpoint: an
+        // inherited interface impl (`Derived : IFoo` satisfied by `Base.M`) is emitted at Derived's
+        // declaration while both endpoints live elsewhere; an override edge is emitted at the
+        // override's file while its source endpoint lives in the base type's file; delegate-bind edges
+        // are emitted at arbitrary reference sites. A single overlaid file's re-extraction cannot
+        // reproduce an edge it never emitted, so symbol-driven drops LOST facts — measured on MedDBase
+        // (2026-08-20, one single-file edit): 9.6% of type relations and 24.5% of dispatch edges gone.
         //
-        // Dispatch uses the same symbol-driven drop: a base edge is dropped when either endpoint is
-        // declared in an overlaid file, and the overlay re-emits the current edges. This is exact for
-        // `override` edges (emitted at the override's declaration) and for the common `impl` case
-        // (impl method declared on the implementing type). Two disclosed residuals it cannot catch,
-        // because the emitting SITE is not recoverable from the fact: an INHERITED interface impl
-        // (`Derived : IFoo` satisfied by `Base.M` — both endpoints live outside Derived's file) and
-        // delegate-bind edges emitted at reference sites. Making those exact needs an emitter file on
-        // DispatchFact (a schema addition deferred past this slice).
-        var declaredInOverlaid = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in _baseResult.Symbols ?? [])
-        {
-            if (Overlaid(symbol.FilePath))
-            {
-                declaredInOverlaid.Add(symbol.SymbolId);
-            }
-        }
-
-        foreach (var entry in overlayEntries)
-        {
-            foreach (var symbol in entry.Symbols)
-            {
-                declaredInOverlaid.Add(symbol.SymbolId);
-            }
-        }
-
+        // The union deliberately OVER-retains: an edge removed by an edit (e.g. deleting an `override`)
+        // survives as a stale "ghost" until the next full re-index. That is the correct trade for these
+        // two fact kinds — dispatch_edges is a sound SUPERSET that BOUNDS the reach walk (see
+        // SqlReachability), so an extra edge costs precision, an over-approximation rig already errs
+        // toward and discloses (`~heuristic`, dispatch fan-out), whereas a MISSING edge costs soundness
+        // and silently under-reports reachability.
+        //
+        // TODO(live-index): the principled fix is an emitter FilePath on DispatchFact and
+        // TypeRelationFact, making both kinds per-file replaceable like every other fact kind (drop the
+        // emitting file's base rows, splice the overlay's). That is a write-side schema change
+        // requiring a re-index, deferred past this slice; when it lands, this union (and its ghost
+        // window) can be replaced by the same replace-per-file rule the path-carrying kinds use above.
         var relationSeen = new HashSet<(string, string, string)>();
         var typeRelations = new List<TypeRelationFact>();
-        foreach (
-            var relation in (_baseResult.TypeRelations ?? [])
-                .Where(r => !declaredInOverlaid.Contains(r.TypeSymbolId))
-                .Concat(overlayEntries.SelectMany(e => e.TypeRelations))
-        )
+        foreach (var relation in (_baseResult.TypeRelations ?? []).Concat(overlayEntries.SelectMany(e => e.TypeRelations)))
         {
             if (relationSeen.Add((relation.TypeSymbolId, relation.RelationKind, relation.RelatedSymbolId)))
             {
@@ -262,11 +250,7 @@ internal sealed class ResidentIndex : IDisposable
 
         var dispatchSeen = new HashSet<(string, string, string)>();
         var dispatchFacts = new List<DispatchFact>();
-        foreach (
-            var edge in (_baseResult.DispatchFacts ?? [])
-                .Where(d => !declaredInOverlaid.Contains(d.SourceMember) && !declaredInOverlaid.Contains(d.TargetMember))
-                .Concat(overlayEntries.SelectMany(e => e.Dispatch))
-        )
+        foreach (var edge in (_baseResult.DispatchFacts ?? []).Concat(overlayEntries.SelectMany(e => e.Dispatch)))
         {
             if (dispatchSeen.Add((edge.SourceMember, edge.TargetMember, edge.Kind)))
             {
