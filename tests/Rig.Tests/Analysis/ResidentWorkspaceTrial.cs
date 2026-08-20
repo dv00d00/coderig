@@ -38,9 +38,32 @@ public sealed class ResidentWorkspaceTrial
         var solutionPath = Environment.GetEnvironmentVariable("RIG_TRIAL_SOLUTION");
         if (string.IsNullOrWhiteSpace(solutionPath))
         {
-            Console.WriteLine("[trial] RIG_TRIAL_SOLUTION not set — skipping (this harness is opt-in).");
-            return;
+            return; // opt-in harness; silent no-op in the normal suite
         }
+
+        // Report to a FILE, not Console: TUnit does not surface Console.WriteLine in its default output
+        // mode, so an 8-minute measurement produced zero numbers the first time. Appending as we go also
+        // means a crash mid-run still leaves the phase lines collected so far.
+        var reportPath =
+            Environment.GetEnvironmentVariable("RIG_TRIAL_REPORT")
+            ?? Path.Combine(Path.GetTempPath(), "rig-resident-trial.log");
+        var report = new List<string>();
+        void Say(string line)
+        {
+            report.Add(line);
+            Console.WriteLine(line);
+            try
+            {
+                File.AppendAllText(reportPath, line + Environment.NewLine);
+            }
+            catch (IOException) { }
+        }
+
+        try
+        {
+            File.WriteAllText(reportPath, $"# rig resident-workspace trial{Environment.NewLine}");
+        }
+        catch (IOException) { }
 
         var rulesPath = Environment.GetEnvironmentVariable("RIG_TRIAL_RULES");
         var buildCacheDir = Environment.GetEnvironmentVariable("RIG_TRIAL_BUILD_CACHE");
@@ -50,16 +73,16 @@ public sealed class ResidentWorkspaceTrial
             ? RuleSetLoader.Load(workingDirectory)
             : RuleSetLoader.Load(Path.GetDirectoryName(Path.GetFullPath(rulesPath))!, [Path.GetFullPath(rulesPath)]);
 
-        Console.WriteLine($"[trial] solution   : {solutionPath}");
-        Console.WriteLine($"[trial] rules      : {rulesPath ?? "(cwd cascade)"}");
-        Console.WriteLine($"[trial] build cache: {buildCacheDir ?? "(DISABLED — cold MSBuild, not comparable to rig index)"}");
+        Say($"[trial] solution   : {solutionPath}");
+        Say($"[trial] rules      : {rulesPath ?? "(cwd cascade)"}");
+        Say($"[trial] build cache: {buildCacheDir ?? "(DISABLED — cold MSBuild, not comparable to rig index)"}");
 
         // ---- ARM 1: cold load + extract, retaining the workspace ----
         var coldWatch = Stopwatch.StartNew();
         var (coldResult, workspace) = await SolutionAnalyzer.AnalyzeRetainingWorkspaceAsync(
             solutionPath: solutionPath,
             rules: rules,
-            progress: message => Console.WriteLine($"[cold] {message}"),
+            progress: message => Say($"[cold] {message}"),
             excludeTests: true, // mirror `rig index`, which drops test projects
             buildCacheDir: buildCacheDir
         );
@@ -68,7 +91,7 @@ public sealed class ResidentWorkspaceTrial
 
         var afterColdBytes = GC.GetTotalMemory(forceFullCollection: false);
         var afterColdWorkingSet = Process.GetCurrentProcess().WorkingSet64;
-        Console.WriteLine(
+        Say(
             $"[trial] ARM 1 cold load+extract : {coldWatch.Elapsed.TotalSeconds:F1}s"
                 + $"  | {Counts(coldResult)}"
                 + $"  | managed {afterColdBytes / (1024.0 * 1024 * 1024):F2} GB"
@@ -80,11 +103,11 @@ public sealed class ResidentWorkspaceTrial
         var document = PickDocument(solution, editFile);
         if (document is null)
         {
-            Console.WriteLine("[trial] no editable C# document found — arm 2 skipped.");
+            Say("[trial] no editable C# document found — arm 2 skipped.");
             return;
         }
 
-        Console.WriteLine($"[trial] edit target: {document.FilePath} (project {document.Project.Name})");
+        Say($"[trial] edit target: {document.FilePath} (project {document.Project.Name})");
 
         var originalText = await document.GetTextAsync();
         var editedText = SourceText.From(originalText.ToString() + Environment.NewLine + "// rig resident-workspace trial");
@@ -99,7 +122,7 @@ public sealed class ResidentWorkspaceTrial
         );
         warmWatch.Stop();
 
-        Console.WriteLine(
+        Say(
             $"[trial] ARM 2 warm re-extract   : {warmWatch.Elapsed.TotalSeconds:F1}s"
                 + $"  | {Counts(warmResult)}"
                 + $"  | workingSet {Process.GetCurrentProcess().WorkingSet64 / (1024.0 * 1024 * 1024):F2} GB"
@@ -107,12 +130,12 @@ public sealed class ResidentWorkspaceTrial
 
         var saved = coldWatch.Elapsed.TotalSeconds - warmWatch.Elapsed.TotalSeconds;
         var ratio = warmWatch.Elapsed.TotalSeconds <= 0 ? 0 : coldWatch.Elapsed.TotalSeconds / warmWatch.Elapsed.TotalSeconds;
-        Console.WriteLine($"[trial] RESIDENT CEILING        : {saved:F1}s saved ({ratio:F1}x) — before any per-file scoping");
+        Say($"[trial] RESIDENT CEILING        : {saved:F1}s saved ({ratio:F1}x) — before any per-file scoping");
 
         // Property check, reported not asserted: this harness is a measurement, and a hard failure here would
         // hide the timings we came for. A drift is still a real finding — trivia must not change facts.
         var same = Counts(coldResult) == Counts(warmResult);
-        Console.WriteLine(
+        Say(
             same
                 ? "[trial] fact counts IDENTICAL across the trivia-only edit (expected)."
                 : $"[trial] *** FACT COUNT DRIFT on a trivia-only edit — FINDING ***  cold={Counts(coldResult)}  warm={Counts(warmResult)}"
@@ -139,11 +162,21 @@ public sealed class ResidentWorkspaceTrial
             Console.WriteLine($"[trial] RIG_TRIAL_EDIT_FILE not found in the solution ({requested}) — auto-picking instead.");
         }
 
+        // Exclude obj/ and bin/: the first run of this harness auto-picked
+        // src/components/obj/Debug/netstandard2.0/components.AssemblyInfo.cs — a GENERATED file, because the
+        // "fewest documents" heuristic favours tiny projects whose only documents are MSBuild-generated. Fine
+        // for a whole-solution timing, useless for per-file measurement.
+        static bool IsRealSource(Document d) =>
+            d.FilePath is not null
+            && d.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            && !d.FilePath.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+            && !d.FilePath.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+
         return csharp
-            .Where(p => p.Documents.Any(d => d.FilePath is not null && d.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(p => p.Documents.Count())
+            .Where(p => p.Documents.Any(IsRealSource))
+            .OrderBy(p => p.Documents.Count(IsRealSource))
             .SelectMany(p => p.Documents)
-            .FirstOrDefault(d => d.FilePath is not null && d.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(IsRealSource);
     }
 
     private static string Counts(AnalysisResult result) =>

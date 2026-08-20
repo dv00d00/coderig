@@ -253,6 +253,47 @@ Note the design's own data supports the converging shape: **59.4% of file-edits 
 majority of cases the background cascade will find nothing changed — the disclosure window is usually a false
 alarm, which is exactly the cheap-to-tolerate failure mode, and exactly what the surface hash later removes.
 
+## MEASURED 2026-08-20 — the resident-workspace trial on MedDBase (226 projects)
+
+`tests/Rig.Tests/Analysis/ResidentWorkspaceTrial.cs`, warm dtb cache, `excludeTests: true`, one trivia-only
+edit, both arms in ONE process:
+
+| arm | wall | facts | working set |
+|---|---|---|---|
+| 1 — cold load + extract, retaining the workspace | **245.0s** | 442,619 sym / 2,427,005 ref / 18,026 rel / 30,069 disp | 10.70 GB (managed 8.33) |
+| 2 — one edit, whole-solution re-extract over the WARM workspace | **157.4s** | identical, all four counts | **17.38 GB** |
+| | **87.6s saved (1.6x)** | fact counts IDENTICAL (trivia property holds) | **+6.7 GB** |
+
+245.0s corroborates the 253s `rig index` baseline, so the arms are comparable.
+
+### Three conclusions, one of them a re-prioritisation
+
+1. **A resident workspace ALONE is worth only 1.6x.** It deletes the design-time builds (~50s) and workspace
+   assembly (~14s) and nothing else — 87.6s of a 245s budget, close to the sum of those phases. This is the
+   ENABLER, not the win. Anyone hoping "keep it resident" is the answer should read this row.
+2. **Per-file scoping (slice 3) is therefore the whole game.** 157.4s is the number slice 3 has to beat, and it
+   should beat it by orders of magnitude: whole-solution re-extract is 12.7ms/file across 12,369 files
+   *including re-binding all 226 compilations*, so the per-project re-bind dominates and a one-file edit should
+   touch one compilation.
+3. **SLICE 2 IS PROMOTED — it is now a blocker, not an optimisation.** Working set went 10.70 GB -> **17.38 GB**
+   across a single re-extract and did not come back. That is `IndexedSources` retaining a `SemanticModel` per
+   file per project for TWO generations at once, plus the workspace holding compilations for both solution
+   snapshots. A long-lived process doing repeated edits GROWS by ~6.7 GB per generation. On this 64 GB box that
+   is roughly two edits before trouble. "Release the SemanticModels" is the difference between a resident
+   process that survives a work session and one that OOMs — so it lands BEFORE the surface-hash gate (slice 4),
+   whose value is throughput rather than survival.
+
+Note B2's warning about measuring this: working set is a ServerGC/DATAS artifact as much as a live-set signal.
+But for a RESIDENT process the OS-level footprint is exactly what constrains co-residency, so the +6.7 GB is
+the number that matters here regardless of how much of it is uncompacted heap.
+
+### Harness caveat found in the same run
+
+The edit-target auto-pick chose `src/components/obj/Debug/netstandard2.0/components.AssemblyInfo.cs` — a
+GENERATED file under `obj/`, because the heuristic picks the project with the fewest documents. Harmless for a
+whole-solution timing, wrong for per-file measurement. Fixed: `obj/`/`bin/` paths are now excluded from the
+auto-pick.
+
 ## PLAN — sequenced build slices
 
 Each slice is independently useful, has its own acceptance check, and does not depend on the next one landing.
