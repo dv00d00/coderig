@@ -1,0 +1,317 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
+using Rig.Domain.Data;
+using RuleSet = Rig.Domain.Data.RuleSet;
+
+namespace Rig.Analysis.Inventory;
+
+// The converging overlay for the resident index (live-background-index slice 3). Holds the retained
+// RigWorkspace from the cold load, the BASE AnalysisResult that load produced, and a per-FILE overlay
+// of re-extracted facts. On an edit: the edited file is re-extracted IMMEDIATELY (the eager arm —
+// correct for its own binding by construction, since the retained Solution holds every dependency as
+// live source), while the sound cascade (the changed project plus all transitive MSBuild-reference
+// dependents) is recorded as UNRECONCILED and re-extracted by ReconcileAsync. Between the two,
+// CurrentFacts is servable and UnreconciledProjects is the disclosure a caller must surface — cascade
+// latency becomes a disclosure problem, not an answer-blocking one.
+//
+// Deliberately NO background threads/timers in here: ReconcileAsync is a plain awaitable and the HOST
+// owns scheduling (a later slice). Deliberately no Rig.Storage/Rig.Cli dependency: this is fact-level.
+//
+// Overlay grain and the replace-not-append rule: the overlay is keyed by FILE PATH, and every fact
+// kind that carries a FilePath (symbols, references, allocations, DI registrations, source-file rows)
+// is REPLACED per file when merging — a stale row for a re-extracted file is a ghost fact, the worst
+// bug this class can have. TypeRelationFact/DispatchFact carry NO FilePath, so the merged tables are
+// recomputed WHOLE from the merged symbol set at merge time (see MergeFacts) instead of being spliced
+// per file. Each re-extraction call covers exactly ONE file path (all its linked DocumentIds at once),
+// so an overlay entry's relation/dispatch lists are exactly that file's emissions.
+internal sealed class ResidentIndex : IDisposable
+{
+    private readonly RigWorkspace _workspace;
+    private readonly AnalysisResult _baseResult;
+    private readonly string _solutionPath;
+    private readonly RuleSet _rules;
+    private readonly IDirtySetPolicy _eagerPolicy;
+    private readonly IDirtySetPolicy _cascadePolicy;
+
+    // FilePath -> that file's latest re-extracted facts. OrdinalIgnoreCase: Windows paths, and the
+    // loader itself sorts sources OrdinalIgnoreCase.
+    private readonly Dictionary<string, FileFacts> _overlay = new(StringComparer.OrdinalIgnoreCase);
+
+    // Documents owed to the converging cascade but not yet re-extracted since the edit that dirtied
+    // them. Eagerly re-extracted documents are removed: their facts are current w.r.t. the newest
+    // Solution snapshot.
+    private readonly HashSet<DocumentId> _pendingDocuments = [];
+
+    private AnalysisResult? _mergedFacts;
+
+    public ResidentIndex(
+        RigWorkspace workspace,
+        AnalysisResult baseResult,
+        string solutionPath,
+        RuleSet rules,
+        IDirtySetPolicy? eagerPolicy = null,
+        IDirtySetPolicy? cascadePolicy = null
+    )
+    {
+        _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
+        _baseResult = baseResult ?? throw new ArgumentNullException(nameof(baseResult));
+        _solutionPath = solutionPath ?? throw new ArgumentNullException(nameof(solutionPath));
+        _rules = rules ?? throw new ArgumentNullException(nameof(rules));
+        _eagerPolicy = eagerPolicy ?? new ChangedFilesOnlyPolicy();
+        _cascadePolicy = cascadePolicy ?? new ProjectCascadePolicy();
+    }
+
+    public Solution CurrentSolution => _workspace.CurrentSolution;
+
+    // The disclosure: projects whose documents are owed to the cascade but not yet re-extracted.
+    // Rendering this is NOT this class's job — a caller surfaces it alongside any answer served from
+    // CurrentFacts while it is non-empty.
+    public IReadOnlyCollection<string> UnreconciledProjects
+    {
+        get
+        {
+            var solution = CurrentSolution;
+            return _pendingDocuments
+                .Select(d => solution.GetProject(d.ProjectId)?.Name)
+                .Where(name => name is not null)
+                .Select(name => name!)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+        }
+    }
+
+    // Base facts with every overlaid file's facts REPLACED (never appended). Recomputed lazily after
+    // any edit/reconcile; callers get a consistent snapshot.
+    public AnalysisResult CurrentFacts => _mergedFacts ??= MergeFacts();
+
+    // Apply one file edit: mutate the retained workspace, re-extract the edited file at once (eager
+    // arm), and record the outstanding sound cascade as unreconciled.
+    public async Task ApplyEditAsync(string filePath, SourceText newText, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(newText);
+        var fullPath = Path.GetFullPath(filePath);
+        var documentIds = CurrentSolution.GetDocumentIdsWithFilePath(fullPath);
+        if (documentIds.IsEmpty)
+        {
+            throw new ArgumentException($"No document in the retained workspace has the path '{fullPath}'.", nameof(filePath));
+        }
+
+        foreach (var documentId in documentIds)
+        {
+            _workspace.ChangeDocumentText(documentId, newText);
+        }
+
+        string[] changed = [fullPath];
+        var eager = _eagerPolicy.DocumentsToReextract(CurrentSolution, changed);
+        await ReextractAsync(eager, cancellationToken);
+
+        // The cascade the eager arm did NOT cover is owed; the eagerly covered documents are current
+        // against the newest snapshot, so they are also settled for any PREVIOUS edit's cascade.
+        var eagerSet = new HashSet<DocumentId>(eager);
+        foreach (var documentId in _cascadePolicy.DocumentsToReextract(CurrentSolution, changed))
+        {
+            if (!eagerSet.Contains(documentId))
+            {
+                _pendingDocuments.Add(documentId);
+            }
+        }
+
+        _pendingDocuments.ExceptWith(eagerSet);
+        _mergedFacts = null;
+    }
+
+    // Re-extract the outstanding cascade and clear the disclosure. Plain awaitable — the host owns
+    // scheduling/backgrounding (a later slice).
+    public async Task ReconcileAsync(CancellationToken cancellationToken = default)
+    {
+        if (_pendingDocuments.Count == 0)
+        {
+            return;
+        }
+
+        var pending = _pendingDocuments.ToArray();
+        await ReextractAsync(pending, cancellationToken);
+        _pendingDocuments.Clear();
+        _mergedFacts = null;
+    }
+
+    public void Dispose() => _workspace.Dispose();
+
+    // Re-extract the given documents, one FILE PATH per extraction call: the overlay's replacement
+    // grain is the file, and a single-path call makes the result's TypeRelation/Dispatch lists exactly
+    // that file's emissions (they carry no FilePath, so a multi-file call could not be split). A file
+    // linked into several projects is extracted with ALL its DocumentIds in the one call, mirroring
+    // the cold pass where each project context extracts its copy.
+    private async Task ReextractAsync(IReadOnlyCollection<DocumentId> documents, CancellationToken cancellationToken)
+    {
+        var solution = CurrentSolution;
+        var byPath = new Dictionary<string, List<DocumentId>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var documentId in documents)
+        {
+            var filePath = solution.GetDocument(documentId)?.FilePath;
+            if (filePath is null)
+            {
+                continue;
+            }
+
+            if (!byPath.TryGetValue(filePath, out var group))
+            {
+                byPath[filePath] = group = [];
+            }
+
+            group.Add(documentId);
+        }
+
+        foreach (var (filePath, documentIds) in byPath)
+        {
+            var result = await SolutionAnalyzer.ExtractFromDocumentsAsync(
+                solution: solution,
+                documents: documentIds,
+                solutionPath: _solutionPath,
+                rules: _rules,
+                cancellationToken: cancellationToken
+            );
+            _overlay[filePath] = FileFacts.From(result, filePath);
+        }
+    }
+
+    private AnalysisResult MergeFacts()
+    {
+        if (_overlay.Count == 0)
+        {
+            return _baseResult;
+        }
+
+        bool Overlaid(string path) => _overlay.ContainsKey(path);
+        var overlayEntries = _overlay.Values.ToArray();
+
+        // --- Path-carrying kinds: base rows for non-overlaid files + the overlay's rows. REPLACE, never
+        // append. DI registrations whose FilePath is empty or non-.cs (static rules mappings, XML-mined
+        // ones) live on the BASE side only — FileFacts.From filters them out of overlay entries, and
+        // their paths are never overlay keys, so they pass through the base filter exactly once.
+        var sourceFiles = _baseResult
+            .SourceFiles.Where(f => !Overlaid(f.FilePath))
+            .Concat(overlayEntries.SelectMany(e => e.SourceFiles))
+            .ToArray();
+        var diRegistrations = _baseResult
+            .DiRegistrations.Where(r => r.FilePath.Length == 0 || !Overlaid(r.FilePath))
+            .Concat(overlayEntries.SelectMany(e => e.DiRegistrations))
+            .ToArray();
+        var symbols = (_baseResult.Symbols ?? [])
+            .Where(s => !Overlaid(s.FilePath))
+            .Concat(overlayEntries.SelectMany(e => e.Symbols))
+            .ToArray();
+        var references = (_baseResult.References ?? [])
+            .Where(r => !Overlaid(r.FilePath))
+            .Concat(overlayEntries.SelectMany(e => e.References))
+            .ToArray();
+        var allocations = (_baseResult.AllocationFacts ?? [])
+            .Where(a => !Overlaid(a.FilePath))
+            .Concat(overlayEntries.SelectMany(e => e.Allocations))
+            .ToArray();
+
+        // --- TypeRelations/Dispatch carry NO FilePath: recompute the merged tables WHOLE from the
+        // merged symbol set rather than attributing base rows to files.
+        //
+        // The key fact making this sound for relations: FactExtractor emits a type's relations at the
+        // type's DECLARATION, so a base relation is stale only if its TypeSymbolId is declared in an
+        // overlaid file — in which case the overlay entry for that file re-emits the current set.
+        // `declaredInOverlaid` is built from BOTH base symbols (types the overlaid files USED to
+        // declare — a type deleted by the edit must drop its relations) and overlay symbols (types
+        // they declare NOW).
+        //
+        // Dispatch uses the same symbol-driven drop: a base edge is dropped when either endpoint is
+        // declared in an overlaid file, and the overlay re-emits the current edges. This is exact for
+        // `override` edges (emitted at the override's declaration) and for the common `impl` case
+        // (impl method declared on the implementing type). Two disclosed residuals it cannot catch,
+        // because the emitting SITE is not recoverable from the fact: an INHERITED interface impl
+        // (`Derived : IFoo` satisfied by `Base.M` — both endpoints live outside Derived's file) and
+        // delegate-bind edges emitted at reference sites. Making those exact needs an emitter file on
+        // DispatchFact (a schema addition deferred past this slice).
+        var declaredInOverlaid = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in _baseResult.Symbols ?? [])
+        {
+            if (Overlaid(symbol.FilePath))
+            {
+                declaredInOverlaid.Add(symbol.SymbolId);
+            }
+        }
+
+        foreach (var entry in overlayEntries)
+        {
+            foreach (var symbol in entry.Symbols)
+            {
+                declaredInOverlaid.Add(symbol.SymbolId);
+            }
+        }
+
+        var relationSeen = new HashSet<(string, string, string)>();
+        var typeRelations = new List<TypeRelationFact>();
+        foreach (
+            var relation in (_baseResult.TypeRelations ?? [])
+                .Where(r => !declaredInOverlaid.Contains(r.TypeSymbolId))
+                .Concat(overlayEntries.SelectMany(e => e.TypeRelations))
+        )
+        {
+            if (relationSeen.Add((relation.TypeSymbolId, relation.RelationKind, relation.RelatedSymbolId)))
+            {
+                typeRelations.Add(relation);
+            }
+        }
+
+        var dispatchSeen = new HashSet<(string, string, string)>();
+        var dispatchFacts = new List<DispatchFact>();
+        foreach (
+            var edge in (_baseResult.DispatchFacts ?? [])
+                .Where(d => !declaredInOverlaid.Contains(d.SourceMember) && !declaredInOverlaid.Contains(d.TargetMember))
+                .Concat(overlayEntries.SelectMany(e => e.Dispatch))
+        )
+        {
+            if (dispatchSeen.Add((edge.SourceMember, edge.TargetMember, edge.Kind)))
+            {
+                dispatchFacts.Add(edge);
+            }
+        }
+
+        return _baseResult with
+        {
+            SourceFiles = sourceFiles,
+            DiRegistrations = diRegistrations,
+            Symbols = symbols,
+            References = references,
+            TypeRelations = typeRelations,
+            DispatchFacts = dispatchFacts,
+            AllocationFacts = allocations,
+        };
+    }
+
+    // One overlaid file's facts, split out of a single-path ExtractFromDocumentsAsync result.
+    private sealed record FileFacts(
+        IReadOnlyList<SourceFileInfo> SourceFiles,
+        IReadOnlyList<DiRegistrationInfo> DiRegistrations,
+        IReadOnlyList<SymbolFact> Symbols,
+        IReadOnlyList<ReferenceFact> References,
+        IReadOnlyList<TypeRelationFact> TypeRelations,
+        IReadOnlyList<DispatchFact> Dispatch,
+        IReadOnlyList<AllocationFact> Allocations
+    )
+    {
+        public static FileFacts From(AnalysisResult result, string filePath)
+        {
+            // Path filters guard the overlay's per-file invariant. They matter for DI registrations in
+            // particular: ExtractFromSourceSet appends the rules-static and XML-mined registrations to
+            // EVERY result, and keeping those here would duplicate the base's copies on merge.
+            bool Owns(string path) => string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase);
+            return new FileFacts(
+                SourceFiles: result.SourceFiles.Where(f => Owns(f.FilePath)).ToArray(),
+                DiRegistrations: result.DiRegistrations.Where(r => Owns(r.FilePath)).ToArray(),
+                Symbols: (result.Symbols ?? []).Where(s => Owns(s.FilePath)).ToArray(),
+                References: (result.References ?? []).Where(r => Owns(r.FilePath)).ToArray(),
+                TypeRelations: result.TypeRelations ?? [],
+                Dispatch: result.DispatchFacts ?? [],
+                Allocations: (result.AllocationFacts ?? []).Where(a => Owns(a.FilePath)).ToArray()
+            );
+        }
+    }
+}

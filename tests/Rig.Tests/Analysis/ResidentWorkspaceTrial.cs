@@ -45,8 +45,7 @@ public sealed class ResidentWorkspaceTrial
         // mode, so an 8-minute measurement produced zero numbers the first time. Appending as we go also
         // means a crash mid-run still leaves the phase lines collected so far.
         var reportPath =
-            Environment.GetEnvironmentVariable("RIG_TRIAL_REPORT")
-            ?? Path.Combine(Path.GetTempPath(), "rig-resident-trial.log");
+            Environment.GetEnvironmentVariable("RIG_TRIAL_REPORT") ?? Path.Combine(Path.GetTempPath(), "rig-resident-trial.log");
         var report = new List<string>();
         void Say(string line)
         {
@@ -153,7 +152,9 @@ public sealed class ResidentWorkspaceTrial
             var full = Path.GetFullPath(requested);
             var match = csharp
                 .SelectMany(p => p.Documents)
-                .FirstOrDefault(d => d.FilePath is not null && string.Equals(Path.GetFullPath(d.FilePath), full, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(d =>
+                    d.FilePath is not null && string.Equals(Path.GetFullPath(d.FilePath), full, StringComparison.OrdinalIgnoreCase)
+                );
             if (match is not null)
             {
                 return match;

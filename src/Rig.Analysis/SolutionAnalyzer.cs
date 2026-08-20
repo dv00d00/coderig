@@ -152,6 +152,116 @@ public static class SolutionAnalyzer
         );
     }
 
+    // Per-DOCUMENT extraction primitive (live-background-index slice 3): facts for JUST the given
+    // documents, over an already-built (possibly incrementally edited) Solution. Mirrors
+    // ExtractFromSolutionAsync's pipeline — same classification, same compilation-bound semantic
+    // models, same ExtractFromSourceSet back half, same FilePath ordering — the ONLY difference is
+    // which documents are visited. Two deliberate, disclosed divergences from the whole-solution read
+    // pass in ReadSolutionSourcesAsync:
+    //   - no per-project GetDiagnostics pass: it exists there for error REPORTING and as a whole-project
+    //     bind warm-up; facts do not depend on it, and paying a whole-project bind per single-file
+    //     re-extract would defeat the per-file path's point.
+    //   - no source-generator pass: generated documents belong to the PROJECT, not to any input
+    //     document, so a per-document call cannot own them. A resident overlay keeps serving generated
+    //     files' BASE facts until a whole-project/solution re-extraction refreshes them.
+    internal static async Task<AnalysisResult> ExtractFromDocumentsAsync(
+        Microsoft.CodeAnalysis.Solution solution,
+        IReadOnlyCollection<DocumentId> documents,
+        string solutionPath,
+        RuleSet rules,
+        CancellationToken cancellationToken = default,
+        Action<string>? progress = null
+    )
+    {
+        var solutionFullPath = Path.GetFullPath(solutionPath);
+        var sources = new List<SourceModel>();
+        var sourceFiles = new List<SourceFileInfo>();
+
+        foreach (var projectGroup in documents.GroupBy(d => d.ProjectId))
+        {
+            var project = solution.GetProject(projectGroup.Key);
+            if (project is null || project.Language != LanguageNames.CSharp || rules.IsExcludedProject(project.Name))
+            {
+                continue;
+            }
+
+            var compilation = await project.GetCompilationAsync(cancellationToken);
+            if (compilation is null)
+            {
+                continue; // no semantic model possible — same partial-analysis stance as the full pass
+            }
+
+            foreach (var documentId in projectGroup)
+            {
+                var document = project.GetDocument(documentId);
+                if (document?.FilePath?.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) != true)
+                {
+                    continue;
+                }
+
+                var classification = SourceFileClassifier.Classify(
+                    solutionPath: solutionFullPath,
+                    project: project,
+                    filePath: document.FilePath,
+                    rules: rules
+                );
+
+                sourceFiles.Add(
+                    new SourceFileInfo(
+                        ProjectName: project.Name,
+                        FilePath: document.FilePath,
+                        Status: classification.Status,
+                        Confidence: classification.Confidence,
+                        Basis: classification.Basis,
+                        Reason: classification.Reason,
+                        Evidence: classification.Evidence
+                    )
+                );
+
+                if (classification.Status != "indexed")
+                {
+                    continue;
+                }
+
+                var tree = await document.GetSyntaxTreeAsync(cancellationToken);
+                var root = tree is null ? null : await tree.GetRootAsync(cancellationToken);
+                if (tree is null || root is null)
+                {
+                    continue;
+                }
+
+                // Bind through the project compilation (not document.GetSemanticModelAsync), exactly as
+                // LoadProjectSourcesAsync does — the document's tree is one of this compilation's trees.
+                sources.Add(
+                    new SourceModel(
+                        ProjectName: project.Name,
+                        FilePath: document.FilePath,
+                        Tree: tree,
+                        Root: root,
+                        SemanticModel: compilation.GetSemanticModel(tree)
+                    )
+                );
+            }
+        }
+
+        var sourceSet = new SolutionSourceSet(
+            sourceFiles.OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
+            sources.OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
+        );
+
+        return ExtractFromSourceSet(
+            solutionPath: solutionPath,
+            solutionFullPath: solutionFullPath,
+            sourceSet: sourceSet,
+            rules: rules,
+            projectIdentity: null,
+            parallelism: null,
+            progress: progress,
+            timings: null,
+            phase: null
+        );
+    }
+
     // The fact-extraction back half of AnalyzeAsync, factored out (unchanged) so the spike seams above
     // can run the EXACT production extraction over a source set they loaded themselves.
     private static AnalysisResult ExtractFromSourceSet(
