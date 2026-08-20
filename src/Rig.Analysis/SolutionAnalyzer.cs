@@ -29,7 +29,10 @@ public static class SolutionAnalyzer
         // --verify-build-cache: build everything ignoring hits and diff fresh vs cached, reporting mismatches.
         bool verifyBuildCache = false,
         // Explicit TFM selected for multi-targeted projects. Single-targeted projects retain their declared TFM.
-        string? framework = null
+        string? framework = null,
+        // Run the MSBuild `Restore` target before each design-time build (rig index --restore). OFF by
+        // default — see CompileOnlyOptions for why, and what an unrestored project looks like.
+        bool restore = false
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
@@ -47,7 +50,8 @@ public static class SolutionAnalyzer
             excludeTests: excludeTests,
             timings: timings,
             buildCacheDir: buildCacheDir,
-            verifyBuildCache: verifyBuildCache
+            verifyBuildCache: verifyBuildCache,
+            restore: restore
         );
         // Start the extraction clock fresh after the loader's phases so it isn't double-counted.
         phase?.Restart();

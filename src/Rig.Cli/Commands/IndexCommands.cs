@@ -112,6 +112,15 @@ internal static class IndexCommands
         {
             Description = "Disable the design-time-build cache (always do a full build; don't read or write the cache).",
         };
+        // Restore is OFF by default: `/restore` on every per-project design-time build was ~80% of the
+        // build phase on MedDBase (it walks each project's ProjectReference closure), and rig indexes a
+        // tree someone already built. --restore opts back in for an unrestored/CI checkout.
+        var restore = new Option<bool>("--restore")
+        {
+            Description =
+                "Run the MSBuild Restore target before each design-time build (off by default; needed only "
+                + "when the tree has not been restored/built yet).",
+        };
         var verifyBuildCache = new Option<bool>("--verify-build-cache")
         {
             Description =
@@ -134,6 +143,7 @@ internal static class IndexCommands
             reuseBuildCache,
             noBuildCache,
             verifyBuildCache,
+            restore,
         };
 
         cmd.SetAction(pr =>
@@ -154,6 +164,7 @@ internal static class IndexCommands
                         time: pr.GetValue(time),
                         noBuildCache: pr.GetValue(noBuildCache),
                         verifyBuildCache: pr.GetValue(verifyBuildCache),
+                        restore: pr.GetValue(restore),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -186,6 +197,7 @@ internal static class IndexCommands
         bool time,
         bool noBuildCache,
         bool verifyBuildCache,
+        bool restore,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -294,7 +306,8 @@ internal static class IndexCommands
                 excludeTests: !includeTests,
                 timings: timings,
                 buildCacheDir: buildCacheDir,
-                verifyBuildCache: verifyBuildCache
+                verifyBuildCache: verifyBuildCache,
+                restore: restore
             );
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)

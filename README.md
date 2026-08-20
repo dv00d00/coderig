@@ -64,7 +64,7 @@ Stores are **per-commit** — `--at <sha>` reads any previously indexed commit. 
 
 | Command | What it does |
 |---|---|
-| `rig index <sln\|csproj>` | Roslyn+MSBuild → `.rig/<sha>/rig.db`. `--from <entry.csproj>` scopes to one project's closure · `--framework <tfm>` pins the TFM · `--include-tests` · `--merge` for multi-solution stores · `--time` for a per-phase breakdown. Builds internally — **no external pre-build needed.** |
+| `rig index <sln\|csproj>` | Roslyn+MSBuild → `.rig/<sha>/rig.db`. `--from <entry.csproj>` scopes to one project's closure · `--framework <tfm>` pins the TFM · `--include-tests` · `--merge` for multi-solution stores · `--time` for a per-phase breakdown · `--restore` runs the MSBuild Restore target per project (OFF by default — it dominated the build phase and rig indexes an already-built tree; pass it for an unrestored checkout). Builds internally — **no external pre-build needed.** |
 | `rig graph` | Rebuild the derived call-graph views from facts — idempotent, no rescan |
 | `rig runs` | What's indexed: per-commit stores, symbol/EP/effect counts |
 | `rig entrypoints` | Rule-detected entry points, grouped by kind |

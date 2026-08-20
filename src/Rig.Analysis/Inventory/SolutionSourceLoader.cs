@@ -54,7 +54,10 @@ internal static class SolutionSourceLoader
         // Directory for the design-time-build cache (rig index --reuse-build-cache). Null = disabled.
         string? buildCacheDir = null,
         // --verify-build-cache: build everything ignoring hits and diff fresh vs cached, reporting mismatches.
-        bool verifyBuildCache = false
+        bool verifyBuildCache = false,
+        // Run the MSBuild `Restore` target before each design-time build (rig index --restore). OFF by
+        // default: it is the dominant cost of the build phase and rig indexes an already-built tree.
+        bool restore = false
     )
     {
         var maxParallelism = Math.Max(val1: 1, val2: parallelism ?? DefaultParallelism);
@@ -82,7 +85,8 @@ internal static class SolutionSourceLoader
             excludeTests,
             timings,
             buildCacheDir,
-            verifyBuildCache
+            verifyBuildCache,
+            restore
         );
         // BuildWorkspace records the finer "design-time-builds" (wall-clock) + "workspace-assembly"
         // sub-phases itself; just reset the clock here for the next phase.
@@ -237,7 +241,9 @@ internal static class SolutionSourceLoader
         string? buildCacheDir = null,
         // --verify-build-cache: build EVERY project (ignore hits) and diff fresh vs cached ProjectBuildInfo,
         // reporting mismatches. The completeness guardrail; requires buildCacheDir to be set.
-        bool verifyBuildCache = false
+        bool verifyBuildCache = false,
+        // Run the MSBuild `Restore` target before each design-time build (rig index --restore).
+        bool restore = false
     )
     {
         var logWriter = progress is null ? null : new ProgressLogWriter(progress);
@@ -337,7 +343,8 @@ internal static class SolutionSourceLoader
                 throw new DegradedBuildException(
                     $"'{name}' design-time build produced 0 source files after {DegradedBuildRetries + 1} attempt(s) — "
                         + "its types would be absent and dependents would fail to bind, corrupting the index. "
-                        + $"Re-run `dotnet restore` / `dotnet build` for {name}, then re-index."
+                        + $"Re-run `dotnet restore` / `dotnet build` for {name}, then re-index — "
+                        + "or pass `--restore` to let each design-time build run the Restore target itself."
                 );
             }
 
@@ -383,7 +390,7 @@ internal static class SolutionSourceLoader
         List<ProjectBuildInfo> results;
         if (IsProjectFile(solutionPath))
         {
-            results = BuildSingleProjectResults(solutionPath, progress, options, timings, framework, BuildOrLoad);
+            results = BuildSingleProjectResults(solutionPath, progress, options, timings, framework, restore, BuildOrLoad);
         }
         else
         {
@@ -397,6 +404,7 @@ internal static class SolutionSourceLoader
                 framework,
                 excludeTests,
                 timings,
+                restore,
                 BuildOrLoad
             );
         }
@@ -432,6 +440,7 @@ internal static class SolutionSourceLoader
         AnalyzerManagerOptions options,
         PhaseTimings? timings,
         string? framework,
+        bool restore,
         Func<string, Func<IAnalyzerResult?>, ProjectBuildInfo?> buildOrLoad
     )
     {
@@ -448,7 +457,7 @@ internal static class SolutionSourceLoader
         analyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
         var singleWatch = timings is null ? null : Stopwatch.StartNew();
         var info =
-            buildOrLoad(Path.GetFullPath(projectFilePath), () => BuildCompileOnly(analyzer, framework))
+            buildOrLoad(Path.GetFullPath(projectFilePath), () => BuildCompileOnly(analyzer, framework, restore))
             ?? throw new InvalidOperationException($"Buildalyzer produced no build results for '{projectFilePath}'.");
         if (singleWatch is not null)
         {
@@ -471,6 +480,7 @@ internal static class SolutionSourceLoader
         string? framework,
         bool excludeTests,
         PhaseTimings? timings,
+        bool restore,
         Func<string, Func<IAnalyzerResult?>, ProjectBuildInfo?> buildOrLoad
     )
     {
@@ -541,7 +551,7 @@ internal static class SolutionSourceLoader
                     {
                         var info = buildOrLoad(
                             Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString()),
-                            () => BuildCompileOnly(projectAnalyzer, framework)
+                            () => BuildCompileOnly(projectAnalyzer, framework, restore)
                         );
                         if (info is not null)
                         {
@@ -1471,13 +1481,13 @@ internal static class SolutionSourceLoader
     // with MSB4057 and yields zero sources. Scope to the caller-selected `framework`, or the first declared
     // TFM by default; single-target projects build unscoped. Lossy under conditional compilation — see
     // docs/backlog/todo/multi-tfm-union-extraction.md.
-    private static IAnalyzerResult? BuildCompileOnly(IProjectAnalyzer analyzer, string? framework)
+    private static IAnalyzerResult? BuildCompileOnly(IProjectAnalyzer analyzer, string? framework, bool restore)
     {
         var targetFrameworks = analyzer.ProjectFile.TargetFrameworks;
         var selectedFramework = SelectFramework(analyzer.ProjectFile.Name, targetFrameworks, framework);
         var results = selectedFramework is not null
-            ? analyzer.Build(selectedFramework, CompileOnlyOptions(forExplicitFramework: framework is not null))
-            : analyzer.Build(CompileOnlyOptions());
+            ? analyzer.Build(selectedFramework, CompileOnlyOptions(forExplicitFramework: framework is not null, restore: restore))
+            : analyzer.Build(CompileOnlyOptions(restore: restore));
         return PreferredResult(results);
     }
 
@@ -1516,11 +1526,21 @@ internal static class SolutionSourceLoader
     // CopyFilesToOutputDirectory, and Before/AfterBuild. Non-destructive, and a 30-50% cold-load speedup
     // with identical reference/document counts (Buildalyzer#344). A fresh instance per call: the parallel
     // build loop must not share one mutable options object across threads.
-    private static EnvironmentOptions CompileOnlyOptions(bool forExplicitFramework = false)
+    private static EnvironmentOptions CompileOnlyOptions(bool forExplicitFramework = false, bool restore = false)
     {
         var options = new EnvironmentOptions();
         options.TargetsToBuild.Clear();
         options.TargetsToBuild.Add("Compile");
+        // Restore is OFF by default (rig index --restore opts back in). Buildalyzer defaults Restore=true,
+        // which puts `/restore` on EVERY per-project design-time build — and `Restore` walks the project's
+        // whole ProjectReference closure, so it scales with the dependency graph while the `Compile` it is
+        // attached to does not. Measured on MedDBase (227 projects, 2026-08-20): restore alone is 3.8s on a
+        // leaf but 42.4s on the graph root, against a flat 2.2-5.6s for Compile. Dropping it cut the
+        // design-time-build phase 322.9s -> 57.4s and the whole cold index 8m40s -> 4m10s, with IDENTICAL
+        // output (445,231 symbols / 2,437,344 refs both ways). rig only ever reads a build; the tree is
+        // restored by whoever built it. An UNrestored project yields 0 source files, which is exactly what
+        // IsDegradedBuild catches — a loud abort naming --restore, not a silently wrong index.
+        options.Restore = restore;
         if (forExplicitFramework)
         {
             // A restore warning persisted as an error can prevent Buildalyzer from producing sources.

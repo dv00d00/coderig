@@ -53,9 +53,13 @@ public sealed class CliApplicationTests
     // --merge / --include-tests are real Options on `index`, so they parse cleanly; the command then fails
     // later for a different reason (a nonexistent solution: exit 2, "Failed to load") rather than being
     // rejected up front. Guards against a known flag being dropped from the index surface.
+    // --restore is the opt-IN for the MSBuild Restore target: it is off by default because `/restore` on
+    // every per-project design-time build dominated the build phase (MedDBase: 322.9s -> 57.4s without
+    // it, identical output). The flag must stay on the surface — an unrestored/CI checkout needs it.
     [Test]
     [Arguments("--merge")]
     [Arguments("--include-tests")]
+    [Arguments("--restore")]
     public async Task Index_does_not_reject_known_flags(string flag)
     {
         var output = new StringWriter();
