@@ -73,11 +73,22 @@ public static class SolutionAnalyzer
     // (Solution.WithDocumentText / RigWorkspace.ChangeDocumentText) and re-extracted via
     // ExtractFromSolutionAsync. The caller owns the workspace's lifetime. Behaviour of the returned
     // AnalysisResult is identical to AnalyzeAsync.
+    // The knobs below are pass-throughs to LoadAsync, and they are NOT optional garnish at real scale: with
+    // buildCacheDir null the design-time-build cache is DISABLED, so a 227-project solution pays a full cold
+    // MSBuild pass rather than reusing .rig/dtb-cache, and excludeTests:false indexes test projects that
+    // `rig index` drops. Without them this entry point is only usable on a toy playground, and any timing it
+    // produces is not comparable to a `rig index` baseline.
     internal static async Task<(AnalysisResult Result, RigWorkspace Workspace)> AnalyzeRetainingWorkspaceAsync(
         string solutionPath,
         RuleSet rules,
         CancellationToken cancellationToken = default,
-        Action<string>? progress = null
+        Action<string>? progress = null,
+        int? parallelism = null,
+        bool excludeTests = false,
+        PhaseTimings? timings = null,
+        string? buildCacheDir = null,
+        string? framework = null,
+        bool restore = false
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
@@ -87,6 +98,12 @@ public static class SolutionAnalyzer
             rules: rules,
             cancellationToken: cancellationToken,
             progress: progress,
+            parallelism: parallelism,
+            excludeTests: excludeTests,
+            timings: timings,
+            buildCacheDir: buildCacheDir,
+            framework: framework,
+            restore: restore,
             retainWorkspace: workspace => retained = workspace
         );
         var result = ExtractFromSourceSet(
