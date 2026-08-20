@@ -1,7 +1,15 @@
 # Amplification display scope — widen beyond network-crossing providers?
 
 **Status:** open decision (Dmytro's call). The tier itself SHIPPED 2026-08-03 (on by default, `--no-amplification`
-opt-out); this item is only about the SCOPE of what it displays.
+opt-out); this item is only about the SCOPE of what it displays — i.e. `observations.amplification` (**tier 2**,
+the intra-method looped effect).
+
+**Related decision already taken, in the OPPOSITE direction (2026-08-04, `0fd62eb8`):** the *tier-3*
+`crossMethodAmplification` witness gate went **all-IO** — empty `witnesses` = every discovered provider minus
+`alloc`/`throw`/`shared_state`/`config` — because the read-only gate demonstrably hid looped SENDS
+(`actor:tell`, `echo_publish:ask`, smtp, `http:POST`). That does not settle tier 2 (different grain, different
+section), but it is the live precedent: the two tiers now disagree on scope by default, which is itself an
+argument for widening this one.
 
 ## What shipped
 

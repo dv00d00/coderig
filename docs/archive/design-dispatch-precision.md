@@ -1,10 +1,10 @@
 # Design: dispatch precision — static monomorphization (+ DI resolution)
 
 **Status:** design approved 2026-06-24; **build = Lever A (static monomorphization)**, phased, playground-first.
-Companion to [backlog.md](backlog.md) §"Dispatch-fan disclosure + generic monomorphization" (the substrate
-spec + calibration) and [bug-callers-reverse-overreach.md](bug-callers-reverse-overreach.md) (the reverse
+Companion to [backlog.md](../backlog.md) §"Dispatch-fan disclosure + generic monomorphization" (the substrate
+spec + calibration) and [bug-callers-reverse-overreach.md](../bug-callers-reverse-overreach.md) (the reverse
 receiver-narrowing fix `c7fe4f0f` that captured the concrete-receiver bulk). Read the effect↔reachability and
-two-stage sections of [../CLAUDE.md](../CLAUDE.md) first.
+two-stage sections of [../../CLAUDE.md](../../CLAUDE.md) first.
 
 ## Goal — two distinct prizes
 

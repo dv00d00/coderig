@@ -9,4 +9,4 @@ the source of truth.
 | `mvp-spec.md` | [../README.md](../README.md) + the actual CLI (`rig --help`) |
 | `progress.md` | the [../backlog/](../backlog/) kanban |
 | `design-dispatch-precision.md` | [../backlog/done/dispatch-precision-substrate-shipped.md](../backlog/done/dispatch-precision-substrate-shipped.md) + the kanban |
-| `bug-callers-path-overreach.md` | open `nameof` half → [../backlog/todo/callers-path-nameof-overreach.md](../backlog/todo/callers-path-nameof-overreach.md) |
+| `bug-callers-path-overreach.md` | open `nameof` half → [../backlog/done/callers-path-nameof-overreach-shipped.md](../backlog/done/callers-path-nameof-overreach-shipped.md) |

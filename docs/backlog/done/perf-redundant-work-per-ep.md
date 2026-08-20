@@ -5,7 +5,7 @@ FIXED (`9caef5d1`, `1be1094f`, `78dbe9c2`), F3 conn-reuse fixed + base/head doub
 F5 NOT-A-REDUNDANCY (investigated), residuals: `TruncationCause` split DONE (`861bd0c4`), EF-fallback
 routing WON'T DO (2026-06-23 decision, recorded below). No open actionable work remains; kept as the
 redundancy-pattern ledger. Follow-on structural work lives in
-[redundant-graph-index-rebuild-per-query](../todo/redundant-graph-index-rebuild-per-query.md) and
+[redundant-graph-index-rebuild-per-query](redundant-graph-index-rebuild-per-query.md) and
 [warm-graph-across-queries](../todo/warm-graph-across-queries.md).
 
 Found by running `rig` on its own store and reading every EP's `--format llm` call tree (the `x-phase` flag

@@ -1,5 +1,22 @@
 # Amplification as a propagated context (retire the pair grain)
 
+**Status:** PROGRESS — the design below SHIPPED 2026-08-04 (`b82af7cb` anchor-grain findings + render-time
+context propagation; `0fd62eb8` renamed the tier to `crossMethodAmplification` and widened the witness gate
+to all IO). Sections 1 and 3 are complete. Section 2 shipped for the **web tree only** — see "What remains".
+
+## What remains
+
+1. **CLI `tree` has no amplification fold.** The per-child `🔁↑n` emission lives in
+   `src/Rig.Cli/wwwroot/components.js` (the SPA folds an `amp` depth down the tree); `Rig.Cli/Rendering/TreeRenderer.cs`
+   still renders only the loop edge's own `🔁[detail]`, so `rig tree --view effects|hazards` does not show
+   that an effect sits beneath a looped call. Same shape as the guard fold already in the renderer.
+   Opt-out should mirror `--no-amplification`.
+2. **Memoized / loop-invariant receiver** — FP class 3 below, still unfixed (path-sensitivity). The proposed
+   confidence signal ("anchor receiver derives from the iteration variable") needs Dmytro's call before building.
+3. **`Option<A>` as IEnumerable** — the one FP in the 14-site v5 audit; fix is a from-clause resolved-type fact
+   plus a bounded-cardinality deny-list. Not built.
+4. Per-request recompute of the correlation on `/api/hazards` → [cross-method-hazards-cache](../todo/cross-method-hazards-cache.md).
+
 ## Problem — the pair model is a pit
 
 `cross_method_amplification` materializes (anchor × witness) rows. That forces a grain choice that is

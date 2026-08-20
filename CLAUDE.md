@@ -2,7 +2,7 @@
 
 `rig` is a fact-based .NET code-intelligence CLI. Product overview, the full command table,
 effect observations, and deployment attribution live in [README.md](README.md). Vocabulary:
-[docs/ubiquitous-language.md](docs/ubiquitous-language.md). Handover notes: [docs/handover.md](docs/handover.md).
+[docs/ubiquitous-language.md](docs/ubiquitous-language.md).
 This file is only the things that aren't obvious from those and that you'd otherwise re-derive.
 
 ## The `rig` skill — source of truth is THIS REPO

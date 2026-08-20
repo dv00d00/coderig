@@ -2,7 +2,7 @@
 
 **Status:** DESIGN ONLY (no code). **Date:** 2026-08-03. **Scope:** the phase-0 design doc called for by
 [cep-over-effects](backlog/todo/cep-over-effects.md), narrowed to ONE detector —
-[cross-method N+1 amplification](backlog/todo/n-plus-1-cross-method-amplification.md). Where a decision
+[cross-method N+1 amplification](backlog/done/n-plus-1-cross-method-amplification.md). Where a decision
 generalizes past this detector it is marked **[generalizes]**; where it is a deliberate local shortcut it is
 marked **[local]** with the condition under which it must be retired.
 

@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED 2026-08-03 (see "Outcome" at the bottom) · **Found:** 2026-08-03, investigating why all 175 `n_plus_1` findings were `entity_cache:read`
 · **Family:** hazard-recall / FR-3 · Distinct from
-[n-plus-1-cross-method-amplification](../progress/n-plus-1-cross-method-amplification.md) — these are INTRA-method and both
+[n-plus-1-cross-method-amplification](n-plus-1-cross-method-amplification.md) — these are INTRA-method and both
 have small fixes.
 
 ## The observation that started it

@@ -109,5 +109,5 @@ tile, this fix covers `Admin/Profile/Home2`, `Account/Configuration/Main` and `A
 others (incl. the worst, `HtmlEdit2` at 86.2s) stay unflagged. Those are a DIFFERENT gap — `HtmlEdit2`'s reachable
 tree has 20 loop-marked nodes and 18 hazards but no `n_plus_1`, because the read is not lexically in a loop in its
 own method. `n_plus_1` is intra-method by construction; cross-method amplification is tracked separately in
-[n-plus-1-cross-method-amplification](../todo/n-plus-1-cross-method-amplification.md). Do not read this fix as
+[n-plus-1-cross-method-amplification](n-plus-1-cross-method-amplification.md). Do not read this fix as
 "rig now finds N+1s" — it closes the lexical query/lambda blind spot, nothing wider.

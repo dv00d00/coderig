@@ -10,7 +10,7 @@ runtime-aware distributed systems intelligence platform, but the first product
 must prove value through static code/config mining and effect observability.
 
 Shared terminology is maintained in
-[ubiquitous-language.md](ubiquitous-language.md). Keep that document updated
+[ubiquitous-language.md](../ubiquitous-language.md). Keep that document updated
 when introducing or changing core product terms.
 
 ## Working Names
