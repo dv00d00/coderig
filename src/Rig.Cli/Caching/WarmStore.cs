@@ -1,0 +1,197 @@
+using Rig.Analysis.Rules;
+using Rig.Cli.CommandLine;
+using Rig.Domain.Data;
+using Rig.Storage.Queries;
+using Rig.Storage.Storage;
+
+namespace Rig.Cli.Caching;
+
+// PROOF OF CONCEPT — process-lifetime warm cache for the two most expensive WHOLE-STORE loads:
+// the shaped call graph (Reads.LoadShapedGraphAsync, ~4.5s on the MedDBase store) and the invocation-ref
+// table (Reads.LoadInvocationRefsAsync, ~2.4M rows). Both are pure functions of (store, rules), so a
+// resident process can hold them and every query after the first skips the load entirely.
+//
+// WHY THIS EXISTS: rig's three existing cache layers (cache.db, the web client's IndexedDB, the disk
+// artifact cache) are all DISK caches — they cache the ANSWER. Nothing caches the intermediate state a
+// one-shot process throws away on exit, so a warm cache HIT still pays the graph load before it can serve
+// the cached answer. In a one-shot CLI that is unavoidable; in a resident process (`rig serve`, or a
+// future `rig watch`) it is pure waste. This class is the missing layer.
+//
+// KEYED EXACTLY LIKE THE DISK CACHE — (store identity, rules fingerprint):
+//   * store identity  = rig.db size + last-write-time (QueryCacheKeys.StoreKey). `rig index` publishes via
+//     atomic rename, so a REINDEX or any in-place rewrite shifts it. That is the "invalidate on disk write"
+//     property for free: a stale entry can never be served, with no file watcher in the correctness path.
+//     A new COMMIT gets its own store directory, so it is a different key by construction.
+//   * rules fingerprint = RulesFingerprint over the loaded rule files, so a rig.rules.json edit misses.
+// Deliberately NOT keyed on anything per-compile (no MVID, no build stamp) — same discipline as
+// QueryCacheKeys, and for the same reason.
+//
+// BOUNDED: an LRU of `Capacity` entries (default 1). FactGraphData on the MedDBase store costs ~1.5 GB of
+// disk reads to build, so retained footprint is the real constraint and a resident process must not hold
+// an unbounded number. `impact` wants two graphs at once (base + head) and would thrash at capacity 1 —
+// its call sites are deliberately NOT routed through here yet; raise the cap first and measure.
+//
+// ENV KNOBS (PoC only — a real version takes options, not environment):
+//   RIG_WARM_CAP=<n>   LRU capacity. 0 disables the cache entirely (the A/B control arm).
+//   RIG_WARM_LOG=1     log hit/miss + load duration to stderr.
+internal static class WarmStore
+{
+    // Default 4, NOT 1: the cache holds MULTIPLE ARTIFACT KINDS per store (shaped graph + invocation refs
+    // today), so a capacity of 1 makes them evict each other and every request misses both — measured, and
+    // the reason the first PoC run showed no win at all. Budget = kinds x stores you want resident.
+    private static readonly int Capacity = ReadIntEnv("RIG_WARM_CAP", defaultValue: 4);
+    private static readonly bool Log = Environment.GetEnvironmentVariable("RIG_WARM_LOG") == "1";
+
+    // One gate for the whole cache: loads are multi-second and memory-heavy, so serializing them is the
+    // POINT — two concurrent /api requests against a cold store must not both materialize the graph.
+    private static readonly SemaphoreSlim Gate = new(initialCount: 1, maxCount: 1);
+
+    // Insertion-ordered; last element = most recently used. Tiny (Capacity is 1-3), so a List scan is
+    // cheaper than a dictionary + intrusive list.
+    private static readonly List<(string Key, object Value)> Entries = [];
+
+    // The shaped whole-store graph. Pattern-INDEPENDENT (unlike the bounded per-traversal loads in
+    // TraversalGraphLoader), which is exactly why it is cacheable by (store, rules) alone.
+    internal static Task<FactGraphData> GraphAsync(
+        RigDbContext context,
+        RuleSet rules,
+        string storeDir,
+        string rulesHash,
+        CancellationToken ct = default
+    ) =>
+        GetOrLoadAsync(
+            key: $"graph|{StoreIdentity(storeDir)}|{rulesHash}",
+            label: "shaped graph",
+            load: () => Reads.LoadShapedGraphAsync(context: context, rules: rules, ct: ct)
+        );
+
+    // The invocation-ref table. Rules-INDEPENDENT (a raw fact projection), so the rules fingerprint is
+    // deliberately absent from the key — a rule edit must not evict 2.4M rows that did not change.
+    internal static Task<IReadOnlyList<FactInvocation>> InvocationsAsync(
+        RigDbContext context,
+        string storeDir,
+        CancellationToken ct = default
+    ) =>
+        GetOrLoadAsync(
+            key: $"invocations|{StoreIdentity(storeDir)}",
+            label: "invocation refs",
+            load: () => Reads.LoadInvocationRefsAsync(context, ct)
+        );
+
+    // Pre-warm both artifacts off the request path — the `serve` startup + post-reindex re-warm hook. Errors
+    // are swallowed by design: a failed pre-warm must never take the server down, it just means the next real
+    // request pays the load it would have paid anyway.
+    internal static async Task PrewarmAsync(
+        RigDbContext context,
+        RuleSet rules,
+        string storeDir,
+        string rulesHash,
+        CancellationToken ct = default
+    )
+    {
+        try
+        {
+            await GraphAsync(context, rules, storeDir, rulesHash, ct);
+            await InvocationsAsync(context, storeDir, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (Log)
+            {
+                Console.Error.WriteLine($"[warm] prewarm failed (non-fatal): {ex.Message}");
+            }
+        }
+    }
+
+    // Store identity = rig.db size + mtime. Reused verbatim from the disk-cache key derivation so the two
+    // layers can never disagree about which store they are describing.
+    private static string StoreIdentity(string storeDir) => QueryCacheKeys.StoreKey(Path.Combine(storeDir, StoreLayout.DbFileName));
+
+    private static async Task<T> GetOrLoadAsync<T>(string key, string label, Func<Task<T>> load)
+        where T : class
+    {
+        if (Capacity <= 0)
+        {
+            return await load();
+        }
+
+        // Fast path OUTSIDE the gate: a hit must not queue behind an in-flight cold load of a different key.
+        // Racing readers may briefly disagree on LRU order; that costs an eviction, never a wrong answer.
+        if (TryGet(key) is T warm)
+        {
+            if (Log)
+            {
+                Console.Error.WriteLine($"[warm] HIT  {label}");
+            }
+
+            return warm;
+        }
+
+        await Gate.WaitAsync();
+        try
+        {
+            // Re-check: another caller may have loaded this exact key while we waited on the gate.
+            if (TryGet(key) is T raced)
+            {
+                if (Log)
+                {
+                    Console.Error.WriteLine($"[warm] HIT  {label} (after gate)");
+                }
+
+                return raced;
+            }
+
+            var started = Environment.TickCount64;
+            var loaded = await load();
+            if (Log)
+            {
+                Console.Error.WriteLine($"[warm] MISS {label} — loaded in {Environment.TickCount64 - started} ms");
+            }
+
+            Insert(key, loaded);
+            return loaded;
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    private static object? TryGet(string key)
+    {
+        lock (Entries)
+        {
+            for (var i = 0; i < Entries.Count; i++)
+            {
+                if (!string.Equals(Entries[i].Key, key, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                // Touch: move to the most-recently-used end.
+                var hit = Entries[i];
+                Entries.RemoveAt(i);
+                Entries.Add(hit);
+                return hit.Value;
+            }
+        }
+
+        return null;
+    }
+
+    private static void Insert(string key, object value)
+    {
+        lock (Entries)
+        {
+            Entries.RemoveAll(e => string.Equals(e.Key, key, StringComparison.Ordinal));
+            Entries.Add((key, value));
+            while (Entries.Count > Capacity)
+            {
+                Entries.RemoveAt(0); // evict least-recently-used
+            }
+        }
+    }
+
+    private static int ReadIntEnv(string name, int defaultValue) =>
+        int.TryParse(Environment.GetEnvironmentVariable(name), out var parsed) ? parsed : defaultValue;
+}

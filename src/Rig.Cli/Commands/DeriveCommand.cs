@@ -138,9 +138,17 @@ internal static class DeriveCommand
         // the config is absent; `error` is the log sink so config problems surface.
         var deployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory, io.TextOutput.Error);
 
+        // Cache keys are computed HERE (moved up from below the graph load) because the warm-graph cache
+        // keys on the same two axes the disk cache does — see WarmStore.
+        // rigDir resolved above via the out-param OpenReadContext overload (F7).
+        var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
+        var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // #4: reuse the paths Load resolved.
+
         // Shaped graph: built once here and reused for both the handoff-EP classifier (F1 fix: avoids the
         // double-load in DeriveHandoffEntryPointsAsync's fallback path) and the event-cycle deriver below.
-        var shapedGraph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
+        // PoC: routed through the process-lifetime warm cache, so a RESIDENT host (`rig serve`) pays this
+        // ~4.5s whole-store load once rather than once per request. A one-shot CLI run is unaffected.
+        var shapedGraph = await Caching.WarmStore.GraphAsync(context: context, rules: rules, storeDir: rigDir, rulesHash: rulesHash);
 
         // Classified handoffs (background/timer/actor/event) shared by the listing, the origin-EP promotion,
         // and the TSV output — derived once. The total count yields the unclassified residual (a count, not a
@@ -166,9 +174,7 @@ internal static class DeriveCommand
         //     dual_write/thread_local_context post-pass, cached store+rules-keyed and SHARED with `tree
         //     --hazards` (an effect is a per-method fact, EP- and mode-independent). A reindex or rule edit
         //     misses the cache and recomputes, so hazards stay query-side data. ---
-        // rigDir resolved above via the out-param OpenReadContext overload (F7).
-        var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
-        var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // #4: reuse the paths Load resolved.
+        // storeKey / rulesHash computed above (moved up for the warm-graph cache key).
         var effects = await LoadOrDeriveHazardEffectsAsync(
             context: context,
             rigDirectory: rigDir,

@@ -42,6 +42,12 @@ internal static class ServeCommand
         output.WriteLine($"rig serve — listening on {url}");
         output.WriteLine($"  store dir: {workingDirectory}");
         output.WriteLine("  press Ctrl+C to stop.");
+
+        // PoC: this is the ONLY resident host, so it is the only place the process-lifetime warm cache can
+        // pay off. Pre-warm the whole-store graph + invocation refs off the request path, and keep them warm
+        // across reindexes (see WarmStoreWatcher). Fire-and-forget — a query issued before the warm finishes
+        // just loads it itself, exactly as before.
+        Caching.WarmStoreWatcher.Start(workingDirectory, output);
         if (!noOpen)
         {
             TryOpenBrowser(url, error);

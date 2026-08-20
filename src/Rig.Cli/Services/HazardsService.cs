@@ -125,8 +125,11 @@ public static class HazardsService
         {
             var anchors = Effects.CrossMethodAmplificationDataset.AnchorFindings(
                 Effects.CrossMethodAmplificationDataset.Pairs(
-                    invocations: await Rig.Storage.Queries.Reads.LoadInvocationRefsAsync(context),
-                    graph: await Rig.Storage.Queries.Reads.LoadShapedGraphAsync(context: context, rules: rules),
+                    // PoC warm cache: both loads are whole-store and (store, rules)-pure, and this is the
+                    // ONE finding tier with no disk cache at all — so on a resident `rig serve` these two
+                    // lines were the entire ~30-60s /api/hazards cost, paid again on every request.
+                    invocations: await Caching.WarmStore.InvocationsAsync(context: context, storeDir: rigDir),
+                    graph: await Caching.WarmStore.GraphAsync(context: context, rules: rules, storeDir: rigDir, rulesHash: rulesHash),
                     effects: hazardEffects,
                     observationRules: rules.Observations,
                     rule: xm
