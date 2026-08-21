@@ -547,208 +547,56 @@ public static class Reads
     }
 
     // The SINGLE rule-driven loader of publish→consumer DELIVERY sites — the uniform input to the framework-
-    // BLIND join (FactPathFinder.AddDeliveryEdges, baked into call_edges at graph build). Replaces the former
-    // per-framework LoadEventDeliverySitesAsync + LoadActorDeliverySitesAsync pair: a codebase declares each
-    // mechanism in DATA (the `deliveryRules` rule section), and this loader is generic over it. The actor case
-    // is no longer inferred from the `actor:*` effect rules; both events and actors are pure rule data, each
-    // composing the two identity primitives ("symbol" / "path") this loader implements.
+    // BLIND join (FactPathFinder.AddDeliveryEdges, baked into call_edges at graph build). This is the STORE
+    // half: it owns only the two SQL scans (event reads, candidate arg-rule invocations) and hands the rows to
+    // DeliverySiteProjection.Project, which owns the rule semantics (identity primitives, the member-path
+    // gate, path-vs-leaf resolution, the (declaringType, method) gate) — see that file's header for the model.
+    // The same core backs the in-memory twin LiveReads.DeliverySites, so the store path and the live path can
+    // never diverge; LiveFactSourceParityTests asserts it.
     //
-    // It scans each fact source ONCE regardless of how many rules use it:
-    //   - event-symbol rules (Producer.Source == "event-symbol"): event-read refs (RefKind=read, target "E:").
-    //     The event's `E:` DocID is the channel IdentityToken — an EXACT binding. Every `someEvent += H` AND
-    //     every raise (`someEvent?.Invoke()`) reads the event, so the role is ByColocation; the join decides
-    //     subscription (a co-located method-group ⇒ that handler) vs raise (none ⇒ producer). One site per read
-    //     per such rule (normally one event rule).
-    //   - arg rules (Producer.Source == "arg"): invocation refs whose (declaringType, method) match a rule's
-    //     Registration or Producer endpoint Methods×DeclaringTypes. The channel identity is the argument the
-    //     rule's `resolve` selects, both GATED to a member path (Contains('.'): a bare-variable name like
-    //     `tell(pid, …)` is not a stable cross-method identity and collides spuriously, so it is skipped):
-    //     "path" keeps the full member path; "leaf" keeps the LAST segment (bridging parallel registries that
-    //     share a leaf but differ by class prefix — e.g. tell `ProcessDns.X` ↔ spawn `ProcessNames.X`). An
-    //     invocation matching a Registration endpoint gets Role=Registration; a Producer endpoint, Role=
-    //     Producer. The process-name string identity is ~heuristic (more so for leaf).
-    //
-    // ArgumentIndex > 0 is not yet supported by the facts (only FirstArgumentName/arg0 is captured), so a
-    // "path" rule with ArgumentIndex != 0 falls back to arg0 — see the in-memory pass below.
+    // Each fact source is scanned ONCE regardless of how many rules use it, and not at all when no rule needs
+    // it (the two Count > 0 gates below).
     public static async Task<IReadOnlyList<DeliverySite>> LoadDeliverySitesAsync(
         RigDbContext context,
         IReadOnlyList<DeliveryRule> deliveryRules,
         CancellationToken cancellationToken = default
     )
     {
-        var sites = new List<DeliverySite>();
-
         // --- event-symbol rules: one event-read scan, regardless of rule count (normally one event rule). ---
-        var eventRules = deliveryRules
-            .Where(rule => string.Equals(rule.Producer.Source, "event-symbol", StringComparison.Ordinal))
-            .ToList();
-        if (eventRules.Count > 0)
+        var eventReads = new List<DeliverySiteProjection.EventRead>();
+        if (DeliverySiteProjection.EventRules(deliveryRules).Count > 0)
         {
-            var eventReads = await context
+            eventReads = await context
                 .ReferenceFacts.Where(r => r.EnclosingSymbolId != null && r.RefKind == RefKinds.Read && r.TargetSymbolId.StartsWith("E:"))
-                .Select(r => new
-                {
-                    r.EnclosingSymbolId,
-                    r.FilePath,
-                    r.Line,
-                    r.TargetSymbolId,
-                })
+                .Select(r => new DeliverySiteProjection.EventRead(r.EnclosingSymbolId, r.FilePath, r.Line, r.TargetSymbolId))
                 .ToListAsync(cancellationToken);
-
-            foreach (var rule in eventRules)
-            {
-                foreach (var r in eventReads)
-                {
-                    sites.Add(
-                        new DeliverySite(
-                            Caller: r.EnclosingSymbolId!,
-                            FilePath: r.FilePath,
-                            Line: r.Line,
-                            IdentityToken: r.TargetSymbolId,
-                            Tag: rule.Tag,
-                            Role: DeliveryRole.ByColocation
-                        )
-                    );
-                }
-            }
         }
 
-        // --- arg rules: combined (declaringType, method) -> (Tag, Role) map across ALL arg rules, so one
-        //     invocation-ref scan serves every actor-shaped mechanism. The Registration endpoint's
-        //     Methods×DeclaringTypes map to Role=Registration; the Producer endpoint's to Role=Producer. A
-        //     method appearing under both (none today) resolves to whichever rule is listed last. ---
-        var argMethods =
-            new Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve, string? HandlerDispatcher)>();
-        foreach (var rule in deliveryRules)
+        // --- arg rules: one invocation-ref scan serving every actor-shaped mechanism. Coarse SQL filter:
+        //     actor-shaped calls are invocations with a captured first-argument name (the process name) inside
+        //     a method, whose target is a method DocID. The projection refines by the declaring-type+method
+        //     gate — such calls are few, so the unrefined set is small. ---
+        var argInvocations = new List<DeliverySiteProjection.ArgInvocation>();
+        if (DeliverySiteProjection.ArgMethods(deliveryRules).Count > 0)
         {
-            AddArgEndpoint(argMethods, rule.Tag, rule.Registration, DeliveryRole.Registration);
-            AddArgEndpoint(argMethods, rule.Tag, rule.Producer, DeliveryRole.Producer);
-        }
-
-        if (argMethods.Count > 0)
-        {
-            // Coarse SQL filter: actor-shaped calls are invocations with a captured first-argument name (the
-            // process name) inside a method, whose target is a method DocID. The in-memory pass refines by the
-            // declaring-type+method gate — such calls are few, so the unrefined set is small.
-            var rows = await context
+            argInvocations = await context
                 .ReferenceFacts.Where(r =>
                     r.EnclosingSymbolId != null
                     && r.FirstArgumentName != null
                     && r.RefKind == RefKinds.Invocation
                     && r.TargetSymbolId.StartsWith("M:")
                 )
-                .Select(r => new
-                {
+                .Select(r => new DeliverySiteProjection.ArgInvocation(
                     r.EnclosingSymbolId,
                     r.FilePath,
                     r.Line,
                     r.FirstArgumentName,
-                    r.TargetSymbolId,
-                })
+                    r.TargetSymbolId
+                ))
                 .ToListAsync(cancellationToken);
-
-            foreach (var r in rows)
-            {
-                var parsed = ParseInvocationTarget(r.TargetSymbolId);
-                if (parsed is not { } method || !argMethods.TryGetValue(method, out var tagRole))
-                {
-                    continue;
-                }
-
-                // Both arg resolvers GATE to a member path (contains a '.', e.g. `ProcessDns.AccountService`):
-                // a bare-variable name (`tell(pid, …)`) is not a stable cross-method identity and collides
-                // spuriously with framework internals, so it never becomes a delivery site.
-                if (!r.FirstArgumentName!.Contains('.', StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                // `path` keeps the full member path (`ProcessDns.AccountService`); `leaf` takes the LAST segment
-                // (`AccountService`) — the bridge across PARALLEL registries that share a leaf but differ by
-                // class prefix (e.g. a tell through `ProcessDns.X` and the spawn through `ProcessNames.X` name
-                // the same process X). `leaf` is more ~heuristic — a leaf shared by two unrelated channels
-                // over-joins — so it is opt-in per rule (the resolve field), calibrated, and disclosed.
-                var token = string.Equals(tagRole.Resolve, "leaf", StringComparison.Ordinal)
-                    ? r.FirstArgumentName![(r.FirstArgumentName!.LastIndexOf('.') + 1)..]
-                    : r.FirstArgumentName!;
-
-                sites.Add(
-                    new DeliverySite(
-                        Caller: r.EnclosingSymbolId!,
-                        FilePath: r.FilePath,
-                        Line: r.Line,
-                        IdentityToken: token,
-                        Tag: tagRole.Tag,
-                        Role: tagRole.Role,
-                        HandlerDispatcher: tagRole.HandlerDispatcher
-                    )
-                );
-            }
         }
 
-        return sites;
-    }
-
-    // Folds one arg-source endpoint's Methods×DeclaringTypes into the combined (type, method) -> (Tag, Role)
-    // map. Non-arg endpoints (e.g. event-symbol) are skipped here — they are handled by the event scan.
-    // NOTE on ArgumentIndex: only FirstArgumentName/arg0 is captured as a fact today, so the `path` resolver
-    // always reads arg0; an endpoint declaring ArgumentIndex != 0 is treated as arg0 (no crash) — an
-    // extraction limitation to lift when nth-argument names are captured.
-    private static void AddArgEndpoint(
-        Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve, string? HandlerDispatcher)> map,
-        string tag,
-        DeliveryEndpoint endpoint,
-        DeliveryRole role
-    )
-    {
-        if (!string.Equals(endpoint.Source, "arg", StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        foreach (var declaringType in endpoint.DeclaringTypes ?? [])
-        {
-            foreach (var name in endpoint.Methods ?? [])
-            {
-                map[(declaringType, name)] = (tag, role, endpoint.Resolve, endpoint.HandlerDispatcher);
-            }
-        }
-    }
-
-    // "M:Echo.Process.tell``1(Echo.ProcessId,…)" -> ("Echo.Process", "tell"). A generic "(declaringType,
-    // method) from an M: DocID" parser. Mirrors FactEffectDeriver's ParseMethod (declaring type's arity
-    // markers stripped is unnecessary for the actor types, which are non-generic, so we keep the declaring
-    // type verbatim and only trim the method-level "``N"). Null when the DocID is not a method id or has no
-    // dot before the member name.
-    private static (string DeclaringType, string Name)? ParseInvocationTarget(string docId)
-    {
-        if (!docId.StartsWith("M:", StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        var searchEnd = docId.IndexOf('(');
-        if (searchEnd < 0)
-        {
-            searchEnd = docId.Length;
-        }
-
-        var lastDot = docId.LastIndexOf('.', searchEnd - 1);
-        if (lastDot < 2)
-        {
-            return null;
-        }
-
-        var declaring = docId.Substring(startIndex: 2, length: lastDot - 2);
-        var methodStart = lastDot + 1;
-        var backtick = docId.IndexOf('`', startIndex: methodStart, count: searchEnd - methodStart);
-        var methodEnd = backtick >= 0 ? backtick : searchEnd;
-        if (methodEnd <= methodStart)
-        {
-            return null;
-        }
-
-        return (declaring, docId.Substring(startIndex: methodStart, length: methodEnd - methodStart));
+        return DeliverySiteProjection.Project(deliveryRules, eventReads, argInvocations);
     }
 
     // Loads the exact Roslyn-mined dispatch facts (dispatch_facts) into FactGraphData.MinedDispatch.

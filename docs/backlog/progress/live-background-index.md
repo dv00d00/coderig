@@ -440,3 +440,83 @@ Two silent-failure paths turn a one-index flake into a process-lifetime one:
 - One agent builds at a time in this repo — concurrent builds clobber `bin/`.
 - Whatever ships must disclose which tree state produced an answer. Silently answering about pre-edit code is
   the failure mode this whole program exists to remove, and rig's identity is disclosing its own limits.
+
+## DESIGN 2026-08-21 — query serving: the seam is the fact source, not the transport
+
+The live index maintains correct facts that nothing can query. Closing that is three slices, and the shape of
+the first one is already fixed by a precedent in this repo.
+
+### The seam already exists, half-built
+
+`FactGraphProjection.FromAnalysis` is a PRODUCTION in-memory twin of `Reads.LoadFactGraphAsync` — `rig index`
+uses it to build the graph from facts still in RAM instead of re-reading 3.8 GB back off disk. Its header says
+the two projections must stay field-for-field identical and names the parity test that enforces it. That is
+exactly the contract the live index needs, extended from one loader to the query-side loader set:
+`LoadShapedGraphAsync`, `LoadFactEntryPointDataAsync`, `LoadInvocationRefsAsync`, the static-field/threadStatic/
+volatile/async feeds, delivery sites, event-subscription sites.
+
+So slice 6a is not new architecture — it is completing an existing pattern. `LiveReads` (pure, over
+`AnalysisResult`) + `LiveFactSource` (the memoized per-generation bundle: shaped graph, EP data, hazard
+effects) + a set-equality parity gate against a store written from the same `AnalysisResult`.
+
+### Why NOT the two obvious alternatives
+
+- **Materialize the live facts into a store so every command works unchanged.** This is the tempting one and it
+  is dead on the numbers: the save tail is 35 s / 3.1 GB on MedDBase plus a 12.5 s FTS5 rebuild, against a
+  0.75 s edit→servable budget. In-memory SQLite halves neither the time nor the memory, and a `mode=memory`
+  database is not reachable from the one-shot CLI process anyway — which is the entire use case. Also re-opens
+  both showstoppers the overlay AVOIDS (run-scoped append double-counting, whole-solution re-bake).
+- **Return typed JSON artifacts and render client-side.** Duplicates every renderer, or forces the renderers
+  host-side regardless. The transport should carry rendered output; see 6c.
+
+### The three slices
+
+**6a — `LiveReads` + `LiveFactSource` + parity gate.** In flight. Nothing consumes it yet; the gate is the
+deliverable. Delivery-site projection (~200 lines of real logic) is extracted to a shared pure core rather than
+duplicated — the other twins are short enough that duplication with a parity test is the idiomatic trade here.
+
+**6b — `IFactSource`, and migrate the queries onto it.** Two implementations: `StoreFactSource` (delegating to
+`Reads`, keeping the `WarmStore` memoization) and `LiveFactSource`. Commands move from taking a `RigDbContext`
+to taking an `IFactSource`, one at a time, each migration verified by its EXISTING tests passing with
+byte-identical output. `reaches` first (highest-value agent query), then `tree`, `callers`, `path`, `derive`.
+
+This refactor is worth doing even if the resident process were cancelled tomorrow: it makes a query command
+testable without a store, which today it is not.
+
+The live surface will be a disclosed SUBSET. `rig impact` is explicitly never live — it is defined as a pure
+function of two IMMUTABLE stores, which is the tier-2 half of the split this program opened with. Query-cache
+entries do not apply on the live path either: facts change per edit, so memoization is per-generation inside
+`LiveFactSource` rather than in `cache.db`.
+
+**6c — transport: the resident host answers one-shot CLI invocations.** The host binds 127.0.0.1 only, with a
+token, and publishes `{pid, port, token, solution, workingDir}` to `.rig/live.json`. The protocol carries the
+COMMAND, and the host runs it in-process against `LiveFactSource`, returning stdout/stderr/exit — so
+`--format tsv` and every rendering flag work for free and the output is byte-identical to the store path.
+
+**Routing default: ON when a live host is running for this working directory, always disclosed, `--no-live` to
+opt out.** The reflex is to make this opt-in because "silently answering from another process" sounds unsafe.
+That has it backwards: when a live host is running, the STORE is the stale answer — it is pinned to an older
+commit, while the live index reflects the tree as it is now. Routing to live is strictly more correct, and the
+failure this whole program exists to remove is silently answering about pre-edit code. So the honest default is
+live-when-available plus a mandatory source line (`live: facts from resident index — 1 file applied,
+3 project(s) unreconciled`), not a flag agents will never pass.
+
+### The risk this design exposes: 0.75s is FACTS, not ANSWERS
+
+`edit -> servable 0.75s` measures the fact overlay. A query needs the DERIVED layer on top — shaped graph
+(monomorphization over 442k symbols), EP data, hazard effects. Cold from SQL those cost 4.6 s (graph) and ~18 s
+(hazard prewarm) on MedDBase. From memory they should be cheaper, but **nobody has measured them, and a
+memoized-lazy bundle means the FIRST query after each edit pays the whole rebuild.** If that is 15 s, the
+program's headline number is honest about facts and misleading about answers.
+
+Three responses, in the order they should be tried:
+
+1. **Measure it first** — per-generation `LiveFactSource` build cost on MedDBase, broken down by artifact. This
+   is the calibration gate for 6b and it must run before the default routing of 6c ships.
+2. **Rebuild the derived layer eagerly in the background** after the eager apply, exactly as the cascade already
+   does — so a query arriving later hits a warm bundle and only a query racing the edit pays. Cheap, and the
+   converging-overlay pattern already in place.
+3. **Incremental derivation** if (2) is not enough. Effects are per-method facts keyed to an enclosing symbol,
+   so re-deriving only the changed files' symbols and splicing is tractable; the graph is a filter+map over refs
+   and could be spliced per file too. `dispatch_edges` must still be rebuilt WHOLE (whole-program CHA) — the
+   same constraint slice 3 already respects.
