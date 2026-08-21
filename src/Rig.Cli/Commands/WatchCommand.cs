@@ -7,6 +7,7 @@ using Rig.Analysis;
 using Rig.Analysis.Inventory;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Live;
 using Rig.Domain.Data;
 
 namespace Rig.Cli.Commands;
@@ -29,6 +30,11 @@ internal static class WatchCommand
         {
             Description = "Cold-boot the resident index, print the status line, and exit (no watching).",
         };
+        var query = new Option<string?>("--query")
+        {
+            Description = "Answer one query against the booted resident facts (e.g. --query \"reaches Program.Main\"). "
+                + "Composes with --once: boot, answer, exit.",
+        };
         var cmd = new Command(
             name: "watch",
             description: "Live background index: cold-analyze once retaining the workspace, then re-extract each saved .cs file "
@@ -38,6 +44,7 @@ internal static class WatchCommand
             target,
             rules,
             once,
+            query,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -48,6 +55,7 @@ internal static class WatchCommand
                         target: pr.GetValue(target)!,
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         once: pr.GetValue(once),
+                        query: pr.GetValue(query),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -61,6 +69,7 @@ internal static class WatchCommand
         string target,
         IReadOnlyList<string> extraRules,
         bool once,
+        string? query,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -84,7 +93,8 @@ internal static class WatchCommand
                 rules: ruleSet,
                 buildCacheDir: buildCacheDir,
                 output: output,
-                watch: !once
+                watch: !once,
+                workingDirectory: workingDirectory
             );
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
@@ -102,13 +112,28 @@ internal static class WatchCommand
             output.WriteLine(
                 $"watch: cold boot in {bootWatch.Elapsed.TotalSeconds:F1}s — {host.ProjectCount} project(s), workspace retained"
             );
-            output.WriteLine(await host.GetStatusLineAsync());
+            // --query: one answer off the freshly booted facts. Printed BEFORE the watch loop starts so
+            // `--once --query …` is a complete boot-answer-exit, and a plain `--query …` seeds the session
+            // with an answer before the first edit lands. Every answer is already prefixed with the same
+            // staleness disclosure the boot status line carries, so printing both would just duplicate it.
+            if (query is null)
+            {
+                output.WriteLine(await host.GetStatusLineAsync());
+            }
+            else
+            {
+                output.WriteLine(await host.AnswerQueryAsync(query));
+            }
+
             if (once)
             {
                 return 0;
             }
 
-            output.WriteLine("watch: watching for .cs saves (obj/ and bin/ excluded) — press Ctrl+C to stop.");
+            output.WriteLine(
+                "watch: watching for .cs saves (obj/ and bin/ excluded). Type a query "
+                    + $"({LiveQueryRunner.Usage}) or press Ctrl+C to stop."
+            );
             var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             ConsoleCancelEventHandler onCancel = (_, e) =>
             {
@@ -118,7 +143,10 @@ internal static class WatchCommand
             Console.CancelKeyPress += onCancel;
             try
             {
-                await stopped.Task;
+                // Two ways out: Ctrl+C, or `quit` on stdin. The stdin reader IS the query transport for
+                // this slice — enough for a human at a terminal or a piped agent to drive the resident index,
+                // deliberately not a protocol (that is a later slice).
+                await Task.WhenAny(stopped.Task, ReadQueriesAsync(host, output, stopped.Task));
             }
             finally
             {
@@ -127,6 +155,40 @@ internal static class WatchCommand
 
             output.WriteLine("watch: stopped.");
             return 0;
+        }
+    }
+
+    // Read query lines from stdin and answer each against the CURRENT fact generation. Blank lines are ignored
+    // rather than answered, so a stray Enter at a terminal doesn't print the usage banner.
+    //
+    // EOF does NOT stop the watcher — it stops READING. That distinction is load-bearing: ReadLineAsync returns
+    // null immediately when stdin is closed or attached to the null device, which is exactly how a daemon or a
+    // background launcher starts a process, so treating EOF as "exit" would make `rig watch` terminate
+    // instantly and silently for anyone not sitting at a terminal. `quit`/`exit` and Ctrl+C are the ways out;
+    // a piped caller that wants the process to end appends `quit`.
+    private static async Task ReadQueriesAsync(WatchHost host, TextWriter output, Task stopped)
+    {
+        while (true)
+        {
+            var line = await Console.In.ReadLineAsync();
+            if (line is null)
+            {
+                await stopped; // stdin is not a query source here; hand the exit back to Ctrl+C
+                return;
+            }
+
+            var trimmed = line.Trim();
+            if (string.Equals(trimmed, "quit", StringComparison.OrdinalIgnoreCase) || string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (trimmed.Length == 0)
+            {
+                continue;
+            }
+
+            output.WriteLine(await host.AnswerQueryAsync(line));
         }
     }
 }
@@ -143,6 +205,8 @@ internal sealed class WatchHost : IAsyncDisposable
 
     private readonly ResidentIndex _index;
     private readonly TextWriter _output;
+    private readonly RuleSet _rules;
+    private readonly string _workingDirectory;
     private readonly TimeSpan _debounce;
     private readonly Channel<string> _changes = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -153,10 +217,17 @@ internal sealed class WatchHost : IAsyncDisposable
     private int _appliedFiles;
     private double _lastEditSeconds = -1;
 
-    private WatchHost(ResidentIndex index, string solutionPath, TextWriter output, bool watch, TimeSpan debounce)
+    // The query-ready derived layer for the CURRENT fact generation, built on first query and thrown away the
+    // moment the facts move. Generation identity is the AnalysisResult INSTANCE: ResidentIndex nulls its
+    // merged-facts field on every apply/reconcile, so a reference change is exactly "the facts moved".
+    private LiveFactSource? _liveFacts;
+
+    private WatchHost(ResidentIndex index, string solutionPath, RuleSet rules, string workingDirectory, TextWriter output, bool watch, TimeSpan debounce)
     {
         _index = index;
         _output = output;
+        _rules = rules;
+        _workingDirectory = workingDirectory;
         _debounce = debounce;
         ProjectCount = index.CurrentSolution.ProjectIds.Count;
 
@@ -202,6 +273,10 @@ internal sealed class WatchHost : IAsyncDisposable
         TextWriter output,
         bool watch,
         TimeSpan? debounce = null,
+        // Where a live query resolves rules and deployments.json from — the directory `rig` was invoked in,
+        // exactly as a store-backed query command uses it. Defaults to the solution's own directory, which is
+        // what a test driving the host directly wants.
+        string? workingDirectory = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -214,7 +289,15 @@ internal sealed class WatchHost : IAsyncDisposable
             buildCacheDir: buildCacheDir
         );
         var index = new ResidentIndex(workspace, baseFacts, solutionPath, rules);
-        return new WatchHost(index, solutionPath, output, watch, debounce ?? DefaultDebounce);
+        return new WatchHost(
+            index,
+            solutionPath,
+            rules,
+            workingDirectory ?? Path.GetDirectoryName(Path.GetFullPath(solutionPath))!,
+            output,
+            watch,
+            debounce ?? DefaultDebounce
+        );
     }
 
     public async Task<string> GetStatusLineAsync(CancellationToken cancellationToken = default)
@@ -241,6 +324,44 @@ internal sealed class WatchHost : IAsyncDisposable
         {
             _gate.Release();
         }
+    }
+
+    // Answer one query against the CURRENT fact generation, returning the rendered text.
+    //
+    // The answer is always PREFIXED with the staleness disclosure (the same line ComposeStatus feeds the
+    // status output): serving an answer about a partially-reconciled tree without saying so is precisely the
+    // failure this program exists to remove, and an answer is the moment it matters most — a status line
+    // printed thirty seconds ago is not a disclosure attached to THIS answer. The prefix is captured under the
+    // same lock as the fact generation, so the disclosure and the facts it describes cannot disagree.
+    //
+    // The derived layer (traversal graph, EP facts, effects) is built ONCE per generation and reused: the
+    // per-artifact first-access cost is appended as a trailing measurement line, which is the only
+    // instrumentation of what a live QUERY costs on top of the ~0.75s fact latency.
+    //
+    // The gate is released BEFORE the query runs. LiveFactSource is an immutable value over one generation, so
+    // a concurrent edit cannot corrupt this answer — at worst it makes it a (correctly disclosed) answer about
+    // the generation that was current when it started. Holding the gate for the whole traversal would instead
+    // block the worker's next apply behind it, which is the one thing the resident loop must never do.
+    public async Task<string> AnswerQueryAsync(string query, CancellationToken cancellationToken = default)
+    {
+        LiveFactSource facts;
+        string disclosure;
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            facts = CurrentLiveFacts();
+            disclosure = ComposeStatus();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        var built = facts.BuildTimes.Count; // artifacts already memoized before this query
+        var answer = await LiveQueryRunner.AnswerAsync(query, facts, _workingDirectory);
+        var costLine =
+            facts.BuildTimes.Count == built ? "" : $"{Environment.NewLine}live: derived layer built this generation: {facts.BuildTimeLine()}";
+        return $"{disclosure}{Environment.NewLine}{answer.Text.TrimEnd('\r', '\n')}{costLine}";
     }
 
     public async Task<AnalysisResult> GetCurrentFactsAsync(CancellationToken cancellationToken = default)
@@ -457,6 +578,21 @@ internal sealed class WatchHost : IAsyncDisposable
         }
 
         _output.WriteLine($"{status} | reconcile {watch.Elapsed.TotalSeconds:F2}s");
+    }
+
+    // The live derived layer for whatever generation of facts is current. Caller must hold `_gate` (it reads
+    // _index.CurrentFacts, which the worker mutates). Rebuilding on a reference change is the WHOLE
+    // invalidation model — no versions to bump, no cache keys, no staleness window: an edited fact set is a
+    // different object, so it gets a different LiveFactSource.
+    private LiveFactSource CurrentLiveFacts()
+    {
+        var facts = _index.CurrentFacts;
+        if (_liveFacts is null || !ReferenceEquals(_liveFacts.Facts, facts))
+        {
+            _liveFacts = new LiveFactSource(facts, _rules);
+        }
+
+        return _liveFacts;
     }
 
     // The product surface (program doc, slice 5): `k project(s) unreconciled` IS the staleness

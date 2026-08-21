@@ -2,13 +2,13 @@ using System.CommandLine;
 using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Live;
 using Rig.Cli.Rendering;
 using Rig.Cli.Telemetry;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.Effects.EffectDerivation;
 using static Rig.Cli.EntryPoints.EntryPointContext;
-using static Rig.Cli.Graph.TraversalGraphLoader;
 using static Rig.Cli.Rendering.EntryPointListRenderer;
 using static Rig.Cli.Rendering.SymbolNameFormatter;
 
@@ -82,7 +82,8 @@ internal static class ReachesCommand
 
     // Bound option values for `rig reaches`. Raw user inputs (Format kept as the parsed string);
     // the flag derivations (format -> tsv, depth -> maxDepth, etc.) live at the top of RunAsync.
-    private sealed record Options(
+    // Internal (was private) so the LIVE query path can build the same options record for the same RunAsync.
+    internal sealed record Options(
         string FromPattern,
         bool Async,
         bool IncludeDelivery,
@@ -97,7 +98,17 @@ internal static class ReachesCommand
         bool Time
     );
 
-    private static async Task<int> RunAsync(Options opts, CommandIo io)
+    // The CLI entry: answer off the .rig store, which is what every `rig reaches` invocation does. The source
+    // is passed as a FACTORY, not an already-open source, purely to preserve ORDERING: the schema gate must
+    // still fire where the old `await using var context = …` sat (after the rules load and the unknown-filter-
+    // token warning), not before them.
+    private static Task<int> RunAsync(Options opts, CommandIo io) =>
+        RunAsync(opts, io, () => StoreQueryFactSource.OpenAsync(io.WorkspaceLocation));
+
+    // The command body, parameterized on WHERE the facts come from (IQueryFactSource) rather than on a
+    // RigDbContext. Everything below — the traversal, the effect join, the three buckets, every rendered line
+    // — is source-agnostic, which is what makes a live-served answer the SAME answer, not a parallel one.
+    internal static async Task<int> RunAsync(Options opts, CommandIo io, Func<Task<IQueryFactSource>> openSource)
     {
         var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
         var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded
@@ -112,14 +123,14 @@ internal static class ReachesCommand
         // --raw, a long-standing asymmetry vs path/tree/callers).
         var shaped = opts.Raw ? rules with { Cut = [], Context = [] } : rules;
 
-        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
+        await using var source = await openSource();
 
         var graphWatch = Stopwatch.StartNew();
-        var inputs = await LoadEffectReachInputsAsync(context, opts.FromPattern, SqlReachability.Direction.Forward, shaped);
+        var inputs = await source.LoadEffectReachInputsAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
         var graph = inputs.Graph;
         if (!opts.Raw)
         {
-            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
         }
 
         graphWatch.Stop();
@@ -146,21 +157,13 @@ internal static class ReachesCommand
             // Distinguish "nothing by that name" from "a real symbol that can never be a node" (a `P:`
             // property / `F:` field / `E:` event) — the latter is a fair pattern to try and deserves the
             // accessor hint rather than a flat denial.
-            await SeedResolutionNotice.ReportNoNodeMatchAsync(io.TextOutput.Output, context, opts.FromPattern);
+            await source.ReportNoNodeMatchAsync(io.TextOutput.Output, opts.FromPattern);
             return 1;
         }
 
         SeedResolutionNotice.NoteIfNoOutEdges(io.TextOutput.Error, reachable, maxDepth);
 
-        var effects = DeriveEffects(
-            rules.Effects,
-            rules.Observations,
-            inputs.Invocations,
-            BaseEdgeTuples(graph),
-            ctorRefs: inputs.CtorRefs,
-            throwRefs: inputs.ThrowRefs,
-            allocationFacts: inputs.AllocationFacts
-        );
+        var effects = await source.DeriveEffectsAsync(inputs, graph, rules);
         // --only / --exclude (e.g. --exclude throw), plus the default hiding of intrinsic providers
         // (alloc/throw) restored by --intrinsic. The withheld count is disclosed after the results below.
         var selection = SelectEffects(effects, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
@@ -228,9 +231,8 @@ internal static class ReachesCommand
         // deployments.json; no-op otherwise). The from-root is the depth-0 reachable symbol.
         // F2: thread the EpData the EF-fallback load already carried (null on the SQL path) so
         // BuildEpContextAsync→DeriveEpSiteKindAsync can skip the redundant LoadFactEntryPointDataAsync.
-        var reachDeployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
-        var reachEpContext = await BuildEpContextAsync(
-            context: context,
+        var reachDeployments = await source.LoadDeploymentsAsync(io.WorkspaceLocation.WorkingDirectory);
+        var reachEpContext = await source.BuildEpContextAsync(
             graph: graph,
             workingDirectory: io.WorkspaceLocation.WorkingDirectory,
             extraRules: opts.ExtraRules,

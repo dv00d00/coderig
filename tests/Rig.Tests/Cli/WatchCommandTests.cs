@@ -40,6 +40,57 @@ public sealed class WatchCommandTests
         text.ShouldContain("cold boot");
     }
 
+    // The `--query` CLI surface: boot, answer ONE query off the resident facts, exit — the whole
+    // point being that this needs no `.rig` store at all (the playground copy has none: DeepChainPlayground
+    // skips the checked-in `.rig` directory). Composes with --once, and the answer carries the staleness
+    // disclosure rather than the standalone boot status line, so the disclosure is attached to the ANSWER.
+    [Test]
+    public async Task Once_with_a_query_answers_off_the_resident_facts_with_no_store()
+    {
+        using var playground = await DeepChainPlayground.CreateAsync();
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(
+            ["watch", playground.SolutionPath, "--once", "--query", "reaches HomePage.Show"],
+            output,
+            error,
+            playground.WorkingDirectory
+        );
+
+        exitCode.ShouldBe(0, output.ToString() + error.ToString());
+        var text = output.ToString();
+        text.ShouldContain("live: facts current as of 0 file(s) applied | all projects reconciled");
+        text.ShouldContain("From: HomePage.Show");
+        // The chain's 8 reachable methods, five project hops deep — the same number the store path reports.
+        text.ShouldContain("Reachable methods (<= depth 2147483647): 8");
+        text.ShouldContain("live: derived layer built this generation: traversalGraph ");
+        // No FACT STORE anywhere: the answer came out of memory. (`.rig/` itself does get created — it holds
+        // the design-time-build cache the cold boot shares with `rig index` — but no rig.db is written.)
+        var rigDirectory = Path.Combine(playground.WorkingDirectory, ".rig");
+        (Directory.Exists(rigDirectory) ? Directory.GetFiles(rigDirectory, "rig.db", SearchOption.AllDirectories) : [])
+            .ShouldBeEmpty("`watch --query` must answer without needing or writing a fact store.");
+    }
+
+    // An unrecognized query says what IS supported instead of failing obscurely.
+    [Test]
+    public async Task An_unsupported_query_reports_what_is_supported()
+    {
+        using var playground = await DeepChainPlayground.CreateAsync();
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(
+            ["watch", playground.SolutionPath, "--once", "--query", "impact HEAD~1"],
+            output,
+            error,
+            playground.WorkingDirectory
+        );
+
+        exitCode.ShouldBe(0, output.ToString() + error.ToString());
+        output.ToString().ShouldContain("live: unsupported query 'impact' — supported live queries: `reaches <pattern>`; `quit` (or EOF) exits.");
+    }
+
     // Acceptance 2: the loop end-to-end on a temp copy of DeepChain — boot with the watcher live,
     // write a REAL edit to a file on disk, poll until the watcher applies it, assert the facts
     // reflect it, then poll until the background reconcile clears the disclosure.

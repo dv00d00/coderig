@@ -520,3 +520,122 @@ Three responses, in the order they should be tried:
    so re-deriving only the changed files' symbols and splicing is tractable; the graph is a filter+map over refs
    and could be spliced per file too. `dispatch_edges` must still be rebuilt WHOLE (whole-program CHA) — the
    same constraint slice 3 already respects.
+
+## RESULT 2026-08-21 (later) — `reaches` is served from the live index, byte-identical to the store
+
+Slice 6a (`afe3b308`) built the projection layer; 6b made it answer.
+
+```
+LiveReads          11 pure twins of the query-side Reads loaders, over an AnalysisResult
+LiveFactSource     per-generation memo: traversalGraph | epData | invocations | throwRefs | effects
+                                        + shapedGraph / hazardEffects for the derive-shaped consumers
+IQueryFactSource   6 members — the seam ReachesCommand now takes instead of a RigDbContext
+                   StoreQueryFactSource (delegates to today's code) | LiveQueryFactSource
+rig watch --query  "reaches <pattern>", plus a stdin query loop
+```
+
+**Measured, live vs store, same tree, real CLI on the store side: stdout byte-identical on all 14 patterns**
+across DeepChain and EntryPointEffects, exit codes equal, deployment/EP chips equal. Parity of the projections
+themselves: 52 set comparisons, `missing=0 extra=0` on every one.
+
+And the claim the program exists to make, as a test rather than an assertion —
+`Reaches_reflects_a_disk_edit_the_pre_edit_answer_did_not`:
+
+```
+BEFORE  live: facts current as of 0 file(s) applied | all projects reconciled
+        Direct effects (real call paths): 2      1 efcore pending_write   1 efcore commit
+AFTER   live: facts current as of 1 file(s) applied | 1 project(s) unreconciled | last edit 0.16s
+        Direct effects (real call paths): 3      1 efcore read  1 efcore pending_write  1 efcore commit
+```
+
+The pre-edit answer is asserted NOT to contain the new effect, so the test cannot pass against a source that
+always reported it.
+
+### Three findings from the comparison, none of them predicted
+
+1. **`ShapedGraph` is the WRONG graph for `reaches`, and serving off it would have diverged.**
+   `LoadShapedGraphAsync` (what `derive` uses) additionally runs `AddDeliveryEdges`, which CREATES
+   producer→handler edges; the traversal loader stops after `ShapeGraph`. Answering `reaches` off the
+   derive-shaped graph would have added delivery reach the store path never walks — a live/store divergence
+   with nothing to do with liveness. Hence a separate `TraversalGraph` artifact. This is the second time in
+   this program that two nearly-identical loaders differed in a load-bearing way; the lesson is to mirror the
+   loader the CONSUMER uses, never the one with the most similar name.
+2. **A real pre-existing bug: the `--intrinsic` hint is counted BEFORE the reachability filter**, so `reaches`
+   can claim it withheld effects that were never in the answer. It diverged live-vs-store on 3 of 7 patterns
+   — but neither side is right; the store is merely more precise by accident of SQL bounding, and its bounded
+   closure is still a reach superset, so it can raise the same false hint. Filed as
+   [intrinsic-hint-counted-before-reachability-filter](../todo/intrinsic-hint-counted-before-reachability-filter.md);
+   pinned in the test with the exemption documented, not papered over.
+3. **The bounded-vs-whole-store worry did not materialise.** The store derives effects from a SQL-bounded input
+   set and live derives over everything, and the answers still agree because the command filters on
+   `reachable.ContainsKey`. The extra `BaseEdgeTuples` hazard I flagged before dispatching turned out not to
+   fire here. Worth re-testing on MedDBase scale before trusting it generally.
+
+### The derived-layer cost — the question I said would gate routing
+
+| tree | traversalGraph | epData | effects | total |
+|---|---|---|---|---|
+| EntryPointEffects, first query | 4.3ms | 0.2ms | 8.6ms | **14.4ms** |
+| EntryPointEffects, generation after an edit | 0.9 | 0.2 | 0.5 | **1.7ms** |
+| coderig itself (5 projects, 709 reachable methods) | 34.6 | 10.2 | 31.6 | **84.6ms** |
+
+A second query in the same generation costs **nothing** (asserted as a test). Playground numbers are
+JIT-dominated; the MedDBase figure is the one that decides 6c and is measured separately. `shapedGraph` and
+`hazardEffects` correctly never build on the reaches path.
+
+Rendered in MILLISECONDS deliberately: the first cut printed seconds to 3 decimals and reported every artifact
+as `0.000s`. An instrument whose resolution hides what it measures is not an instrument.
+
+### One regression caught in review, not by a test
+
+The stdin query loop treated EOF as "exit". `ReadLineAsync` returns null immediately when stdin is closed or
+attached to the null device — which is how a daemon or a background launcher starts a process — so
+`rig watch` would have terminated instantly and silently for anyone not sitting at a terminal. EOF now stops
+READING, not watching; `quit`/`exit` and Ctrl+C remain the ways out. No test covered this, which is why the
+diff review is the gate and not the suite.
+
+### MedDBase real-data check (226 projects) — and the bug it found
+
+`rig watch <MedDBase.slnx> --once --query "reaches DebtorOverride.SaveIncludedServices"`:
+
+```
+watch: cold boot in 161.3s — 226 project(s), workspace retained
+live: facts current as of 0 file(s) applied | all projects reconciled
+From: DebtorOverride.SaveIncludedServices  ⟦3 svcs: MedDBase (iis), MedDBase.DataServer (iis), MedDBase.PACS (iis)⟧
+Reachable methods: 526 | Direct effects: 18 | dispatch fan-out: 14 effects
+live: derived layer built this generation: traversalGraph 2198.3ms | invocations 242.1ms
+      | epData 371.4ms | throwRefs 147.3ms | effects 1038.0ms
+```
+
+**The derived layer costs ~4.0s for the FIRST query in a generation, and zero for every query after it.** That
+is the number the 6c routing default was waiting on. It is acceptable but not free, and it makes response (2)
+from the design note — warm the derived layer in the background right after the eager apply, exactly as the
+cascade already does — the obvious next move: it takes the user-visible cost to ~0 without any new machinery.
+
+Cold boot 161.3s vs a 258.4s cold index, as expected: no store is written.
+
+**The comparison against the store answer found a real bug — in the STORE path.** 39 lines each, and the live
+answer carried `⚠ lock-held-across` on the `io read` at `AssemblyCache.LoadFile` where the store answer did not.
+Isolating it mattered more than noticing it, because three explanations were live at once:
+
+| candidate | how it was ruled out |
+|---|---|
+| rules differed (`--rules` on one side only) | re-ran the store query WITH the same rules — no change |
+| older extraction era (facts lack the scope) | queried the store directly: `EnclosingScopes` IS populated for that invocation |
+| tree drift (store is a different commit) | `AssemblyCache.cs` byte-identical across the two commits — and then `derive` vs `reaches` on ONE store removed tree drift entirely |
+
+What remained was decisive: on the SAME store with the SAME rules, `rig derive` (whole-store inputs) attaches
+`lock_held_across_effect` and `rig reaches` (bounded inputs) does not. Cause:
+`SqlReachability.LoadReachInputsAsync` never SELECTs `EnclosingScopes`, so it is null for every invocation on
+the bounded path, and `FactEffectDeriver` derives every lexical-scope observation from exactly that field. So
+`reaches`/`tree`/`path` have been silently dropping `lock_held_across_effect` and `transaction_spans_effect`,
+while `derive` reports them — **two store paths disagreeing about one store.** Filed HIGH as
+[bounded-reach-inputs-drop-enclosing-scopes](../todo/bounded-reach-inputs-drop-enclosing-scopes.md).
+
+Note what found it: not the live index being clever, but a PARITY comparison having a second implementation to
+disagree with. The live projection is right by construction (it mirrors `LoadInvocationRefsAsync` field for
+field), so the store path's omission became visible the moment two paths answered the same question. That is an
+argument for the parity gates themselves, independent of the resident process.
+
+And it is the FIFTH instance in this program of a gate too small to host the defect: the playground comparison
+passed on all 14 patterns because no playground holds a lock across IO.

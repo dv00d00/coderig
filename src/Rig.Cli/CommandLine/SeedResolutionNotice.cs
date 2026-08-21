@@ -21,7 +21,10 @@ namespace Rig.Cli.CommandLine;
 // outcome 2's note goes to stderr, exactly like AmbiguityNotice's.
 internal static class SeedResolutionNotice
 {
-    private const int MaxListed = 5;
+    // How many hits the no-node probe looks at AND lists. Internal, not private, because the LIVE fact source
+    // runs the same probe in memory and must truncate identically — the "is there a non-node hit" decision is
+    // made over the truncated list, so a different cap would give a different disclosure.
+    internal const int MaxListed = 5;
 
     // Outcome 1. `endpoint` names WHICH pattern failed when a command has more than one seed (`path`'s
     // from/to, which may even be the same text); omitted, the message is byte-identical to TreeCommand's.
@@ -59,6 +62,20 @@ internal static class SeedResolutionNotice
     internal static async Task ReportNoNodeMatchAsync(TextWriter output, RigDbContext context, string pattern, string? endpoint = null)
     {
         var hits = await Reads.SearchSymbolsAsync(context, pattern: pattern, kind: null, limit: MaxListed);
+        ReportNoNodeMatch(output, hits.Select(h => (h.SymbolId, h.Kind)).ToList(), pattern, endpoint);
+    }
+
+    // The MESSAGE half of outcome 1, split from the store probe so the LIVE fact source (which probes the
+    // in-memory symbol facts instead of the store) emits byte-identical text. `hits` must already be truncated
+    // to MaxListed by the probe — the non-node decision is deliberately made over the truncated list, on both
+    // paths. Kept as a plain (SymbolId, Kind) pair list so it carries no storage type into the live path.
+    internal static void ReportNoNodeMatch(
+        TextWriter output,
+        IReadOnlyList<(string SymbolId, string Kind)> hits,
+        string pattern,
+        string? endpoint = null
+    )
+    {
         var nonNode = hits.Where(h => !h.SymbolId.StartsWith("M:", StringComparison.Ordinal)).ToList();
         if (hits.Count == 0 || nonNode.Count == 0)
         {

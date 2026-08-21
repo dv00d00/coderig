@@ -1,6 +1,9 @@
+using System.Diagnostics;
+using System.Globalization;
 using Rig.Cli.Effects;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
+using Rig.Storage.Queries;
 
 namespace Rig.Cli.Live;
 
@@ -23,17 +26,28 @@ namespace Rig.Cli.Live;
 // host can hand the same instance to concurrent readers and each artifact is still computed at most once.
 internal sealed class LiveFactSource
 {
+    private readonly object _buildTimeLock = new();
+    private readonly List<(string Artifact, TimeSpan Elapsed)> _buildTimes = [];
+
     private readonly Lazy<FactGraphData> _shapedGraph;
+    private readonly Lazy<FactGraphData> _traversalGraph;
     private readonly Lazy<FactEntryPointDeriver.FactEntryPointData> _epData;
+    private readonly Lazy<IReadOnlyList<FactInvocation>> _invocations;
+    private readonly Lazy<IReadOnlyList<SymbolRef>> _throwRefs;
+    private readonly Lazy<IReadOnlyList<DerivedEffect>> _effects;
     private readonly Lazy<IReadOnlyList<DerivedEffect>> _hazardEffects;
 
     public LiveFactSource(AnalysisResult facts, RuleSet rules)
     {
         Facts = facts;
         Rules = rules;
-        _shapedGraph = new Lazy<FactGraphData>(() => LiveReads.ShapedGraph(facts, rules));
-        _epData = new Lazy<FactEntryPointDeriver.FactEntryPointData>(() => LiveReads.FactEntryPointData(facts));
-        _hazardEffects = new Lazy<IReadOnlyList<DerivedEffect>>(() => DeriveHazardEffects(facts, rules, EpData));
+        _shapedGraph = Memo("shapedGraph", () => LiveReads.ShapedGraph(facts, rules));
+        _traversalGraph = Memo("traversalGraph", () => TraversalGraphOf(facts, rules));
+        _epData = Memo("epData", () => LiveReads.FactEntryPointData(facts));
+        _invocations = Memo("invocations", () => LiveReads.InvocationRefs(facts));
+        _throwRefs = Memo("throwRefs", () => LiveReads.ThrowRefs(facts));
+        _effects = Memo("effects", () => QueryEffectDerivation.ForReach(rules, ReachInputs, TraversalGraph));
+        _hazardEffects = Memo("hazardEffects", () => DeriveHazardEffects(facts, rules, EpData));
     }
 
     // The fact generation this source serves. Immutable — a rebuild produces a new LiveFactSource.
@@ -44,12 +58,109 @@ internal sealed class LiveFactSource
     // Mirrors Reads.LoadShapedGraphAsync.
     public FactGraphData ShapedGraph => _shapedGraph.Value;
 
+    // Mirrors the graph half of TraversalGraphLoader.LoadEffectReachInputsAsync — NOT LoadShapedGraphAsync.
+    // The distinction is load-bearing and was measured, not guessed: the traversal commands
+    // (reaches/tree/path/callers) shape the raw fact graph and STOP there, while LoadShapedGraphAsync (what
+    // `derive` uses, and what ShapedGraph above mirrors) additionally runs AddDeliveryEdges, which CREATES
+    // producer→handler handoff edges. Serving `reaches` off ShapedGraph would therefore have answered with
+    // extra delivery reach the store path never walks — a live/store divergence that has nothing to do with
+    // liveness. MarkEventSubscriptionHandoffs is deliberately NOT applied here either: the command applies it
+    // (gated on `--raw`), exactly as it does on the store path.
+    public FactGraphData TraversalGraph => _traversalGraph.Value;
+
     // Mirrors Reads.LoadFactEntryPointDataAsync.
     public FactEntryPointDeriver.FactEntryPointData EpData => _epData.Value;
+
+    // Mirrors Reads.LoadInvocationRefsAsync.
+    public IReadOnlyList<FactInvocation> Invocations => _invocations.Value;
+
+    // Mirrors Reads.LoadThrowRefsAsync.
+    public IReadOnlyList<SymbolRef> ThrowRefs => _throwRefs.Value;
+
+    // The in-memory twin of what TraversalGraphLoader.LoadEffectReachInputsAsync hands a traversal command —
+    // same record, same fields. The one structural difference from the store path is DISCLOSED rather than
+    // hidden: there is no SQL, so nothing BOUNDS these inputs to the pattern's closure. `pattern`/`direction`
+    // have no live analogue and are simply absent. Effects derived from the wider inputs are still filtered by
+    // `reachable.ContainsKey(EnclosingSymbolId)` in the command, which is what keeps the answer equal — see
+    // LiveReachesTests for the measured live-vs-store comparison this rests on.
+    public SqlReachability.ReachInputs ReachInputs =>
+        new SqlReachability.ReachInputs(
+            Graph: TraversalGraph,
+            Invocations: Invocations,
+            CtorRefs: EpData.CtorRefs,
+            ThrowRefs: ThrowRefs,
+            // AllocationFacts needs no LiveReads twin: Reads.LoadAllocationFactsAsync (whole-store) applies no
+            // filter and no dedup, so the extracted list already IS its return value.
+            AllocationFacts: Facts.AllocationFacts ?? [],
+            EpData: EpData
+        );
+
+    // The NON-hazard effect set `reaches`/`tree` derive: EffectDerivation.DeriveEffects over the reach inputs,
+    // argument-for-argument the call ReachesCommand makes on the store path (no static-field feeds, no hazard
+    // post-pass — those are `derive`'s whole-store arms and HazardEffects covers them). Memoized because it is
+    // the single most expensive derived artifact per generation and every query in that generation wants the
+    // same one.
+    public IReadOnlyList<DerivedEffect> Effects => _effects.Value;
 
     // Mirrors EffectDerivation.DeriveHazardEffectsAsync — the whole-store hazard-augmented effect set, i.e.
     // exactly what `derive` computes.
     public IReadOnlyList<DerivedEffect> HazardEffects => _hazardEffects.Value;
+
+    // Per-artifact FIRST-ACCESS build cost for this generation, in construction-independent access order.
+    // The program's headline latency ("edit → facts servable in ~0.75s") measures FACTS; a QUERY additionally
+    // needs this derived layer, and nothing measured what that costs until it was instrumented here. Surfaced
+    // on the live answer itself (WatchHost.AnswerQueryAsync) rather than via Console, which TUnit swallows.
+    public IReadOnlyList<(string Artifact, TimeSpan Elapsed)> BuildTimes
+    {
+        get
+        {
+            lock (_buildTimeLock)
+            {
+                return _buildTimes.ToArray();
+            }
+        }
+    }
+
+    // "traversalGraph 412.3ms | epData 8.1ms | effects 263.0ms" — the one-line rendering of BuildTimes.
+    // MILLISECONDS, not seconds: on a playground-scale tree the whole derived layer lands in single-digit
+    // milliseconds, and a seconds-with-3-decimals rendering reported every artifact as "0.000s" — an
+    // instrument whose resolution hides the thing it measures is not an instrument.
+    // Empty when nothing was built this generation (every artifact already memoized).
+    public string BuildTimeLine() =>
+        string.Join(" | ", BuildTimes.Select(t => $"{t.Artifact} {t.Elapsed.TotalMilliseconds.ToString("F1", CultureInfo.InvariantCulture)}ms"));
+
+    // The traversal-graph projection, factored out so an uncached caller (a `--raw`-style rule variant that
+    // this generation's memo does not cover) can build one without disturbing the memo. Mirrors
+    // LoadEffectReachInputsAsync's shaping pass — LoadFactGraphAsync's twin (FactGraphProjection.FromAnalysis)
+    // followed by the SINGLE FactPathFinder.ShapeGraph call, with the same monomorphization signatures.
+    public static FactGraphData TraversalGraphOf(AnalysisResult facts, RuleSet rules) =>
+        FactPathFinder.ShapeGraph(
+            graph: FactGraphProjection.FromAnalysis(facts, handoffRules: rules.Handoff, redirectRules: rules.Redirect),
+            factoryRules: rules.Factory,
+            cutRules: rules.Cut,
+            contextRules: rules.Context,
+            monomorphizeSignatures: LiveReads.MonomorphizationSignatures(facts)
+        );
+
+    // A Lazy whose factory ALSO records its wall time under `artifact`. Recorded inside the factory, so it is
+    // the FIRST-access cost and is recorded exactly once (Lazy's default ExecutionAndPublication mode).
+    // Caveat on reading the rows: a composite's row INCLUDES any dependency it happens to force. On the
+    // `reaches` path the rows are disjoint in practice (the command loads the reach inputs first, forcing
+    // traversalGraph/invocations/epData/throwRefs, and only then derives effects), but a caller that touches
+    // `effects` first would see one fat row instead of five — read them in order, not as guaranteed slices.
+    private Lazy<T> Memo<T>(string artifact, Func<T> build) =>
+        new Lazy<T>(() =>
+        {
+            var watch = Stopwatch.StartNew();
+            var value = build();
+            watch.Stop();
+            lock (_buildTimeLock)
+            {
+                _buildTimes.Add((artifact, watch.Elapsed));
+            }
+
+            return value;
+        });
 
     // The in-memory equivalent of EffectDerivation.DeriveHazardEffectsAsync: the SAME EffectDerivation.
     // DeriveEffects call with the SAME arguments, each feed sourced from LiveReads instead of Reads. Kept
