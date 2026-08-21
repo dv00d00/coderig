@@ -294,6 +294,87 @@ GENERATED file under `obj/`, because the heuristic picks the project with the fe
 whole-solution timing, wrong for per-file measurement. Fixed: `obj/`/`bin/` paths are now excluded from the
 auto-pick.
 
+## RESULT 2026-08-21 — the resident live index WORKS. Measured on MedDBase (226 projects).
+
+```
+edit -> servable        0.75s   (0.02s re-extract + 0.74s merge)
+cold index            258.4s
+whole-solution warm   201.9s
+cascade reconcile     150.3s   (was 476s — batched, now BETTER than a cold index)
+
+facts vs cold, compared as SETS:
+  type relations   missing=0  extra=0
+  dispatch         missing=0  extra=0
+  DI registrations missing=0  extra=0   (204, on the store that HAS xml descriptors)
+
+working set   10.79 GB at boot -> 19.11 GB after one edit + full reconcile
+```
+
+**~340x faster than a cold index for a single-file edit, with facts exactly equal to a cold index.** That is
+the program's thesis, measured rather than argued.
+
+`rig watch <solution>` is the host. Real output:
+
+```
+watch: cold boot in 1.3s — 7 project(s), workspace retained
+live: facts current as of 0 file(s) applied | all projects reconciled
+watch: watching for .cs saves (obj/ and bin/ excluded) — press Ctrl+C to stop.
+live: facts current as of 1 file(s) applied | 3 project(s) unreconciled | last edit 0.07s
+live: facts current as of 1 file(s) applied | all projects reconciled | last edit 0.07s | reconcile 0.01s
+```
+
+### What shipped
+
+| slice | state |
+|---|---|
+| 1 — `RigWorkspace` + incremental text-change path | DONE (`14af4594`) |
+| 2 — stream extraction, release `SemanticModel`s per project | DONE (`7721b37a`) — live set -1.26 GB, working set unmoved |
+| 3 — `ResidentIndex` converging overlay + pluggable dirty-set policy | DONE (`7e6531de`, `ff936c3a`) |
+| 5 — staleness disclosure | DONE, as the `rig watch` status line |
+| host + batched reconcile | DONE (`034b3d9d`) |
+| 4 — surface-hash gate | NOT BUILT — designed, `docs/spikes/slice4-surface-hash-gate-design.md` |
+
+### THREE MEASUREMENT LESSONS — these cost more time than any code defect
+
+Every wrong conclusion in this program came from the instrument, never the code. Recorded so the next person
+does not repeat them:
+
+1. **Console output is not a measurement.** TUnit does not surface `Console.WriteLine` in its default output
+   mode; an 8-minute MedDBase run produced a duration and zero numbers. Measurements write to a FILE, appended
+   as they go.
+2. **Whole-solution re-extract is not a proxy for a per-file edit.** It holds two complete fact sets alive
+   (~2.4M refs each) so its memory growth is a harness artefact, and it re-binds all 226 compilations so its
+   time is an upper bound nothing in the resident path pays. Arms 1-2 measured 1.3x and looked like failure;
+   arm 3 measured the real path at 340x.
+3. **Counts are not sets.** The cold store holds 30,069 dispatch rows but only 22,876 DISTINCT ones — the same
+   edge is emitted from several files (partial types, shared bases). Comparing counts produced a confident
+   "24.5% of dispatch facts are LOST" that was pure duplication. Only a symmetric difference distinguishes a
+   real loss from base-internal duplication. The harness now compares sets permanently.
+
+A fourth, about GATES rather than instruments: **`playgrounds/DeepChain` was repeatedly too small to host the
+defect class under test.** It had 2 dispatch facts and 2 type relations, so the equivalence gate could not see
+a dispatch bug; it has no XML DI descriptors, so no gate could see a DI regression from the `XmlDiMiner`
+bypass. Both were caught only by measuring MedDBase. DeepChain has since been given cross-project impls, an
+override chain, an inherited implementation and delegate binds (oracle 34 -> 51 symbols, 2 -> 8 dispatch).
+
+### Open, ranked
+
+1. **Query serving from the live index.** `rig watch` maintains correct live facts that nothing can yet query.
+   This is the gap between "the loop works" and "the tool is useful", and it is the next slice.
+2. **Memory growth.** 10.79 -> 19.11 GB across one edit + reconcile. Slice 2 released the live set but working
+   set does not return (ServerGC/DATAS keeps segments). A long session needs either a GC policy decision or a
+   periodic re-boot. Unresolved and the biggest risk to a genuinely long-lived process.
+3. **Slice 4 (surface-hash gate).** Reconcile is 150.3s; **59.4% of real edits are body-only** and would need
+   NO cascade at all under the gate. This is where the remaining order of magnitude is.
+4. **Emitter `FilePath` on `DispatchFact`/`TypeRelationFact`** — kills the deliberate ghost window in the merge.
+   Write-side schema change, needs a re-index.
+5. **New files** are not in the retained workspace (no add-document path); `rig watch` discloses rather than
+   silently skipping. **Generated documents** are not re-extracted per file (the generator pass is skipped), so
+   generator-emitted facts stay at base until a cold boot.
+6. **23.9% of `dispatch_edges` rows in the cold store are duplicates** (7,193 of 30,069), plus 7.8% of type
+   relations. Pure storage waste, and it inflates every count read off those tables. Unrelated to this program
+   but found by it.
+
 ## PLAN — sequenced build slices
 
 Each slice is independently useful, has its own acceptance check, and does not depend on the next one landing.
