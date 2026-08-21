@@ -105,8 +105,9 @@ public static class LiveReads
     // Mirrors Reads.LoadFactEntryPointDataAsync: base/interface type-relation edges, ALL method symbols, type
     // symbols, and ctor refs (attribute applications included). The dedups are that loader's, key-for-key —
     // baseEdges/interfaceEdges by value (Distinct), methods and ctorRefs by (FilePath, Line), types by
-    // SymbolId — as is the client-side `Modifiers.Split(' ').Contains("abstract")` that gives TypeSymbol its
-    // IsAbstract (String.Split has no SQL translation, so it runs in memory on BOTH sides).
+    // SymbolId. The MethodSymbol/TypeSymbol record mappings are the SHARED SymbolFactProjections (so is the
+    // `Modifiers.Split(' ').Contains("abstract")` that gives TypeSymbol its IsAbstract — String.Split has no
+    // SQL translation, so it runs in memory on BOTH sides, now through one function).
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
     public static FactEntryPointDeriver.FactEntryPointData FactEntryPointData(AnalysisResult result)
     {
@@ -128,15 +129,7 @@ public static class LiveReads
 
         var methods = symbols
             .Where(s => s.Kind == SymbolKinds.Method)
-            .Select(s => new MethodSymbol(
-                SymbolId: s.SymbolId,
-                Name: s.Name,
-                ContainingSymbolId: s.ContainingSymbolId,
-                Signature: s.Signature,
-                FilePath: s.FilePath,
-                Line: s.Line,
-                IsOverride: s.IsOverride
-            ))
+            .Select(SymbolFactProjections.ToMethodSymbol)
             .GroupBy(m => (m.FilePath, m.Line))
             .Select(g => g.First())
             .ToList();
@@ -145,13 +138,7 @@ public static class LiveReads
             .Where(s => s.Kind == SymbolKinds.Type)
             .GroupBy(s => s.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
-            .Select(t => new TypeSymbol(
-                SymbolId: t.SymbolId,
-                Namespace: t.Namespace,
-                FilePath: t.FilePath,
-                Line: t.Line,
-                IsAbstract: t.Modifiers.Split(' ').Contains("abstract")
-            ))
+            .Select(SymbolFactProjections.ToTypeSymbol)
             .ToList();
 
         var ctorRefs = references
@@ -201,7 +188,8 @@ public static class LiveReads
     // The `readonly` asymmetry is the loader's: only the READ arm drops readonly targets (an immutable cell
     // can't be a TOCTOU "check"; ~99k static-readonly logger reads of noise on the real store) — the WRITE arm
     // keeps them. The join is written as a real LINQ Join, not a HashSet lookup, so a duplicated symbol fact
-    // row fans out exactly as the SQL inner join does before the dedup collapses it.
+    // row fans out exactly as the SQL inner join does before the dedup collapses it. The row->record mapping
+    // is the SHARED FactFieldAccessProjection, the same one both store loaders map through.
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
     public static (IReadOnlyList<FactFieldAccess> Writes, IReadOnlyList<FactFieldAccess> Reads) StaticFieldAccessRefsByKind(AnalysisResult result)
     {
@@ -213,33 +201,17 @@ public static class LiveReads
                 staticSymbols,
                 r => r.TargetSymbolId,
                 s => s.SymbolId,
-                (r, s) =>
-                    new
-                    {
-                        Access = new FactFieldAccess(
-                            Target: r.TargetSymbolId,
-                            Enclosing: r.EnclosingSymbolId,
-                            FilePath: r.FilePath,
-                            Line: r.Line,
-                            LoopKind: r.EnclosingLoopKind,
-                            LoopDetail: r.EnclosingLoopDetail,
-                            EnclosingInvocations: r.EnclosingInvocations,
-                            CatchTypes: r.EnclosingCatchTypes,
-                            EnclosingScopes: r.EnclosingScopes
-                        ),
-                        r.RefKind,
-                        IsReadonly = s.Modifiers.Contains("readonly", StringComparison.Ordinal),
-                    }
+                (r, s) => new { Row = r, IsReadonly = s.Modifiers.Contains("readonly", StringComparison.Ordinal) }
             )
             .ToList();
 
-        var writes = rows.Where(x => string.Equals(x.RefKind, RefKinds.Write, StringComparison.Ordinal))
-            .Select(x => x.Access)
+        var writes = rows.Where(x => string.Equals(x.Row.RefKind, RefKinds.Write, StringComparison.Ordinal))
+            .Select(x => FactFieldAccessProjection.Project(x.Row))
             .GroupBy(r => (r.FilePath, r.Line, r.Target))
             .Select(g => g.First())
             .ToList();
-        var reads = rows.Where(x => string.Equals(x.RefKind, RefKinds.Read, StringComparison.Ordinal) && !x.IsReadonly)
-            .Select(x => x.Access)
+        var reads = rows.Where(x => string.Equals(x.Row.RefKind, RefKinds.Read, StringComparison.Ordinal) && !x.IsReadonly)
+            .Select(x => FactFieldAccessProjection.Project(x.Row))
             .GroupBy(r => (r.FilePath, r.Line, r.Target))
             .Select(g => g.First())
             .ToList();
@@ -282,15 +254,7 @@ public static class LiveReads
             .Where(s => s.Kind == SymbolKinds.Method)
             .GroupBy(s => s.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
-            .Select(s => new DeadCodeFinder.MethodMeta(
-                SymbolId: s.SymbolId,
-                Name: s.Name,
-                Modifiers: s.Modifiers,
-                FilePath: s.FilePath,
-                Line: s.Line,
-                IsOverride: s.IsOverride,
-                IsGenerated: IsGeneratedPath(s.FilePath)
-            ))
+            .Select(SymbolFactProjections.ToMethodMeta)
             .ToList();
 
     // Mirrors Reads.LoadShapedGraphAsync: the FULLY shaped graph — handoff-classified load → ShapeGraph
@@ -316,23 +280,5 @@ public static class LiveReads
         );
         graph = FactPathFinder.AddDeliveryEdges(graph: graph, sites: DeliverySites(result, rules.Delivery));
         return FactPathFinder.MarkEventSubscriptionHandoffs(graph: graph, eventSites: EventSubscriptionSites(result));
-    }
-
-    // The generated-file heuristic Reads.LoadDeadCodeMethodsAsync applies (its IsGeneratedPath is private to
-    // the storage layer, and Rig.Domain cannot reference Rig.Storage). Duplicated verbatim; the parity test
-    // over DeadCodeMethods is what catches a drift.
-    private static bool IsGeneratedPath(string filePath)
-    {
-        if (string.IsNullOrEmpty(filePath))
-        {
-            return false;
-        }
-
-        var p = filePath.Replace(oldChar: '\\', newChar: '/');
-        return p.Contains("<generated>", StringComparison.Ordinal)
-            || p.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
-            || p.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase)
-            || p.EndsWith(".designer.cs", StringComparison.OrdinalIgnoreCase)
-            || p.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase);
     }
 }

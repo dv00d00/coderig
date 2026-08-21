@@ -325,41 +325,44 @@ public static class Reads
         // that add width, not reach. TargetInSource filters them out of the graph; effects on those
         // calls still surface because the effect deriver keys them to their first-party ENCLOSING
         // method (see LoadInvocationRefsAsync, which intentionally does NOT filter).
-        var callRows = await context
+        //
+        // The row->record mapping is CallEdgeProjection's (via ReferenceFactRows.CallEdgeRow), shared with the
+        // in-memory twin FactGraphProjection.FromAnalysis — the two used to keep private copies of the
+        // 16-field construction with only a pair of comments asserting they stayed identical.
+        //
+        // SHAPE (this is the hot path — ~800k rows on the real store, on every cold one-shot query): the rows
+        // are STREAMED, so the per-row canonical ReferenceFact is mapped and dropped instead of a whole second
+        // list of them existing, and the dedup happens ON INSERT rather than as a trailing
+        // `.Distinct().ToList()`. Insert-dedup is exactly equivalent — Distinct yields first occurrences in
+        // order, which is what appending only on a successful Add does — and it hashes each edge once either
+        // way, but it never stores the duplicates and never builds the second list. Measured on the MedDBase
+        // store: graph load unchanged vs the pre-consolidation shape (~14.2s), which is the point.
+        var seenEdges = new HashSet<CallEdge>();
+        var callEdges = new List<CallEdge>();
+        var callQuery = context
             .ReferenceFacts.AsNoTracking()
             .Where(r =>
                 r.EnclosingSymbolId != null
                 && r.TargetInSource
                 && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
             )
-            .Select(r => new CallEdge(
-                Caller: r.EnclosingSymbolId!,
-                Callee: r.TargetSymbolId,
-                Kind: r.RefKind,
-                FilePath: r.FilePath,
-                Line: r.Line,
-                LoopKind: r.EnclosingLoopKind,
-                LoopDetail: r.EnclosingLoopDetail,
-                ReceiverType: r.ReceiverType,
-                HandoffDispatcher: null,
-                TypeArguments: r.TypeArguments,
-                DelegateConsumer: r.DelegateConsumer,
-                DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
-                MethodTypeArgBinding: r.MethodTypeArgBinding,
-                DeliveryPrecision: null,
-                NonVirtual: r.NonVirtual,
-                EnclosingGuards: r.EnclosingGuards
-            ))
-            .ToListAsync(cancellationToken);
-
-        var callEdges = callRows.Distinct().ToList();
+            .Select(ReferenceFactRows.CallEdgeRow);
+        await foreach (var row in callQuery.AsAsyncEnumerable().WithCancellation(cancellationToken))
+        {
+            var edge = CallEdgeProjection.Project(row);
+            if (seenEdges.Add(edge))
+            {
+                callEdges.Add(edge);
+            }
+        }
 
         // Redirect (external-virtual-override-orphan fix, docs/backlog.md): a call binding to an EXTERNAL
         // convenience overload (TargetInSource=0, so dropped by the WHERE above) is rewritten to the virtual
         // hatch it trampolines into INSIDE the external DLL and KEPT, so receiver-narrowed dispatch resolves
         // it to the first-party override. RedirectClassifier can't translate to SQL, so fetch the (few)
-        // external rows each rule targets — by its stripped-method prefix — and rewrite client-side. Mirrors
-        // FactGraphProjection.FromAnalysis's in-memory redirect so the two projections stay field-identical.
+        // external rows each rule targets — by its stripped-method prefix — and rewrite client-side (the
+        // rule's RedirectTo is passed to CallEdgeProjection as the edge's callee). Same shared mapping as the
+        // main scan, so the redirect edges cannot diverge from the ordinary ones either.
         foreach (var rule in redirectRules ?? [])
         {
             var openParen = rule.Method + "(";
@@ -372,28 +375,19 @@ public static class Reads
                     && r.TargetSymbolId != rule.RedirectTo
                     && (r.TargetSymbolId == rule.Method || r.TargetSymbolId.StartsWith(openParen))
                 )
-                .Select(r => new CallEdge(
-                    Caller: r.EnclosingSymbolId!,
-                    Callee: rule.RedirectTo,
-                    Kind: r.RefKind,
-                    FilePath: r.FilePath,
-                    Line: r.Line,
-                    LoopKind: r.EnclosingLoopKind,
-                    LoopDetail: r.EnclosingLoopDetail,
-                    ReceiverType: r.ReceiverType,
-                    HandoffDispatcher: null,
-                    TypeArguments: r.TypeArguments,
-                    DelegateConsumer: r.DelegateConsumer,
-                    DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
-                    MethodTypeArgBinding: r.MethodTypeArgBinding,
-                    DeliveryPrecision: null,
-                    NonVirtual: r.NonVirtual,
-                    EnclosingGuards: r.EnclosingGuards
-                ))
+                .Select(ReferenceFactRows.CallEdgeRow)
                 .ToListAsync(cancellationToken);
-            callEdges.AddRange(redirectRows);
+            // Same insert-dedup as the main scan (`Distinct()` over the concatenation yields exactly this:
+            // the redirect edges appended in order, minus any already seen).
+            foreach (var row in redirectRows)
+            {
+                var edge = CallEdgeProjection.Project(row, redirectTo: rule.RedirectTo);
+                if (seenEdges.Add(edge))
+                {
+                    callEdges.Add(edge);
+                }
+            }
         }
-        callEdges = callEdges.Distinct().ToList();
 
         // Project straight to the domain record in the SELECT (EF builds it in the materializer) — no
         // anonymous intermediate, no second client mapping pass. (These are PROJECTIONS, so AsNoTracking is
@@ -422,27 +416,29 @@ public static class Reads
             .Distinct()
             .ToList();
 
-        var methodRows = await context
-            .SymbolFacts.AsNoTracking()
-            .Where(s => s.Kind == SymbolKinds.Method)
-            .Select(s => new MethodRef(
-                SymbolId: s.SymbolId,
-                Name: s.Name,
-                ContainingTypeId: s.ContainingSymbolId,
-                IsOverride: s.IsOverride,
-                FilePath: s.FilePath,
-                Line: s.Line
-            ))
-            .ToListAsync(cancellationToken);
-
-        var methods = methodRows.GroupBy(m => m.SymbolId, StringComparer.Ordinal).Select(g => g.First()).ToList();
+        // Row->record mapping shared with the in-memory twin and the BOUNDED raw-ADO loader
+        // (SqlReachability.LoadReachInputsAsync) — see SymbolFactProjections. Same shape as the call scan and
+        // for the same reason (~217k rows): streamed, first-wins dedup on insert. Appending only on a
+        // successful Add is exactly `GroupBy(SymbolId).Select(g => g.First())` — first occurrence per id, in
+        // order — without the intermediate list of duplicates or the grouping.
+        var seenMethods = new HashSet<string>(StringComparer.Ordinal);
+        var methods = new List<MethodRef>();
+        var methodQuery = context.SymbolFacts.AsNoTracking().Where(s => s.Kind == SymbolKinds.Method).Select(SymbolFactRows.MethodRefRow);
+        await foreach (var row in methodQuery.AsAsyncEnumerable().WithCancellation(cancellationToken))
+        {
+            if (seenMethods.Add(row.SymbolId))
+            {
+                methods.Add(SymbolFactProjections.ToMethodRef(row));
+            }
+        }
 
         var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
         // #2: hand the (now-open) EF connection to the dispatch-facts loader so it neither re-resolves it nor
         // re-applies the read pragmas — the single sqlite_master existence probe is the only irreducible cost.
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         var minedDispatch = await LoadDispatchFactsAsync(context, connection, cancellationToken);
-        // Mirrors FactGraphProjection.FromAnalysis so the two projections stay in parity.
+        // The same closing join FactGraphProjection.FromAnalysis applies — the two now share every record
+        // mapping in between (CallEdgeProjection / SymbolFactProjections), so parity is by construction.
         return FactDelegateFieldJoin.Apply(new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch));
     }
 
@@ -632,7 +628,9 @@ public static class Reads
     // Loads first-party method metadata for the dead-code finder: every declared method symbol with
     // the accessibility/abstract/virtual modifiers, file/line, override flag, and a generated-file
     // heuristic. SymbolFacts are source-declared (first-party) by construction, so this is exactly the
-    // universe the unreachable-symbol finder ranges over. Deduped by SymbolId.
+    // universe the unreachable-symbol finder ranges over. Deduped by SymbolId. The row->record mapping —
+    // generated-file heuristic included — is SymbolFactProjections.ToMethodMeta, shared with the in-memory
+    // twin LiveReads.DeadCodeMethods (which used to carry a verbatim copy of the heuristic).
     public static async Task<IReadOnlyList<DeadCodeFinder.MethodMeta>> LoadDeadCodeMethodsAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
@@ -640,28 +638,12 @@ public static class Reads
     {
         var rows = await context
             .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method)
-            .Select(s => new
-            {
-                s.SymbolId,
-                s.Name,
-                s.Modifiers,
-                s.FilePath,
-                s.Line,
-                s.IsOverride,
-            })
+            .Select(SymbolFactRows.MethodMetaRow)
             .ToListAsync(cancellationToken);
 
         return rows.GroupBy(s => s.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
-            .Select(s => new DeadCodeFinder.MethodMeta(
-                SymbolId: s.SymbolId,
-                Name: s.Name,
-                Modifiers: s.Modifiers,
-                FilePath: s.FilePath,
-                Line: s.Line,
-                IsOverride: s.IsOverride,
-                IsGenerated: IsGeneratedPath(s.FilePath)
-            ))
+            .Select(SymbolFactProjections.ToMethodMeta)
             .ToList();
     }
 
@@ -728,24 +710,6 @@ public static class Reads
         }
 
         return hashes;
-    }
-
-    // Heuristic: a file is generated when it carries the conventional generated-source markers or the
-    // synthetic source-generator path the loader assigns. Such members are reached via the generator /
-    // build, not first-party calls, so the dead-code finder must not flag them.
-    private static bool IsGeneratedPath(string filePath)
-    {
-        if (string.IsNullOrEmpty(filePath))
-        {
-            return false;
-        }
-
-        var p = filePath.Replace(oldChar: '\\', newChar: '/');
-        return p.Contains("<generated>", StringComparison.Ordinal)
-            || p.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
-            || p.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase)
-            || p.EndsWith(".designer.cs", StringComparison.OrdinalIgnoreCase)
-            || p.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase);
     }
 
     // Derives handoff (delegate / method-group) entry points from facts — a category the structural
@@ -825,19 +789,16 @@ public static class Reads
 
         // All methods (not just .ctor): page EPs use the .ctor rows, class-inheritance EPs use the
         // named handler rows. IsOverride feeds RequireOverride rules (e.g. WorkflowControllerBase.OnSave).
-        // Projected straight to the MethodSymbol record server-side (every field is a direct column).
-        var methodRows = await context
-            .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method)
-            .Select(s => new MethodSymbol(
-                SymbolId: s.SymbolId,
-                Name: s.Name,
-                ContainingSymbolId: s.ContainingSymbolId,
-                Signature: s.Signature,
-                FilePath: s.FilePath,
-                Line: s.Line,
-                IsOverride: s.IsOverride
-            ))
-            .ToListAsync(cancellationToken);
+        // The row->record mapping is SymbolFactProjections.ToMethodSymbol, shared with the in-memory twin
+        // LiveReads.FactEntryPointData (every field is a direct column, so the row supply is a plain SELECT).
+        var methodRows = (
+            await context
+                .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method)
+                .Select(SymbolFactRows.MethodSymbolRow)
+                .ToListAsync(cancellationToken)
+        )
+            .Select(SymbolFactProjections.ToMethodSymbol)
+            .ToList();
         // The three dedups below (methods, types, ctorRefs) run CLIENT-side by design. Measured dup ratios
         // are tiny — methods by (file,line) is ~0.02% (43 of 217k rows, essentially defensive), types ~9%,
         // ctorRefs ~3.6% (see docs/query-strategy.md). A server-side GROUP BY would scan + sort the full
@@ -847,28 +808,16 @@ public static class Reads
 
         // Types can't materialize fully server-side: IsAbstract is Modifiers.Split(' ').Contains("abstract"),
         // and String.Split has no SQL translation. So project the raw Modifiers column, then build the
-        // TypeSymbol record client-side (after the dedup), where the Split runs in memory.
+        // TypeSymbol record client-side (after the dedup), where the Split runs in memory — that mapping is
+        // SymbolFactProjections.ToTypeSymbol, shared with the in-memory twin LiveReads.FactEntryPointData.
         var typeRows = await context
             .SymbolFacts.Where(s => s.Kind == SymbolKinds.Type)
-            .Select(s => new
-            {
-                s.SymbolId,
-                s.Namespace,
-                s.FilePath,
-                s.Line,
-                s.Modifiers,
-            })
+            .Select(SymbolFactRows.TypeSymbolRow)
             .ToListAsync(cancellationToken);
         var types = typeRows
             .GroupBy(t => t.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
-            .Select(t => new TypeSymbol(
-                SymbolId: t.SymbolId,
-                Namespace: t.Namespace,
-                FilePath: t.FilePath,
-                Line: t.Line,
-                IsAbstract: t.Modifiers.Split(' ').Contains("abstract")
-            ))
+            .Select(SymbolFactProjections.ToTypeSymbol)
             .ToList();
 
         // ctor refs with RefKind="ctor" capture attribute applications (e.g. [ClientAction])
@@ -1075,43 +1024,25 @@ public static class Reads
         IReadOnlyList<FactFieldAccess> Reads
     )> LoadStaticFieldAccessRefsByKindAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
-        var rows = await context
-            .ReferenceFacts.AsNoTracking()
-            .Where(r => (r.RefKind == RefKinds.Write || r.RefKind == RefKinds.Read) && r.TargetInSource && r.EnclosingSymbolId != null)
-            .Join(
-                context.SymbolFacts.AsNoTracking().Where(s => s.Modifiers.Contains("static")),
-                r => r.TargetSymbolId,
-                s => s.SymbolId,
-                (r, s) =>
-                    new
-                    {
-                        Access = new FactFieldAccess(
-                            Target: r.TargetSymbolId,
-                            Enclosing: r.EnclosingSymbolId,
-                            FilePath: r.FilePath,
-                            Line: r.Line,
-                            LoopKind: r.EnclosingLoopKind,
-                            LoopDetail: r.EnclosingLoopDetail,
-                            EnclosingInvocations: r.EnclosingInvocations,
-                            CatchTypes: r.EnclosingCatchTypes,
-                            EnclosingScopes: r.EnclosingScopes
-                        ),
-                        r.RefKind,
-                        IsReadonly = s.Modifiers.Contains("readonly"),
-                    }
-            )
-            .ToListAsync(cancellationToken);
+        var rows = await StaticFieldAccessRowsAsync(
+            context: context,
+            refs: context
+                .ReferenceFacts.AsNoTracking()
+                .Where(r => (r.RefKind == RefKinds.Write || r.RefKind == RefKinds.Read) && r.TargetInSource && r.EnclosingSymbolId != null),
+            excludeReadonly: false,
+            cancellationToken: cancellationToken
+        );
 
         // Partition by kind, then dedup each partition by (FilePath, Line, Target) — mirroring each single-kind
         // loader's tail. The READ arm drops readonly targets (the `excludeReadonly: true` the read loader sets);
         // the WRITE arm keeps them.
-        var writes = rows.Where(x => string.Equals(x.RefKind, RefKinds.Write, StringComparison.Ordinal))
-            .Select(x => x.Access)
+        var writes = rows.Where(x => string.Equals(x.Row.RefKind, RefKinds.Write, StringComparison.Ordinal))
+            .Select(x => FactFieldAccessProjection.Project(x.Row))
             .GroupBy(r => (r.FilePath, r.Line, r.Target))
             .Select(g => g.First())
             .ToList();
-        var reads = rows.Where(x => string.Equals(x.RefKind, RefKinds.Read, StringComparison.Ordinal) && !x.IsReadonly)
-            .Select(x => x.Access)
+        var reads = rows.Where(x => string.Equals(x.Row.RefKind, RefKinds.Read, StringComparison.Ordinal) && !x.IsReadonly)
+            .Select(x => FactFieldAccessProjection.Project(x.Row))
             .GroupBy(r => (r.FilePath, r.Line, r.Target))
             .Select(g => g.First())
             .ToList();
@@ -1149,29 +1080,44 @@ public static class Reads
             refs = refs.Where(r => enclosingScope.Contains(r.EnclosingSymbolId!));
         }
 
-        var rows = await refs.Join(
-                context
+        var rows = await StaticFieldAccessRowsAsync(
+            context: context,
+            refs: refs,
+            excludeReadonly: excludeReadonly,
+            cancellationToken: cancellationToken
+        );
+
+        return rows.Select(x => FactFieldAccessProjection.Project(x.Row))
+            .GroupBy(r => (r.FilePath, r.Line, r.Target))
+            .Select(g => g.First())
+            .ToList();
+    }
+
+    // The ONE store-side row supply for BOTH static-field-access loaders (the combined two-arm one and the
+    // single-kind, enclosing-scope-bounded one): the join to symbol_facts on a STATIC target — the fact
+    // layer's only source of the accessed slot's modifiers — projected to the canonical row record the shared
+    // FactFieldAccessProjection maps (ReferenceFactRows.FieldAccessJoin owns that one column list). The ref
+    // FILTERS stay with the callers (kind, first-party, enclosing scope) and are passed in as `refs`.
+    //
+    // `excludeReadonly` pushes the readonly drop into SQL, for the single-kind READ arm that wants it (an
+    // immutable cell can't be a TOCTOU "check"). The combined loader passes false and applies it client-side
+    // per partition instead, because its WRITE arm keeps readonly targets — hence IsReadonly on every row.
+    // The join is a real LINQ Join, not a semi-join: a duplicated symbol_facts row must fan out exactly as
+    // the SQL inner join does before the per-loader dedup collapses it (the in-memory twin mirrors that).
+    private static async Task<List<ReferenceFactRows.FieldAccessJoinRow>> StaticFieldAccessRowsAsync(
+        RigDbContext context,
+        IQueryable<ReferenceFactEntity> refs,
+        bool excludeReadonly,
+        CancellationToken cancellationToken
+    ) =>
+        await ReferenceFactRows
+            .FieldAccessJoin(
+                refs: refs,
+                staticSymbols: context
                     .SymbolFacts.AsNoTracking()
-                    .Where(s => s.Modifiers.Contains("static") && (!excludeReadonly || !s.Modifiers.Contains("readonly"))),
-                r => r.TargetSymbolId,
-                s => s.SymbolId,
-                (r, s) =>
-                    new FactFieldAccess(
-                        Target: r.TargetSymbolId,
-                        Enclosing: r.EnclosingSymbolId,
-                        FilePath: r.FilePath,
-                        Line: r.Line,
-                        LoopKind: r.EnclosingLoopKind,
-                        LoopDetail: r.EnclosingLoopDetail,
-                        EnclosingInvocations: r.EnclosingInvocations,
-                        CatchTypes: r.EnclosingCatchTypes,
-                        EnclosingScopes: r.EnclosingScopes
-                    )
+                    .Where(s => s.Modifiers.Contains("static") && (!excludeReadonly || !s.Modifiers.Contains("readonly")))
             )
             .ToListAsync(cancellationToken);
-
-        return rows.GroupBy(r => (r.FilePath, r.Line, r.Target)).Select(g => g.First()).ToList();
-    }
 
     // The set of STATIC field DocIDs (`F:Ns.Type.field`) declared first-party — the universe the
     // static_init_capture detector joins an effect's EnclosingSymbolId against to decide whether a config

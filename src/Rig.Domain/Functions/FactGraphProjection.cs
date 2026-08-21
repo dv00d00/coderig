@@ -7,11 +7,14 @@ namespace Rig.Domain.Functions;
 // SQLite. `rig index` uses this so the graph phase materializes call_edges from facts already in memory
 // instead of re-reading the whole fact store off disk (the second 3.8GB cold read).
 //
-// This projection MUST stay field-for-field identical to Reads.LoadFactGraphAsync — same first-party
-// call filter, same edge fields (incl. ReceiverType/TypeArguments), same method dedup, same handoff
-// classification — or the persisted call_edges would diverge from what the in-memory oracle computes
-// over a re-read store (the effect-path divergence). FactGraphProjectionParityTests asserts the two
-// agree on a real solution; keep them in lockstep.
+// This projection must produce the same graph as Reads.LoadFactGraphAsync — same first-party call filter,
+// same edge fields, same method dedup, same handoff classification — or the persisted call_edges would
+// diverge from what the in-memory oracle computes over a re-read store (the effect-path divergence). The
+// RECORD MAPPINGS are no longer duplicated to achieve that: both paths build their edges through
+// CallEdgeProjection and their methods through SymbolFactProjections, so no edge or method field can be
+// present on one side and missing on the other. What is still written twice — and so still needs to agree —
+// is the row FILTERING (the RefKind set + TargetInSource/redirect predicate) and the dedup keys.
+// FactGraphProjectionParityTests asserts the two agree on a real solution; keep them in lockstep.
 public static class FactGraphProjection
 {
     public static FactGraphData FromAnalysis(
@@ -32,23 +35,9 @@ public static class FactGraphProjection
             )
             .Select(r => (r, redirect: RedirectClassifier.Redirect(r.TargetSymbolId, redirectRules)))
             .Where(x => x.r.TargetInSource || x.redirect != null)
-            .Select(x => new CallEdge(
-                Caller: x.r.EnclosingSymbolId!,
-                Callee: x.redirect ?? x.r.TargetSymbolId,
-                Kind: x.r.RefKind,
-                FilePath: x.r.FilePath,
-                Line: x.r.Line,
-                LoopKind: x.r.EnclosingLoopKind,
-                LoopDetail: x.r.EnclosingLoopDetail,
-                ReceiverType: x.r.ReceiverType,
-                HandoffDispatcher: null,
-                TypeArguments: x.r.TypeArguments,
-                DelegateConsumer: x.r.DelegateConsumer,
-                DeclaringTypeArgBinding: x.r.DeclaringTypeArgBinding,
-                MethodTypeArgBinding: x.r.MethodTypeArgBinding,
-                NonVirtual: x.r.NonVirtual,
-                EnclosingGuards: x.r.EnclosingGuards
-            ))
+            // The one shared row->CallEdge mapping (see CallEdgeProjection) — also used by the store loader,
+            // so the two cannot differ by a field.
+            .Select(x => CallEdgeProjection.Project(x.r, redirectTo: x.redirect))
             .Distinct()
             .ToList();
         var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
@@ -67,14 +56,7 @@ public static class FactGraphProjection
 
         var methods = (result.Symbols ?? [])
             .Where(s => s.Kind == SymbolKinds.Method)
-            .Select(s => new MethodRef(
-                SymbolId: s.SymbolId,
-                Name: s.Name,
-                ContainingTypeId: s.ContainingSymbolId,
-                IsOverride: s.IsOverride,
-                FilePath: s.FilePath,
-                Line: s.Line
-            ))
+            .Select(SymbolFactProjections.ToMethodRef)
             .GroupBy(m => m.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
             .ToList();

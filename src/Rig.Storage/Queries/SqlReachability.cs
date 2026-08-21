@@ -465,24 +465,22 @@ public static class SqlReachability
             cancellationToken
         );
 
+        // Column list, ordinals and row->record mapping ALL come from SymbolFactProjections (see
+        // SymbolFactRows) — the same treatment the invocation loader above gets, and for the same reason: this
+        // is a hand-written ORDINAL reader over a column set two other paths (the EF whole-store loader and
+        // the in-memory twin) also project, so a field added on one side used to be able to miss here
+        // silently. First-wins per SymbolId, mirroring LoadFactGraphAsync's GroupBy(SymbolId).First().
         var methodById = new Dictionary<string, MethodRef>(StringComparer.Ordinal);
         await ReadAsync(
             connection,
-            "SELECT s.SymbolId, s.Name, s.ContainingSymbolId, s.IsOverride, s.FilePath, s.Line "
+            $"SELECT {SymbolFactRows.MethodRefSelectList("s")} "
                 + "FROM symbol_facts s JOIN reach_set r ON s.SymbolId = r.sym WHERE s.Kind = 'method';",
             reader =>
             {
-                var id = reader.GetString(0);
-                if (!methodById.ContainsKey(id))
+                var method = SymbolFactProjections.ToMethodRef(SymbolFactRows.ReadMethodRefRow(reader));
+                if (!methodById.ContainsKey(method.SymbolId))
                 {
-                    methodById[id] = new MethodRef(
-                        SymbolId: id,
-                        Name: reader.GetString(1),
-                        ContainingTypeId: reader.IsDBNull(2) ? null : reader.GetString(2),
-                        IsOverride: !reader.IsDBNull(3) && reader.GetInt32(3) != 0,
-                        FilePath: reader.IsDBNull(4) ? null : reader.GetString(4),
-                        Line: reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
-                    );
+                    methodById[method.SymbolId] = method;
                 }
             },
             cancellationToken

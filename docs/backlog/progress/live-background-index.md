@@ -694,3 +694,79 @@ In a resident world the bounded SQL path is **load-shedding for cold starts that
 state is one loader (`rig.db` → facts) plus one projection layer — which is what `LiveReads` already is. Not
 now: the one-shot CLI still pays cold start, so the bounded path still earns its keep. But the shape fix moves
 toward that end state instead of away from it, which is the tie-breaker for doing it before the migration.
+
+## CLEANUP DONE 2026-08-21 — the fact-mapping shape, and three findings it surfaced
+
+Single-sourcing generalized from `FactInvocation` to every remaining place where two paths built the same wide
+record from the same source. Four `// MUST stay field-for-field identical` comments are now shared code:
+
+| new projection | mapping | callers |
+|---|---|---|
+| `CallEdgeProjection` | `ReferenceFact -> CallEdge` (16 fields, + the redirect callee override) | `Reads.LoadFactGraphAsync` (main + redirect scans), `FactGraphProjection.FromAnalysis` |
+| `SymbolFactProjections` | `SymbolFact -> MethodRef / MethodSymbol / TypeSymbol / MethodMeta`, plus the one `IsGeneratedPath` | 7 call sites across `Reads`, `LiveReads`, `FactGraphProjection`, `SqlReachability` |
+| `FactFieldAccessProjection` | `ReferenceFact -> FactFieldAccess` (9 fields incl. `EnclosingScopes`) | both `Reads` field-access loaders + `LiveReads` |
+
+No SELECT widened (each row expression fills only what its mapping reads and passes constants for the rest).
+
+**A THIRD copy of `MethodRef` turned up that I had not counted** — `SqlReachability.LoadReachInputsAsync` builds
+it from hand-written ADO ordinals over the same 6 `symbol_facts` columns. Exactly the shape that drifted for
+`FactInvocation`, and it had no gate. Now enum-driven like the rest, with
+`Bounded_method_refs_are_field_equal_to_the_whole_store_loader` fencing it.
+
+`SymbolRef` deliberately NOT shared, and the reasoning is worth keeping: 8 sites, none wider than 5 columns,
+against a shared row record with 27 ctor params. The decisive argument is semantic rather than performance —
+`EnclosingGuards` is deliberately ABSENT on the ctor/field-access shapes and present on throw/library-call, so
+one shared mapping would either start populating it where it was null (a real behaviour change in EP data and
+impact leaves) or take a flag that re-encodes the decision each SELECT already makes. Both pairs are already
+fenced by reflection-based field-equality tests.
+
+### The gap the parity gates structurally cannot cover
+
+Three parity gates compare two PATHS — so none of them can catch a field dropped from the ONE shared projection
+they both now call. `FactProjectionSharingTests` closes that: a fully-populated source row in, then a reflection
+sweep asserting no target property came back at its default. Mutation-checked (drop `EnclosingGuards` from
+`CallEdgeProjection` -> the sweep fails naming the field). Consolidation moves the risk; it does not delete it.
+
+### Perf: measured, and the first attempt really was a regression
+
+`LoadFactGraphAsync` handles ~2.4M rows on the cold-start path, so the per-row intermediate this pattern
+introduces is a real cost. First shape (stream + trailing `.Distinct().ToList()`) cost **+0.5s / ~3.5%** —
+outside a ±0.1s baseline spread. Shipped shape pays for the intermediate by deleting the trailing dedup pass:
+dedup on insert (`HashSet.Add` guard then append) instead of `Distinct`/`GroupBy…First`, which is exactly
+equivalent (both yield first occurrences in order) but never stores the duplicates and never builds the second
+list.
+
+Verified by me, INTERLEAVED A/B on the MedDBase store: base 14.4 / 14.5 / 14.6 / 14.7s vs after
+14.3 / 14.5 / 14.4 / 14.5s — no regression.
+
+**A measurement lesson to add to the three already recorded: sequential A-then-B is not an A/B.** Running all
+the baseline samples and then all the after samples gave 14.4-14.5s vs **17.0-23.5s** and looked like a
+catastrophic regression; the same after-binary had measured 14.4s ten minutes earlier. It was memory pressure
+from a build plus back-to-back 2.4GB processes. Interleave, or do not compare.
+
+### Behaviour: byte-identical
+
+MedDBase `derive --format tsv --intrinsic`: **377,583 lines identical** before/after, both forced cache-cold via
+distinct inert overlay rule files (`RulesFingerprint` hashes path AND content, so each run computes live).
+`dispatch-fans --format tsv` identical by sha256. Seven playground outputs identical. No `*Schema` bump needed —
+nothing derived moved.
+
+### Three findings filed
+
+1. **[A rules edit does not reach the baked graph](../todo/baked-call-edges-ignore-rules-edits.md)** — HIGH, and
+   proven by experiment: after a `handoffDispatchers` edit with no re-index, `derive` honours the new rule and
+   `reaches`/`tree`/`path` serve the classification baked into `call_edges` at index time. Worse, ONE `derive`
+   run can mix both, because its handoff-EP listing reads the baked table while hazards use the re-classified
+   graph. The rules axis of the documented three-axis cache hedge does not reach `call_edges`, because that
+   table is index output rather than a cache — but it behaves like one.
+2. **[Redirect rules applied asymmetrically](../todo/redirect-rules-applied-asymmetrically-across-graph-paths.md)**
+   — LOW/latent: the in-memory builder redirects EVERY ref, the store loader only `!TargetInSource` ones. Today's
+   rules only name external overloads so the sets coincide. This is the FILTERING half — now the only
+   hand-maintained invariant left between the two graph paths, and worth its own audit.
+3. Two dead-ish loaders (`LoadStaticFieldWriteRefsAsync`/`LoadStaticFieldReadRefsAsync` have no production
+   callers; their comments still describe a `tree --hazards` path that now serves the cached whole-store set).
+
+Findings 1 and 2 are both "two surfaces, one store, different answers" — the same family as the
+`EnclosingScopes` bug and the `/api/meta` one. That is three in two days, all from one cause: a derivation input
+that one path folds in and another does not. The pattern is worth naming as a standing review question rather
+than being rediscovered a fourth time.
