@@ -826,3 +826,67 @@ actually bought** — more than the reading ergonomics that motivated it.
 Also strengthened in passing: `ReachInputProjectionTests.Rendered<T>` now recurses into group structs instead of
 leaning on their generated `ToString`, which folds `null` and `""` into the same rendering — the exact
 distinction that gate exists to see. A grouping change would otherwise have quietly weakened it.
+
+## API COMPAT slice 1 2026-08-21 — `path` + `callers` live, derived layer warmed
+
+`IQueryFactSource` 6 -> 10 members (`LoadShapedTraversalGraphAsync`, `SymbolExistsAnywhereAsync`,
+`LoadEntryPointDataAsync`, `DeriveEntryPointsAsync`). Store path a pure move; `rig watch --query` now takes
+`reaches`, `path` and `callers`.
+
+**`callers` is byte-identical to the store on stdout AND stderr, all 10 patterns across two playgrounds —
+including the REVERSE direction, which nothing had exercised.** The whole in-memory graph narrows to the same
+answer as the SQL-bounded reverse closure. `callers --entrypoints` matches too, which was the riskiest new member
+(live handoff-EP derivation vs the store's materialized `call_edges` arm).
+
+`path` diverges on exactly two lines, and the divergence is a STORE bug, proven by the store disagreeing with
+itself across its own two loader arms — filed as
+[path-disclosures-computed-off-the-loaded-subgraph](../todo/path-disclosures-computed-off-the-loaded-subgraph.md).
+
+### Three capabilities deliberately NOT added to the interface
+
+The seam's value is that nothing on it throws. FTS symbol search, the materialized `entry_point_sites` table and
+the `cache.db` query cache are store-only; the live path mirrors the **LIKE arm** of symbol search in memory
+(the arm a `--no-graph` store already uses), derives EP sites per generation, and replaces the query cache with
+per-generation memoization. A member whose live implementation throws would have been the wrong answer.
+
+### Warming works: the first query after an edit no longer pays the derived layer
+
+Started after the eager apply, cancelled by the next edit — the reconcile task's pattern. One deliberate
+difference: the worker AWAITS a cancelled reconcile (single-writer `ResidentIndex` requires it) but does NOT
+await a cancelled warm, because warming only forces `Lazy` fields on an immutable value — awaiting it would be
+exactly the trade warming must lose. Only the query artifacts are warmed; `shapedGraph`/`hazardEffects` are
+derive-shaped and no live query path reads them.
+
+MedDBase, 227 projects: boot-generation first query paid **2607ms** of derived layer (the old post-edit
+behaviour); after an edit the layer is warmed off-path in 2.52s and the post-edit query reports **no cost line at
+all**. coderig's own solution: 30.1ms -> 0.
+
+Two review fixes of my own on top: `eventSubscriptionSites` was the one artifact NOT memoized, so every
+non-`--raw` query re-projected it over the whole reference-fact set for the life of a generation — invisible
+because it was absent from `BuildTimes`. Now memoized and warmed (it shows as `eventSites 93.4ms` on MedDBase).
+And the usage banner had been contorted to keep a verbatim-pinned test assertion intact; reworded properly and
+updated the one string literal, which is a reviewer's call, not the builder's.
+
+## CRITICAL 2026-08-21 — the real-data run that matters most
+
+Booting `rig watch` on a fresh, **unrestored** MedDBase clone:
+
+```
+watch: cold boot in 73.2s — 227 project(s), workspace retained
+live: facts current as of 0 file(s) applied | all projects reconciled
+Methods that reach 'SmartLetter.SaveLetter': 0
+```
+
+Clean, fast, complete-looking. The same run emitted **2,387,334 compiler error lines**, 1,793,241 of them CS0518
+`Predefined type 'System.Object' is not defined` — no references resolved, every compilation effectively empty.
+**That `0` is not "nothing calls this". It is "there was no code" — and nothing in the output distinguishes the
+two.** The status line asserts the opposite: `all projects reconciled`.
+
+Filed CRITICAL as
+[live-index-serves-confident-answers-from-a-broken-compilation](../todo/live-index-serves-confident-answers-from-a-broken-compilation.md),
+with three defects: no failed-compilation disclosure (the approved-but-unimplemented spec), 528 MB of uncapped
+error output on raw stdout interleaved with the answer, and no `--restore` on `rig watch` at all (the analyzer
+accepts the flag; the command never passes it, so a fresh clone cannot be booted correctly).
+
+**This reorders the plan.** The remaining migrations (`tree`, `derive`) add surface to a tool that currently
+cannot tell you its facts are worthless. Disclosure goes first.
