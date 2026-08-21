@@ -893,37 +893,24 @@ public static class Reads
         );
     }
 
-    // Loads invocation reference facts for fact-based effect + observation derivation.
+    // Loads invocation reference facts for fact-based effect + observation derivation. The column set and the
+    // row->record mapping are FactInvocationProjection's (via ReferenceFactRows.InvocationRow), shared with the
+    // BOUNDED raw-ADO loader (SqlReachability.LoadReachInputsAsync) and the in-memory twin
+    // (LiveReads.InvocationRefs) — the three used to keep private copies and drifted (see
+    // FactInvocationProjection). STREAMED rather than ToListAsync'd so the per-row canonical ReferenceFact is
+    // discarded as it is mapped: this is the whole-store `derive` path, and materializing both lists at once
+    // would double its peak footprint on a multi-million-row store.
     public static async Task<IReadOnlyList<FactInvocation>> LoadInvocationRefsAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
     )
     {
-        var rows = await context
-            .ReferenceFacts.Where(r => r.RefKind == RefKinds.Invocation)
-            .Select(r => new FactInvocation(
-                Target: r.TargetSymbolId,
-                Enclosing: r.EnclosingSymbolId,
-                FilePath: r.FilePath,
-                Line: r.Line,
-                Receiver: r.ReceiverType,
-                FirstArgTemplate: r.FirstArgumentTemplate,
-                FirstArgType: r.FirstArgumentType,
-                LoopKind: r.EnclosingLoopKind,
-                LoopDetail: r.EnclosingLoopDetail,
-                EnclosingInvocations: r.EnclosingInvocations,
-                CatchTypes: r.EnclosingCatchTypes,
-                TypeArguments: r.TypeArguments,
-                FirstArgName: r.FirstArgumentName,
-                EnclosingScopes: r.EnclosingScopes,
-                ArgumentTemplates: r.ArgumentTemplates,
-                ArgumentNames: r.ArgumentNames,
-                EnclosingGuards: r.EnclosingGuards,
-                LoopElementType: r.EnclosingLoopElementType,
-                LoopBindType: r.EnclosingLoopBindType,
-                InExpressionTree: r.InExpressionTree
-            ))
-            .ToListAsync(cancellationToken);
+        var rows = new List<FactInvocation>();
+        var query = context.ReferenceFacts.Where(r => r.RefKind == RefKinds.Invocation).Select(ReferenceFactRows.InvocationRow);
+        await foreach (var row in query.AsAsyncEnumerable().WithCancellation(cancellationToken))
+        {
+            rows.Add(FactInvocationProjection.Project(row));
+        }
 
         return rows;
     }

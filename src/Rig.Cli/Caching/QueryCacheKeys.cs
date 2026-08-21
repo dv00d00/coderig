@@ -19,7 +19,13 @@ internal static class QueryCacheKeys
     // deliberate logic/schema change, which is the honest signal. The cost is discipline: a derivation
     // change with no matching bump serves stale (same tradeoff the tree/hazard keys have always carried).
     internal const int EpSchema = 1;
-    internal const int TreeSchema = 2; // v1->v2: TraceNode gained TruncationCause (no stale conflated seen flags)
+    // v1->v2: TraceNode gained TruncationCause (no stale conflated seen flags); v2->v3: the BOUNDED reach-input
+    // loader now carries reference_facts.EnclosingScopes (it never selected the column), so the cached effects
+    // gain the lexical-scope observations — lock_held_across_effect / transaction_spans_effect — that were
+    // silently absent on the SQL fast path. Same store, same rules, MORE observations: a warm v2 blob would
+    // keep serving the pre-fix effects (and, through DeriveCommand.HazardFindings, the mis-tiered race_window /
+    // lazy_init classification the span observations drive) forever.
+    internal const int TreeSchema = 3;
 
     // v1->v2 EnclosingGuards; v2->v3 lazy_init_race lock-enclosed tier; v3->v4 the n_plus_1 read gate gained
     // object_store + the `execute` operation (a BUILTIN-rules edit, which the rulesHash — computed over the

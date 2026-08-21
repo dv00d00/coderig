@@ -639,3 +639,58 @@ argument for the parity gates themselves, independent of the resident process.
 
 And it is the FIFTH instance in this program of a gate too small to host the defect: the playground comparison
 passed on all 14 patterns because no playground holds a lock across IO.
+
+## DECISION 2026-08-21 — fix the fact-mapping shape BEFORE migrating more commands
+
+Raised after slice 6b: `LiveReads` looks like a second implementation of the query layer, and the
+`SqlReachability` comment *"EnclosingScopes (param 13) is skipped on this path"* looks like a design smell. Both
+readings are right, and they are the SAME defect seen from two ends.
+
+### What is actually duplicated — narrower than it looks
+
+The **derivation logic is single-sourced**: `FactEffectDeriver`, `FactPathFinder`, `FactEntryPointDeriver` have
+exactly one implementation and `LiveReads` calls them. What is duplicated is only **table → record mapping**.
+That is worth stating plainly, because "we forked the engine" would justify a much bigger intervention than the
+real problem needs.
+
+The real problem, measured:
+
+| | |
+|---|---|
+| `FactInvocation` | **21 parameters, 17 optional** — `EnclosingScopes` at positional **13** |
+| `ReferenceFactEntity` | 29 columns |
+| hand-maintained mappings of that ONE table | **4** — EF whole-store, raw-ADO bounded, in-memory twin, positional insert |
+| index-based `reader.GetString(n)` calls | **85**, across 4 files |
+
+Each of those 85 is a latent instance of the bug that shipped.
+
+### Why sequence the shape fix first
+
+The mechanical work (migrating `tree`/`callers`/`path`/`derive` onto `IQueryFactSource`) routes MORE traffic
+through these mappings. Done first, it triples the duplication and each migrated command inherits the ordinal-
+mapping hazard. Done second, it is mechanical against one projection layer — which is what "mechanical" should
+mean.
+
+### The pattern to generalize is already in-repo, from this program
+
+Slice 6a's delivery-site extraction set it: **the store does the SCAN, a shared pure core does the
+PROJECTION** (`Reads.LoadDeliverySitesAsync` → `DeliverySiteProjection` → also feeds `LiveReads.DeliverySites`).
+Generalized, `LiveReads` stops being a second implementation and becomes the same core fed from memory instead
+of from SQL. That is the answer to "is this a second set of logic": it should not be, and the fix is to finish
+a pattern rather than to invent one.
+
+### Split into hazard and width — they are separable
+
+- **The hazard** — ordinal/positional mapping maintained by hand in N places. Fix: single-source the column set;
+  the bounded reader stops mapping by hard-coded index. This removes the bug CLASS. Doing it for
+  `reference_facts` only, deliberately: one fact table done properly beats four done shallowly.
+- **The width** — 21 parameters, 17 optional, is genuine reading pain but is NOT the cause (the cause is
+  positional mapping in raw ADO, which a narrow record would still allow). Grouping the structural context into
+  a sub-record touches the derivers and their tests, so it is its own slice.
+
+### The direction, named but not taken yet
+
+In a resident world the bounded SQL path is **load-shedding for cold starts that no longer happen**. The end
+state is one loader (`rig.db` → facts) plus one projection layer — which is what `LiveReads` already is. Not
+now: the one-shot CLI still pays cold start, so the bounded path still earns its keep. But the shape fix moves
+toward that end state instead of away from it, which is the tie-breaker for doing it before the migration.

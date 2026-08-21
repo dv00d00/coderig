@@ -1,6 +1,6 @@
 # `reaches`/`tree`/`path` silently lose every lexical-scope observation — the bounded SQL loader never selects `EnclosingScopes`
 
-**Status:** todo · **Priority: HIGH** (silent under-reporting of hazard context in rig's most-used commands; the
+**Status:** SHIPPED 2026-08-21 · **Priority: HIGH** (silent under-reporting of hazard context in rig's most-used commands; the
 SQL fast path and the whole-store path disagree about the SAME store, so the answer depends on which internal
 loader ran) · **Found:** 2026-08-21, on MedDBase, by comparing a live-served `reaches` answer against the
 store-served one ([live-background-index](../progress/live-background-index.md) slice 6b) ·
@@ -84,3 +84,61 @@ loss applies to each, and the audit is one read of the two projections side by s
   playground answers, where the divergence does NOT reproduce (no playground has a lock held across IO) — it
   took MedDBase to surface it, which is the fourth instance in this program of a gate being too small to host
   the defect under test.
+
+## SHIPPED 2026-08-21
+
+Fixed by single-sourcing the mapping rather than by adding the missing column, so the bug CLASS goes with it:
+
+- `src/Rig.Domain/Functions/FactInvocationProjection.cs` — the one column set (`enum Column`, declaration order
+  IS the ADO ordinal set) and the one `row -> FactInvocation` mapping.
+- `src/Rig.Storage/Queries/ReferenceFactRows.cs` — the store-side row supply: SELECT list, EF projection and
+  raw-ADO reader, all generated from / indexed by that enum. `(int)Column.X` is the ordinal precisely because
+  the SELECT list is emitted in enum order, so a new field cannot be skipped on one path only.
+- All three read paths (EF whole-store, raw-ADO bounded, in-memory `LiveReads`) now funnel through `Project`.
+  The bounded loader's 19-column SELECT and its 19 hard-coded `reader.GetString(n)` calls are gone.
+
+Verified on the real MedDBase store, the repro from this item:
+
+```
+BEFORE  d11  io read  IO.File  <- AssemblyCache.LoadFile
+AFTER   d11  io read  IO.File  <- AssemblyCache.LoadFile  ⚠ lock-held-across
+```
+
+`rig derive` output on a playground store is byte-identical before/after — the whole-store path never had the
+bug and did not move.
+
+**Acceptance #2 shipped as `tests/Rig.Tests/Storage/ReachInputProjectionTests.cs`**: bounded vs whole-store
+records compared by REFLECTION over every public property (so a newly-added field is covered automatically),
+with anti-vacuity guards that the compared set is non-empty and that at least one record carries a non-null
+`EnclosingScopes` — without which the test would pass on the very bug it exists to catch. 204 records compared
+across 3 patterns, 19 carrying scopes. Mutation-checked: forcing `EnclosingScopes` back to null fails the
+general reflection comparison, not merely the specific assertion.
+
+**`TreeSchema` bumped 2 -> 3.** `tree` caches `DerivedEffect`s *including* their observations, so a warm v2 blob
+would serve pre-fix effects forever — and, through `DeriveCommand.HazardFindings`, the mis-tiered
+`race_window` / `lazy_init` classification those span observations drive. Verified empirically that a warm
+pre-fix cache did serve stale before the bump. `EpSchema`/`HazardEffectsSchema`/`GraphHazSchema`/`ImpactSchema`
+deliberately NOT bumped: all derive from the whole-store loader, which already carried the column, so bumping
+them would flush the expensive impact diff for nothing.
+
+### Corrected while fixing it
+
+This item's fix plan assumed no playground held a lock across IO, so a new fixture would be needed.
+**Wrong** — `playgrounds/LegacyNet48Web/Background/LockZoo.cs:31-34` already holds `lock (_gate)` across a SOAP
+call, and `TransactionZoo.SubmitInsideTransaction` wraps one in a transaction `using`. Both were already pinned
+on the WHOLE-STORE path by `FactDerivationTests`, which is exactly what made the bounded path's silence a
+divergence rather than a missing fact. What the gates lacked was not the code shape but **pattern coverage**:
+`LiveReachesTests` compares live-vs-store on DeepChain and EntryPointEffects, neither of which takes a lock. No
+playground content was added and no existing test moved.
+
+### Still open, same class
+
+~60 index-based `reader.GetString(n)` reads remain in `Reads.cs` / `SqlReachability.cs` (call edges, symbol
+facts, allocation facts) / `Writes.cs` / `EntryPointSiteStore.cs`, ordinal-mapped against hand-written SELECT
+lists. `ReferenceFactRows` generalizes directly to them. `Writes` was deliberately left alone: its INSERT
+covers all 29 columns, a wider list than the invocation subset, and it cannot silently DROP a column from a
+query path (it writes every one).
+
+The ctor/throw `SymbolRef` projections are still three hand-written copies each — fenced by a second test in the
+same file rather than single-sourced, because sharing the 20-column invocation hydrator would widen their
+4-5-column SELECTs (including the whole-store throw scan on `derive`) to remove a much smaller drift risk.

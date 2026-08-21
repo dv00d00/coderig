@@ -173,33 +173,10 @@ public static class LiveReads
     // Mirrors Reads.LoadInvocationRefsAsync: every `invocation` reference fact, projected to FactInvocation
     // with its full structural context. NO first-party filter and NO dedup — deliberately, on both sides: the
     // effect deriver keys a BCL call to its first-party ENCLOSING method, so filtering here would lose effects.
-    // Kept in lockstep with Reads by LiveFactSourceParityTests.
+    // Kept in lockstep with Reads by LiveFactSourceParityTests — and now by CONSTRUCTION as well: the
+    // projection itself is FactInvocationProjection.Project, the same function both store loaders map through.
     public static IReadOnlyList<FactInvocation> InvocationRefs(AnalysisResult result) =>
-        (result.References ?? [])
-            .Where(r => r.RefKind == RefKinds.Invocation)
-            .Select(r => new FactInvocation(
-                Target: r.TargetSymbolId,
-                Enclosing: r.EnclosingSymbolId,
-                FilePath: r.FilePath,
-                Line: r.Line,
-                Receiver: r.ReceiverType,
-                FirstArgTemplate: r.FirstArgumentTemplate,
-                FirstArgType: r.FirstArgumentType,
-                LoopKind: r.EnclosingLoopKind,
-                LoopDetail: r.EnclosingLoopDetail,
-                EnclosingInvocations: r.EnclosingInvocations,
-                CatchTypes: r.EnclosingCatchTypes,
-                TypeArguments: r.TypeArguments,
-                FirstArgName: r.FirstArgumentName,
-                EnclosingScopes: r.EnclosingScopes,
-                ArgumentTemplates: r.ArgumentTemplates,
-                ArgumentNames: r.ArgumentNames,
-                EnclosingGuards: r.EnclosingGuards,
-                LoopElementType: r.EnclosingLoopElementType,
-                LoopBindType: r.EnclosingLoopBindType,
-                InExpressionTree: r.InExpressionTree
-            ))
-            .ToList();
+        (result.References ?? []).Where(r => r.RefKind == RefKinds.Invocation).Select(FactInvocationProjection.Project).ToList();
 
     // Mirrors Reads.LoadThrowRefsAsync: `throw` reference facts (Target is the thrown exception type DocID),
     // deduped by (FilePath, Line, Target) exactly as the loader does.

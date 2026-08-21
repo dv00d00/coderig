@@ -269,44 +269,20 @@ public static class SqlReachability
         await BuildReachSetAsync(connection, pattern, direction, cancellationToken);
         var graph = await LoadGraphFromReachSetAsync(connection, direction, cancellationToken);
 
+        // Column list, ordinals and row->record mapping ALL come from FactInvocationProjection (see
+        // ReferenceFactRows): this loader no longer writes a field list of its own. It used to, and the copy
+        // drifted — `EnclosingScopes` was missing here, so every lock/using scope observation
+        // (lock_held_across_effect / transaction_spans_effect) was silently absent from reaches/tree/path while
+        // `derive`, on the whole-store loader, reported it. One list, three paths, no drift.
         var invocations = new List<FactInvocation>();
         await ReadAsync(
             connection,
-            """
-            SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
-                   r.FirstArgumentTemplate, r.FirstArgumentType, r.EnclosingLoopKind, r.EnclosingLoopDetail,
-                   r.EnclosingInvocations, r.EnclosingCatchTypes, r.TypeArguments, r.FirstArgumentName,
-                   r.ArgumentTemplates, r.ArgumentNames, r.EnclosingGuards, r.EnclosingLoopElementType,
-                   r.EnclosingLoopBindType, r.InExpressionTree
+            $"""
+            SELECT {ReferenceFactRows.InvocationSelectList("r")}
             FROM reference_facts r JOIN reach_set s ON r.EnclosingSymbolId = s.sym
             WHERE r.RefKind = 'invocation';
             """,
-            reader =>
-                invocations.Add(
-                    // Positional through FirstArgName (index 12); the new nth-argument lists are
-                    // appended as NAMED args because EnclosingScopes (param 13) is skipped on this path.
-                    new FactInvocation(
-                        Target: reader.GetString(0),
-                        Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1),
-                        FilePath: reader.IsDBNull(2) ? "" : reader.GetString(2),
-                        Line: reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
-                        Receiver: reader.IsDBNull(4) ? null : reader.GetString(4),
-                        FirstArgTemplate: reader.IsDBNull(5) ? null : reader.GetString(5),
-                        FirstArgType: reader.IsDBNull(6) ? null : reader.GetString(6),
-                        LoopKind: reader.IsDBNull(7) ? null : reader.GetString(7),
-                        LoopDetail: reader.IsDBNull(8) ? null : reader.GetString(8),
-                        EnclosingInvocations: reader.IsDBNull(9) ? null : reader.GetString(9),
-                        CatchTypes: reader.IsDBNull(10) ? null : reader.GetString(10),
-                        TypeArguments: reader.IsDBNull(11) ? null : reader.GetString(11),
-                        FirstArgName: reader.IsDBNull(12) ? null : reader.GetString(12),
-                        ArgumentTemplates: reader.IsDBNull(13) ? null : reader.GetString(13),
-                        ArgumentNames: reader.IsDBNull(14) ? null : reader.GetString(14),
-                        EnclosingGuards: reader.IsDBNull(15) ? null : reader.GetString(15),
-                        LoopElementType: reader.IsDBNull(16) ? null : reader.GetString(16),
-                        LoopBindType: reader.IsDBNull(17) ? null : reader.GetString(17),
-                        InExpressionTree: !reader.IsDBNull(18) && reader.GetBoolean(18)
-                    )
-                ),
+            reader => invocations.Add(FactInvocationProjection.Project(ReferenceFactRows.ReadInvocationRow(reader))),
             cancellationToken
         );
 
