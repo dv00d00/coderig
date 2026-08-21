@@ -1031,3 +1031,26 @@ reading the instrument would never have found either one.
 
 Filed rather than fixed in review: the key must be the rules FINGERPRINT, not the `RuleSet` instance, because
 `TreeCommand` reloads rules per query and reference-keying would silently preserve the bug at zero hit rate.
+
+## DECISION 2026-08-21 — `derive` stays on the store path
+
+The fourth migration was queued by momentum ("complete the set"), not by need. Examined on its merits, it should
+not happen:
+
+- **Inverted cost profile.** `derive` is the ONLY command needing the three artifacts the `tree` slice measured
+  and deliberately left unwarmed: `hazardEffects` 3.4s + `shapedGraph` 3.9s + `graphHazardFindings` 5.0s ~= 12s of
+  derived layer no other live query touches. Migrating it either makes it the slowest thing on the resident path
+  or forces the warm decision the wrong way for every other query.
+- **Wrong shape of question.** The resident index exists for "what did I just break". `derive` is a
+  whole-codebase inventory — 377,583 TSV lines on MedDBase, consumed by awk, and barely different from one edit
+  to the next. That is tier 2's shape: a stable snapshot to compare against. The tier split at the top of this
+  document already excludes `impact` for exactly this reason, and `derive` sits nearer that end than `reaches`.
+- **The useful residual is already live.** "Did my edit introduce a hazard?" is `tree --view hazards` on the
+  edited symbol, which shipped in `893abb41`. That is the scoped form of the question, and the one an agent asks.
+
+The one plausible future need is a live WEB surface — the hazard views consume the derive-shaped artifacts. That
+is speculative, and speculative is not a reason to migrate 880 lines now. Recorded so the same momentum does not
+re-queue it.
+
+**The live query surface is therefore: `reaches`, `path`, `callers`, `tree`. Deliberately store-only: `derive`
+(this decision), `impact` (a pure function of two IMMUTABLE stores, by definition), `dead` (disabled repo-wide).**
