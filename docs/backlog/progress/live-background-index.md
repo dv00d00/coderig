@@ -770,3 +770,59 @@ Findings 1 and 2 are both "two surfaces, one store, different answers" — the s
 `EnclosingScopes` bug and the `/api/meta` one. That is three in two days, all from one cause: a derivation input
 that one path folds in and another does not. The pattern is worth naming as a standing review question rather
 than being rediscovered a fourth time.
+
+## RECORD WIDTH 2026-08-21 — `FactInvocation` 21 -> 9, and what the refactor actually bought
+
+Three `readonly record struct` groups (struct, not record class — at ~2.4M invocation facts, reference-type
+groups would add millions of heap objects; a struct of string refs embeds inline):
+
+| group | members |
+|---|---|
+| `FactLoopContext` (`Loop`) | Kind, Detail, ElementType, BindType |
+| `FactCallSiteNesting` (`Nesting`) | Invocations, CatchTypes, Scopes, Guards |
+| `FactCallArguments` (`Args`) | Receiver, FirstTemplate, FirstType, FirstName, Templates, Names |
+
+Left flat: Target, Enclosing, FilePath, Line, TypeArguments, InExpressionTree. **21 -> 9.**
+
+Naming: `Nesting` rather than any `Enclosing*` (taken by the enclosing symbol id) or `*Context` (that reads as
+`FactStructuralContext`, which is the DECODER for these four encoded strings, not their container). The four are
+ancestor walks frozen at the call site, which is what `FactCallSiteNesting` says.
+
+`ReferenceFact` stays flat and wide on purpose: it is the row record mirroring 29 columns 1:1, constructed inside
+EF `Expression<Func<..>>` trees where nested struct construction is a translation risk. A row is not a domain
+model.
+
+`CallEdge` DEFERRED with numbers rather than by feel: 470 references across 78 files (`FactPathFinder` + 4
+partials, `GraphMaterializer`, `TraversalGraphLoader`, `HandoffClassifier`, `RedirectClassifier`,
+`GenericMonomorphizer`, `FactCycleDeriver`, `DeadCodeFinder`, ~50 test files constructing edges positionally) —
+~15x this slice's read-site count, turning a ~300-line diff into 1500+. Its own slice.
+
+### Verification
+
+Independently re-run: MedDBase `derive --format tsv --intrinsic` = **377,583 lines, md5
+ee290713076243a8643d412bd0ac0da5**, identical to the pre-change baseline. Interleaved A/B `graph load`: after was
+equal-or-faster in all 4 rounds (means 15.48s -> 14.63s). Suite 1030/1029/0/1, unchanged. No `*Schema` bump —
+nothing derived moved.
+
+The risk here was never omission (every missed site is a compile error) but MIS-mapping — `Loop.Detail` where the
+original read `Loop.ElementType` compiles and is wrong. Checked by reading the diff's -/+ pairs at the two sites
+where the distinction is subtle (`FactIterationFanoutDeriver` passes both `Detail` (source text) and
+`ElementType` (resolved) to `IterationContext.Of`; `KeyOf` reads the indexed lists and the unindexed fast path 25
+lines apart) — all pairs correspond.
+
+### The payoff was not readability
+
+The refactor immediately exposed a gate defect that had been invisible:
+**[`tests/Rig.Tests/Fixtures/FactProjection.cs` builds `FactInvocation`s production never produces](../todo/test-fixture-invocation-mapping-is-not-field-complete.md)**
+— a FOURTH hand-written copy of the mapping, missing `Nesting.Guards`, `Loop.ElementType`, `Loop.BindType` and
+`InExpressionTree`. Six test files derive effects through it, so any arm gated on those four cannot fire there,
+and an asserted ABSENCE may hold only because the fixture withheld the field.
+
+It was undetectable while the members were flat: four omitted OPTIONAL parameters look exactly like deliberate
+defaulting. Grouped, the fixture visibly constructs a 4-member `FactLoopContext` with two members and a 4-member
+`FactCallSiteNesting` with three. **Making an incomplete construction LOOK incomplete is what the width refactor
+actually bought** — more than the reading ergonomics that motivated it.
+
+Also strengthened in passing: `ReachInputProjectionTests.Rendered<T>` now recurses into group structs instead of
+leaning on their generated `ToString`, which folds `null` and `""` into the same rendering — the exact
+distinction that gate exists to see. A grouping change would otherwise have quietly weakened it.

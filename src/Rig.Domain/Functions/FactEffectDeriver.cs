@@ -166,7 +166,7 @@ public static class FactEffectDeriver
                     continue;
                 }
 
-                if (!TypeGateMatches(rule, declaringType, receiverType: inv.Receiver, closure))
+                if (!TypeGateMatches(rule, declaringType, receiverType: inv.Args.Receiver, closure))
                 {
                     continue;
                 }
@@ -181,15 +181,15 @@ public static class FactEffectDeriver
                 // aligns the fact effects with the index effects.
                 var resource = ResolveResource(
                     strategy: rule.Resource,
-                    receiver: inv.Receiver,
-                    firstArgTemplate: inv.FirstArgTemplate,
-                    firstArgType: inv.FirstArgType,
+                    receiver: inv.Args.Receiver,
+                    firstArgTemplate: inv.Args.FirstTemplate,
+                    firstArgType: inv.Args.FirstType,
                     declaringType: declaringType,
                     typeArguments: inv.TypeArguments,
-                    firstArgName: inv.FirstArgName,
+                    firstArgName: inv.Args.FirstName,
                     typeArgumentIndex: rule.TypeArgumentIndex,
-                    argumentTemplates: inv.ArgumentTemplates,
-                    argumentNames: inv.ArgumentNames,
+                    argumentTemplates: inv.Args.Templates,
+                    argumentNames: inv.Args.Names,
                     argumentIndex: rule.ArgumentIndex
                 );
                 if (string.IsNullOrWhiteSpace(resource))
@@ -201,20 +201,20 @@ public static class FactEffectDeriver
                     ? null
                     : FactObservationDeriver.Derive(
                         methodName: methodName,
-                        loopKind: inv.LoopKind,
-                        loopDetail: inv.LoopDetail,
-                        enclosingInvocations: FactStructuralContext.DecodeInvocations(inv.EnclosingInvocations),
-                        catchTypes: FactStructuralContext.DecodeList(inv.CatchTypes),
+                        loopKind: inv.Loop.Kind,
+                        loopDetail: inv.Loop.Detail,
+                        enclosingInvocations: FactStructuralContext.DecodeInvocations(inv.Nesting.Invocations),
+                        catchTypes: FactStructuralContext.DecodeList(inv.Nesting.CatchTypes),
                         rules: observationRules,
                         provider: rule.Provider,
-                        enclosingScopes: FactStructuralContext.DecodeScopes(inv.EnclosingScopes),
+                        enclosingScopes: FactStructuralContext.DecodeScopes(inv.Nesting.Scopes),
                         typeArguments: inv.TypeArguments,
                         operation: rule.Operation,
-                        firstArgName: inv.FirstArgName,
-                        firstArgTemplate: inv.FirstArgTemplate,
-                        argumentNames: inv.ArgumentNames,
-                        argumentTemplates: inv.ArgumentTemplates,
-                        loopBindType: inv.LoopBindType
+                        firstArgName: inv.Args.FirstName,
+                        firstArgTemplate: inv.Args.FirstTemplate,
+                        argumentNames: inv.Args.Names,
+                        argumentTemplates: inv.Args.Templates,
+                        loopBindType: inv.Loop.BindType
                     );
 
                 results.Add(
@@ -227,7 +227,7 @@ public static class FactEffectDeriver
                         Line: inv.Line,
                         Observations: observations,
                         Atomic: rule.Atomic,
-                        EnclosingGuards: inv.EnclosingGuards
+                        EnclosingGuards: inv.Nesting.Guards
                     )
                 );
                 break; // first matching rule wins
@@ -284,15 +284,15 @@ public static class FactEffectDeriver
                     // Wrapper rules resolve from the call-site type args / arg name (not the declaring type).
                     var resource = ResolveResource(
                         strategy: rule.Resource,
-                        receiver: inv.Receiver,
-                        firstArgTemplate: inv.FirstArgTemplate,
-                        firstArgType: inv.FirstArgType,
+                        receiver: inv.Args.Receiver,
+                        firstArgTemplate: inv.Args.FirstTemplate,
+                        firstArgType: inv.Args.FirstType,
                         declaringType: "",
                         typeArguments: inv.TypeArguments,
-                        firstArgName: inv.FirstArgName,
+                        firstArgName: inv.Args.FirstName,
                         typeArgumentIndex: rule.TypeArgumentIndex,
-                        argumentTemplates: inv.ArgumentTemplates,
-                        argumentNames: inv.ArgumentNames,
+                        argumentTemplates: inv.Args.Templates,
+                        argumentNames: inv.Args.Names,
                         argumentIndex: rule.ArgumentIndex
                     );
                     if (string.IsNullOrWhiteSpace(resource))
@@ -309,7 +309,7 @@ public static class FactEffectDeriver
                             FilePath: inv.FilePath,
                             Line: inv.Line,
                             Atomic: rule.Atomic,
-                            EnclosingGuards: inv.EnclosingGuards
+                            EnclosingGuards: inv.Nesting.Guards
                         )
                     );
                     break;

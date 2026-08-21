@@ -11,7 +11,7 @@ namespace Rig.Tests.Domain;
 public sealed class NthArgumentEffectTests
 {
     private static FactInvocation Inv(string target, string? argNames = null, string? argTemplates = null) =>
-        new(target, "M:App.Caller", "f.cs", 1, ArgumentNames: argNames, ArgumentTemplates: argTemplates);
+        new(target, "M:App.Caller", "f.cs", 1, Args: new FactCallArguments(Names: argNames, Templates: argTemplates));
 
     private const string HasRightTarget =
         "M:MedDBase.DataAccessTier.MMSEntityClasses.CertificateEntity.HasRight(System.Guid,MedDBase.Configuration.Rights.Wrapper)";

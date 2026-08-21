@@ -43,13 +43,9 @@ public sealed class FactIterationFanoutDeriverTests
             Enclosing: caller,
             FilePath: "Page.cs",
             Line: 12,
-            LoopKind: loopKind,
-            LoopDetail: loopDetail,
-            EnclosingInvocations: enclosingInvocations,
-            ArgumentNames: argumentNames,
-            ArgumentTemplates: argumentTemplates,
-            EnclosingGuards: guards,
-            LoopElementType: elementType
+            Args: new FactCallArguments(Names: argumentNames, Templates: argumentTemplates),
+            Loop: new FactLoopContext(Kind: loopKind, Detail: loopDetail, ElementType: elementType),
+            Nesting: new FactCallSiteNesting(Invocations: enclosingInvocations, Guards: guards)
         );
 
     [Test]

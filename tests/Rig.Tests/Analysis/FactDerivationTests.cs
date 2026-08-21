@@ -316,7 +316,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             Enclosing: "M:App.Xero2ClientIO.CreateInvoices",
             FilePath: "Xero2ClientIO.cs",
             Line: 63,
-            Receiver: null
+            Args: new FactCallArguments(Receiver: null)
         ); // fluent/interface receiver not statically minable
 
         static FactEffectRule Rule(string[] methods, string[] declaringTypes, string resource) =>
@@ -373,7 +373,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             Enclosing: "M:App.WebhookHttpClient.Send",
             FilePath: "WebhookHttpClient.cs",
             Line: 46,
-            Receiver: "System.Net.Http.HttpClient"
+            Args: new FactCallArguments(Receiver: "System.Net.Http.HttpClient")
         );
         var kept = FactEffectDeriver.Derive([variableUrl], [rule]).ShouldHaveSingleItem();
         kept.Provider.ShouldBe("http");
@@ -382,7 +382,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         // A literal URL template still yields the normalized host/path (precision preserved).
         var literalUrl = variableUrl with
         {
-            FirstArgTemplate = "https://api.example.com/hook/",
+            Args = variableUrl.Args with { FirstTemplate = "https://api.example.com/hook/" },
         };
         FactEffectDeriver.Derive([literalUrl], [rule]).ShouldHaveSingleItem().ResourceType.ShouldBe("api.example.com/hook");
     }
@@ -796,7 +796,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             Enclosing: "M:App.FieldEntityModel.MarkIntraImportFastPathConflicts",
             FilePath: "FieldEntityModel.cs",
             Line: 122,
-            Receiver: "LanguageExt.Atom<A>"
+            Args: new FactCallArguments(Receiver: "LanguageExt.Atom<A>")
         );
 
         var rule = new FactEffectRule(
@@ -821,7 +821,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             Enclosing: "M:App.Helper.Do",
             FilePath: "Helper.cs",
             Line: 1,
-            Receiver: null
+            Args: new FactCallArguments(Receiver: null)
         );
         FactEffectDeriver.Derive([collidingHelper], [rule]).ShouldBeEmpty();
     }
@@ -890,7 +890,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             Enclosing: "M:App.Caller.Do",
             FilePath: "Caller.cs",
             Line: 1,
-            Receiver: "App.Foo"
+            Args: new FactCallArguments(Receiver: "App.Foo")
         );
         FactEffectDeriver.Derive([inv], [rule], staticFieldWriteRefs: []).ShouldBeEmpty();
     }

@@ -67,7 +67,7 @@ public sealed class ReachInputProjectionTests(AnalyzedPlaygrounds playgrounds)
 
                     bounded.ShouldNotBeEmpty($"pattern '{pattern}' bounded no invocations — the comparison would be vacuous");
                     comparedTotal += bounded.Count;
-                    scopedTotal += bounded.Count(i => i.EnclosingScopes is not null);
+                    scopedTotal += bounded.Count(i => i.Nesting.Scopes is not null);
                 }
 
                 // ANTI-VACUITY: without a single non-null EnclosingScopes in the compared set, this test would
@@ -84,9 +84,9 @@ public sealed class ReachInputProjectionTests(AnalyzedPlaygrounds playgrounds)
                 // lock_held_across_effect observation.
                 var lockSite = (await SqlReachability.LoadReachInputsAsync(context, "LockZoo.SubmitUnderLock", SqlReachability.Direction.Forward))
                     .Invocations.Where(i => i.Enclosing?.Contains("SubmitUnderLock", StringComparison.Ordinal) == true)
-                    .FirstOrDefault(i => i.EnclosingScopes is not null);
+                    .FirstOrDefault(i => i.Nesting.Scopes is not null);
                 lockSite.ShouldNotBeNull("no invocation inside LockZoo.SubmitUnderLock carried EnclosingScopes on the bounded path");
-                lockSite!.EnclosingScopes!.ShouldContain("lock");
+                lockSite!.Nesting.Scopes!.ShouldContain("lock");
             }
         );
     }
@@ -188,15 +188,37 @@ public sealed class ReachInputProjectionTests(AnalyzedPlaygrounds playgrounds)
 
     // Every public property of the record, by REFLECTION — so a new field is compared without anyone
     // remembering to add it here. Sorted, because neither loader promises an order.
+    //
+    // Nested GROUP properties (FactInvocation's Args / Loop / Nesting — readonly record structs, see Facts.cs)
+    // are flattened one level so each grouped member is still compared as its own name=value pair. Relying on
+    // the struct's generated ToString instead would fold a null and an empty string into the same rendering,
+    // which is precisely the distinction this gate exists to see.
     private static string[] Rendered<T>(IEnumerable<T> records)
     {
-        var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance).OrderBy(p => p.Name, StringComparer.Ordinal).ToArray();
+        var properties = Fields(typeof(T));
         properties.ShouldNotBeEmpty();
         return records
-            .Select(record => string.Join('|', properties.Select(p => $"{p.Name}={p.GetValue(record) ?? "<null>"}")))
+            .Select(record => string.Join('|', properties.Select(field => $"{field.Name}={field.Read(record!) ?? "<null>"}")))
             .OrderBy(line => line, StringComparer.Ordinal)
             .ToArray();
     }
+
+    // One compared leaf: its qualified name and how to read it off a record instance.
+    private sealed record Field(string Name, Func<object, object?> Read);
+
+    private static Field[] Fields(Type type) =>
+        type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .OrderBy(p => p.Name, StringComparer.Ordinal)
+            .SelectMany(p =>
+                IsGroup(p.PropertyType)
+                    ? Fields(p.PropertyType).Select(inner => new Field($"{p.Name}.{inner.Name}", record => inner.Read(p.GetValue(record)!)))
+                    : [new Field(p.Name, p.GetValue)]
+            )
+            .ToArray();
+
+    // A field GROUP: a non-primitive value type declared in the fact model (FactCallArguments / FactLoopContext
+    // / FactCallSiteNesting). Strings, ints and bools are leaves.
+    private static bool IsGroup(Type type) => type is { IsValueType: true, IsPrimitive: false, IsEnum: false } && type.Namespace == "Rig.Domain.Data";
 
     // Compared counts to a FILE (RIG_PARITY_REPORT, the same channel LiveFactSourceParityTests uses) — never
     // Console, which TUnit swallows in its default mode. No assertion depends on it; the anti-vacuity guards do

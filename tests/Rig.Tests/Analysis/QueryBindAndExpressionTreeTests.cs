@@ -276,8 +276,7 @@ public sealed class QueryBindAndExpressionTreeTests
             Enclosing: "M:App.Caller.Quoted",
             FilePath: "Snippet.cs",
             Line: 10,
-            LoopKind: "query",
-            LoopDetail: "p in people",
+            Loop: new FactLoopContext(Kind: "query", Detail: "p in people"),
             InExpressionTree: true
         );
         var live = quoted with { InExpressionTree = false, Line = 20 };

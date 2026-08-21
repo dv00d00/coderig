@@ -320,7 +320,9 @@ public sealed record SymbolRef(string Target, string? Enclosing, string FilePath
 // observations the invocation arm does. One carrier serves both reads and writes (the kind is determined by
 // the loader: LoadStaticFieldWriteRefsAsync filters RefKind=write, LoadStaticFieldReadRefsAsync RefKind=read).
 // Target is the accessed slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); Enclosing keys the effect to a
-// call-graph node. The Enclosing* fields mirror FactInvocation's (decode with FactStructuralContext) and feed
+// call-graph node. The Enclosing* fields carry the same facts FactInvocation's Loop/Nesting groups do (kept
+// FLAT here: this record uses five of them, not the fourteen that made grouping worth it; decode them with the
+// same FactStructuralContext helpers) and feed
 // FactObservationDeriver — a static-field access under a loop / Parallel.ForEach / lock / try-catch then
 // carries looped_effect / parallel_fanout / lock_held_across_effect / concurrency_handled. All structural
 // fields default to null, so an access with no enclosing structure (the common case) carries no observation.
@@ -770,42 +772,78 @@ public sealed record FactGenericFactoryRule(string Method, int ConstructArgIndex
 // context is never wrongly dropped).
 public sealed record FactContextDispatchRule(string Interface, string BindingBase);
 
+// --- The three cohesive field groups of FactInvocation (below). They are `readonly record struct`s, NOT
+//     record classes, DELIBERATELY: a real store carries millions of invocation facts (~2.4M on MedDBase), so
+//     reference-type groups would add that many heap objects per load for nothing. A struct of string
+//     references embeds inline in the parent record, which is exactly the memory layout the flat 21-field
+//     shape had. Grouping is a READABILITY change with no representational cost. ---
+
+// The nearest enclosing ITERATION context of a call site: the raw `foreach`/`for`/`while`/`do`/`query`/`lambda`
+// facts an invocation carries about the loop it sits in. Consumed as a set by IterationContext.Of, which is why
+// the four travel together. Every member mirrors the like-named ReferenceFact.EnclosingLoop* column.
+//   Kind/Detail — the iteration kind and its "{identifier}[, …] in {expression}" detail string (SOURCE TEXT).
+//   ElementType — the RESOLVED element type of the iterated source: the SEMANTIC half of the self-keyed test,
+//                 and for a `lambda` context the only half there is.
+//   BindType    — the declaring type of a `query` context's bind method, feeding the enumerating gate (a
+//                 comprehension over a single-value monad binds ≤1 time and is not iteration). Null = no query
+//                 context or unresolved, in which case the gate fails OPEN.
+// All null = the call site is not in any iteration context.
+public readonly record struct FactLoopContext(string? Kind = null, string? Detail = null, string? ElementType = null, string? BindType = null);
+
+// What lexically/structurally ENCLOSES a call site — the ancestor walks stage 1 froze at the call site, which
+// stage 2 turns into observations. Named for the NESTING (not "enclosing"): FactInvocation.Enclosing already
+// means the enclosing SYMBOL ID, and `FactStructuralContext` is the DECODER for these four encoded strings, so
+// neither name was available. Decode every member with FactStructuralContext.
+//   Invocations — the ancestor invocation chain, innermost-first (parallel_fanout / resilience_retry).
+//   CatchTypes  — caught exception types of all enclosing try/catch clauses (concurrency_handled).
+//   Scopes      — the enclosing `using`/`lock` held-resource chain (resource_span: lock/transaction spans).
+//   Guards      — the CFG control-dependence guard set of the call site WITHIN its own method. Null/empty ==
+//                 MUST-RUN (unconditional in the method). Intra-method only.
+// See the like-named ReferenceFact.Enclosing* columns for the encodings.
+public readonly record struct FactCallSiteNesting(string? Invocations = null, string? CatchTypes = null, string? Scopes = null, string? Guards = null);
+
+// The call site's RECEIVER and ARGUMENT surface — everything the effect-resource strategies resolve a resource
+// FROM (P2a), and the surface the iteration-fanout key discriminator scans. Receiver rides here because it is
+// resolved from the same call-site shape by the same `ResolveResource` switch.
+//   Receiver      — static type of the invocation receiver (open-generic FQN). Null for bare/static calls.
+//   FirstTemplate — the first argument's string literal / interpolation template.
+//   FirstType     — the static type of the first argument.
+//   FirstName     — the first argument rendered as its member/identifier path.
+//   Templates     — ALL positional arguments' string templates, as a JSON string?[].
+//   Names         — ALL positional arguments' member/identifier name paths, as a JSON string?[].
+// Templates/Names index 0 MIRRORS FirstTemplate/FirstName; the unindexed pair is kept as the fast path so the
+// existing derivation is byte-for-byte unchanged. See the like-named ReferenceFact columns.
+public readonly record struct FactCallArguments(
+    string? Receiver = null,
+    string? FirstTemplate = null,
+    string? FirstType = null,
+    string? FirstName = null,
+    string? Templates = null,
+    string? Names = null
+);
+
 // An invocation reference fact, with the enrichment fed to the stage-2 effect/observation derivers
-// (P1a–P1c). Replaces the positional tuple that grew past readability. Receiver/FirstArgument feed
-// resource resolution (P2a); the Enclosing* fields feed the observation deriver (P2b).
+// (P1a–P1c). Replaces the positional tuple that grew past readability. Args feeds resource resolution
+// (P2a); Loop and Nesting feed the observation + iteration-fanout derivers (P2b).
+//
+// The three groups above replaced 14 flat members: reading the derivation core no longer means holding 21
+// independent fields in your head, and — since the groups are structs — nothing about the in-memory
+// representation changed.
 public sealed record FactInvocation(
     string Target,
     string? Enclosing,
     string FilePath,
     int Line,
-    string? Receiver = null,
-    string? FirstArgTemplate = null,
-    string? FirstArgType = null,
-    string? LoopKind = null,
-    string? LoopDetail = null,
-    string? EnclosingInvocations = null,
-    string? CatchTypes = null,
-    // Call-site generic type arguments (comma-joined) and the first-argument member/identifier path.
-    // Feed the `type_argument` / `argument_name` effect-resource strategies (P2a). See ReferenceFact.
+    // Receiver + argument surface — the resource-resolution inputs.
+    FactCallArguments Args = default,
+    // The enclosing iteration context, if any.
+    FactLoopContext Loop = default,
+    // What lexically/structurally encloses the call site (ancestor invocations, catches, using/lock, guards).
+    FactCallSiteNesting Nesting = default,
+    // Call-site generic type arguments (comma-joined). Feeds the `type_argument` effect-resource strategy
+    // (P2a) and the serialization-hazard payload gate. Flat: it is neither an argument surface nor context.
+    // See ReferenceFact.TypeArguments.
     string? TypeArguments = null,
-    string? FirstArgName = null,
-    // Enclosing held-resource scope chain (using/lock), innermost-first. Feeds the resource_span
-    // observation. Decode with FactStructuralContext.DecodeScopes. See ReferenceFact.EnclosingScopes.
-    string? EnclosingScopes = null,
-    // ALL arguments' string templates / member-identifier names as JSON string?[] (see
-    // ReferenceFact.ArgumentTemplates/ArgumentNames). Feed nth-argument resource resolution.
-    string? ArgumentTemplates = null,
-    string? ArgumentNames = null,
-    // CFG control-dependence guard set of this invocation's call-site (branch-aware-effects); carried onto
-    // the DerivedEffect so `tree --view full --guards` can mark a guarded effect leaf. Null = must-run.
-    string? EnclosingGuards = null,
-    // Resolved element type of the enclosing iteration context (see ReferenceFact.EnclosingLoopElementType).
-    // The SEMANTIC half of the self-keyed test, and for a `lambda` context the only half there is.
-    string? LoopElementType = null,
-    // Declaring type of the `query` context's bind method (see ReferenceFact.EnclosingLoopBindType). Feeds the
-    // IterationContext enumerating gate: a comprehension binding onto a non-enumerating type (a single-value
-    // monad) is not iteration. Null = no query context or unresolved (gate fails open).
-    string? LoopBindType = null,
     // The reference is QUOTED code (see ReferenceFact.InExpressionTree) — never executes as C#, so it derives
     // no effect and anchors no iteration fanout.
     bool InExpressionTree = false

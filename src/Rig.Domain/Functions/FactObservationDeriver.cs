@@ -37,14 +37,14 @@ public static class FactObservationDeriver
         // provider+operation. Null for callers that don't carry it (field writes); n_plus_1 then gates
         // on provider alone.
         string? operation = null,
-        // The read's KEY ARGUMENT surface (FactInvocation.FirstArgName / FirstArgTemplate + the all-args
-        // JSON ArgumentNames / ArgumentTemplates). Feeds n_plus_1 — the loop identifier "varies" when it
+        // The read's KEY ARGUMENT surface (FactInvocation.Args.FirstName / FirstTemplate + the all-args
+        // JSON Args.Names / Args.Templates). Feeds n_plus_1 — the loop identifier "varies" when it
         // appears in any of these. Null when the call has no such argument.
         string? firstArgName = null,
         string? firstArgTemplate = null,
         string? argumentNames = null,
         string? argumentTemplates = null,
-        // The `query` context's bind declaring type (FactInvocation.LoopBindType) — feeds the IterationContext
+        // The `query` context's bind declaring type (FactInvocation.Loop.BindType) — feeds the IterationContext
         // enumerating gate so a monadic comprehension is not reported as a loop. Null fails open.
         string? loopBindType = null
     )

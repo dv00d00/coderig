@@ -7,7 +7,7 @@ namespace Rig.Domain.Functions;
 // the EF whole-store loader (Reads.LoadInvocationRefsAsync), the raw-ADO BOUNDED loader
 // (SqlReachability.LoadReachInputsAsync) and the in-memory twin (LiveReads.InvocationRefs) — and until
 // 2026-08-21 each carried its OWN hand-written copy of the field list. They drifted: the bounded loader never
-// selected `EnclosingScopes`, so FactInvocation.EnclosingScopes arrived null on the reaches/tree/path fast
+// selected `EnclosingScopes`, so FactInvocation's scope field (now Nesting.Scopes) arrived null on the fast
 // path and every lexical-scope observation (`lock_held_across_effect` / `transaction_spans_effect`, derived in
 // FactEffectDeriver from exactly that field) silently vanished from rig's most-used commands while `derive`
 // reported them. Same store, same rules, two different answers.
@@ -66,21 +66,27 @@ public static class FactInvocationProjection
             Enclosing: r.EnclosingSymbolId,
             FilePath: r.FilePath,
             Line: r.Line,
-            Receiver: r.ReceiverType,
-            FirstArgTemplate: r.FirstArgumentTemplate,
-            FirstArgType: r.FirstArgumentType,
-            LoopKind: r.EnclosingLoopKind,
-            LoopDetail: r.EnclosingLoopDetail,
-            EnclosingInvocations: r.EnclosingInvocations,
-            CatchTypes: r.EnclosingCatchTypes,
+            Args: new FactCallArguments(
+                Receiver: r.ReceiverType,
+                FirstTemplate: r.FirstArgumentTemplate,
+                FirstType: r.FirstArgumentType,
+                FirstName: r.FirstArgumentName,
+                Templates: r.ArgumentTemplates,
+                Names: r.ArgumentNames
+            ),
+            Loop: new FactLoopContext(
+                Kind: r.EnclosingLoopKind,
+                Detail: r.EnclosingLoopDetail,
+                ElementType: r.EnclosingLoopElementType,
+                BindType: r.EnclosingLoopBindType
+            ),
+            Nesting: new FactCallSiteNesting(
+                Invocations: r.EnclosingInvocations,
+                CatchTypes: r.EnclosingCatchTypes,
+                Scopes: r.EnclosingScopes,
+                Guards: r.EnclosingGuards
+            ),
             TypeArguments: r.TypeArguments,
-            FirstArgName: r.FirstArgumentName,
-            EnclosingScopes: r.EnclosingScopes,
-            ArgumentTemplates: r.ArgumentTemplates,
-            ArgumentNames: r.ArgumentNames,
-            EnclosingGuards: r.EnclosingGuards,
-            LoopElementType: r.EnclosingLoopElementType,
-            LoopBindType: r.EnclosingLoopBindType,
             InExpressionTree: r.InExpressionTree
         );
 }

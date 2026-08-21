@@ -23,7 +23,13 @@ public sealed class StringArgumentOrReceiverEffectTests
     );
 
     private static FactInvocation Inv(string? firstArgTemplate = null, string? receiver = null, string? argTemplates = null) =>
-        new(SaveTarget, "M:App.Caller", "f.cs", 1, Receiver: receiver, FirstArgTemplate: firstArgTemplate, ArgumentTemplates: argTemplates);
+        new(
+            SaveTarget,
+            "M:App.Caller",
+            "f.cs",
+            1,
+            Args: new FactCallArguments(Receiver: receiver, FirstTemplate: firstArgTemplate, Templates: argTemplates)
+        );
 
     [Test]
     public void A_literal_path_argument_is_the_resource()

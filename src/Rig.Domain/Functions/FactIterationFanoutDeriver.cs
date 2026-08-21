@@ -83,12 +83,12 @@ public static class FactIterationFanoutDeriver
             }
 
             var iteration = IterationContext.Of(
-                loopKind: inv.LoopKind,
-                loopDetail: inv.LoopDetail,
-                enclosingInvocations: FactStructuralContext.DecodeInvocations(inv.EnclosingInvocations),
+                loopKind: inv.Loop.Kind,
+                loopDetail: inv.Loop.Detail,
+                enclosingInvocations: FactStructuralContext.DecodeInvocations(inv.Nesting.Invocations),
                 rules: rules,
-                loopElementType: inv.LoopElementType,
-                loopBindType: inv.LoopBindType
+                loopElementType: inv.Loop.ElementType,
+                loopBindType: inv.Loop.BindType
             );
             if (iteration.Kind is null)
             {
@@ -109,7 +109,7 @@ public static class FactIterationFanoutDeriver
                         Line: inv.Line,
                         // Guards are the suspected real precision lever (a read behind a rarely-true `if`
                         // inside the loop body executes ~never whatever its key), so they ride the event.
-                        EnclosingGuards: inv.EnclosingGuards
+                        EnclosingGuards: inv.Nesting.Guards
                     ),
                     Caller: inv.Enclosing,
                     IterationKind: iteration.Kind,
@@ -157,8 +157,8 @@ public static class FactIterationFanoutDeriver
             return ("", "", -1);
         }
 
-        var names = Elements(inv.ArgumentNames);
-        var templates = Elements(inv.ArgumentTemplates);
+        var names = Elements(inv.Args.Names);
+        var templates = Elements(inv.Args.Templates);
         var positions = Math.Max(names.Length, templates.Length);
         for (var k = 0; k < positions; k++)
         {
@@ -182,14 +182,14 @@ public static class FactIterationFanoutDeriver
         // Index 0 by construction.
         foreach (var identifier in identifiers)
         {
-            if (IterationContext.ContainsToken(inv.FirstArgName, identifier))
+            if (IterationContext.ContainsToken(inv.Args.FirstName, identifier))
             {
-                return (identifier, inv.FirstArgName!, 0);
+                return (identifier, inv.Args.FirstName!, 0);
             }
 
-            if (IterationContext.ContainsToken(inv.FirstArgTemplate, identifier))
+            if (IterationContext.ContainsToken(inv.Args.FirstTemplate, identifier))
             {
-                return (identifier, inv.FirstArgTemplate!, 0);
+                return (identifier, inv.Args.FirstTemplate!, 0);
             }
         }
 

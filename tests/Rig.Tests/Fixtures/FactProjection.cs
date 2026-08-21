@@ -142,18 +142,17 @@ public static class FactProjection
                 Enclosing: r.EnclosingSymbolId,
                 FilePath: r.FilePath,
                 Line: r.Line,
-                Receiver: r.ReceiverType,
-                FirstArgTemplate: r.FirstArgumentTemplate,
-                FirstArgType: r.FirstArgumentType,
-                LoopKind: r.EnclosingLoopKind,
-                LoopDetail: r.EnclosingLoopDetail,
-                EnclosingInvocations: r.EnclosingInvocations,
-                CatchTypes: r.EnclosingCatchTypes,
-                TypeArguments: r.TypeArguments,
-                FirstArgName: r.FirstArgumentName,
-                EnclosingScopes: r.EnclosingScopes,
-                ArgumentTemplates: r.ArgumentTemplates,
-                ArgumentNames: r.ArgumentNames
+                Args: new FactCallArguments(
+                    Receiver: r.ReceiverType,
+                    FirstTemplate: r.FirstArgumentTemplate,
+                    FirstType: r.FirstArgumentType,
+                    FirstName: r.FirstArgumentName,
+                    Templates: r.ArgumentTemplates,
+                    Names: r.ArgumentNames
+                ),
+                Loop: new FactLoopContext(Kind: r.EnclosingLoopKind, Detail: r.EnclosingLoopDetail),
+                Nesting: new FactCallSiteNesting(Invocations: r.EnclosingInvocations, CatchTypes: r.EnclosingCatchTypes, Scopes: r.EnclosingScopes),
+                TypeArguments: r.TypeArguments
             ))
             .ToArray();
 
