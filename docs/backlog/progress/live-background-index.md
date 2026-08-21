@@ -890,3 +890,78 @@ accepts the flag; the command never passes it, so a fresh clone cannot be booted
 
 **This reorders the plan.** The remaining migrations (`tree`, `derive`) add surface to a tool that currently
 cannot tell you its facts are worthless. Disclosure goes first.
+
+## DISCLOSURE SHIPPED 2026-08-21 — the live index no longer serves a confident answer from a broken tree
+
+Implements the approved subset of `docs/spikes/failed-compilation-disclosure-spec.md`: capture compilation health
+as structured data and disclose it ON THE ANSWER. The store-side half (the `source_files`/`runs` schema columns,
+the per-line `~compile-error` chip joined on FilePath, `rig files --compile-errors`) is a follow-on that needs a
+re-index; its vocabulary is reserved, not spent.
+
+```
+CompilationHealth(Files, PartialProjects, UnlocatedErrorCount)
+FileCompileHealth(FilePath, ErrorCount, ErrorCodes, FirstMessage)   // codes deduped/sorted, cap 8 then +N
+ProjectCompileFailure(ProjectName, Reason)                          // no_compilation | generator_emit | generator_run
+```
+
+On `AnalysisResult`, so it flows wherever facts flow. **`ResidentIndex` merges it by the same replace-per-file
+rule as the facts** — and the clearing mechanism is that a re-extracted CLEAN file contributes an EMPTY list,
+which drops its base row. Keyed on `document.FilePath`, not the diagnostic's reported path, because the overlay
+replaces by that exact string and any other key would leave a stale flag nothing could clear. In a one-shot
+index a stale flag is impossible; resident, it would survive the process lifetime — hence
+`Broken_then_fixed_then_broken_over_one_retained_workspace`, which passes with identical evidence on both broken
+phases.
+
+### Calibrated in the PRODUCTION configuration, which is the only number that counts
+
+`rig watch <MedDBase.slnx> --rules rig.rules.json` on the restored clone:
+
+```
+live: facts current as of 0 file(s) applied | 3 of 11938 indexed file(s) had compile errors
+stderr: 4 lines total — the 3 named diagnostics + one note.
+```
+
+**3 of 11,938 = 0.025%, and it names the three files.** Quiet enough to leave on by default, and decisively
+distinguishable from the `!:` partial-binding floor (7.3% of files), which it is never derived from (spec §3.3).
+
+An intermediate measurement said 8 in-set + **41 outside-set** files and looked like a noise problem. It was an
+artifact of running WITHOUT the rules overlay: those 41 are `obj/` `AssemblyInfo` files in projects that clone
+had never built, which the production rules exclude. **Calibrate in the configuration you ship, or you will tune
+against noise you invented** — and the same run exposed a real leak worth its own ticket:
+[`--exclude-tests` matches on project NAME only](../todo/test-project-exclusion-is-name-only-and-leaks.md), so
+`MedDBase.QA.Automation.Setup` under `tests/ui/` gets indexed and contributed 24,309 of that run's 24,545
+diagnostics — one leaked project nearly monopolising the signal.
+
+### A ratio bug the real data caught, worth recording as a pattern
+
+The first cut printed `10648 of 10565 indexed file(s)` — **numerator larger than denominator** — because Roslyn
+reports diagnostics in files rig never indexed (`obj/` AssemblyInfo, classifier-skipped) while the denominator
+counted only indexed rows. Same defect class as the intrinsic-effects count that had to be dropped for
+overstating by 8x: **a ratio whose halves are drawn from different populations.** Both halves now derive from one
+`IndexedFileSet`, making it impossible by construction, and outside-set files are disclosed separately rather
+than folded in or hidden. Pinned by `Files_outside_the_indexed_set_are_disclosed_separately_and_never_break_the_ratio`.
+
+### Output volume
+
+| | before | after |
+|---|---|---|
+| stdout | 2,387,334 lines / **528 MB**, interleaved with the answer | **7 lines / 476 bytes** |
+| stderr | — | capped: 5 per project + a truthful per-project total |
+| retained in memory | every error string (~528 MB of `ConcurrentBag<string>`) | <=5 strings/project + one counter |
+
+### `rig watch --restore`
+
+The analyzer already accepted `restore`; the command never passed it, so a fresh clone could not be booted
+correctly at all. Verified end to end on a deliberately unrestored tree: without it,
+`24 of 26 indexed file(s) had compile errors` (CS0518 `Predefined type 'System.Int32' is not defined`) and
+`Reachable methods: 7`; with it, `all projects reconciled` and `Reachable methods: 8`. The disclosure and the
+flag corroborate each other.
+
+### Still open, deliberately
+
+Generated documents' diagnostics are not observed (`RunSourceGeneratorsAsync` builds a compilation nobody calls
+`GetDiagnostics` on, and the driver's `diagnostics: out _` still discards them) — spec row 7a, out of scope.
+Diagnostics go to `Console.Error` directly rather than the CLI's injected error writer, so in tests they land on
+the real process stderr. And the per-line `~compile-error` chip remains the follow-on: this slice gives
+COMPLETENESS (it fires whenever any file or project is affected, including the blind spots a chip cannot
+cover — a lost dispatch edge has no file to flag); the chip gives LOCALITY.

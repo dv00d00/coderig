@@ -18,9 +18,10 @@ namespace Rig.Analysis.Inventory;
 // owns scheduling (a later slice). Deliberately no Rig.Storage/Rig.Cli dependency: this is fact-level.
 //
 // Overlay grain and the replace-not-append rule: the overlay is keyed by FILE PATH, and every fact
-// kind that carries a FilePath (symbols, references, allocations, DI registrations, source-file rows)
-// is REPLACED per file when merging — a stale row for a re-extracted file is a ghost fact, the worst
-// bug this class can have. TypeRelationFact/DispatchFact carry NO FilePath, so they cannot be replaced
+// kind that carries a FilePath (symbols, references, allocations, DI registrations, source-file rows,
+// and compile-health rows) is REPLACED per file when merging — a stale row for a re-extracted file is
+// a ghost fact, the worst bug this class can have.
+// TypeRelationFact/DispatchFact carry NO FilePath, so they cannot be replaced
 // per file: the merged tables are the UNION of base and overlay rows, de-duplicated on each fact's
 // full identity tuple (see MergeFacts for why a row is NEVER dropped by symbol, and the ghost trade
 // that buys). Re-extraction is BATCHED (one ExtractFromDocumentsByFileAsync call per ReextractAsync),
@@ -210,6 +211,28 @@ internal sealed class ResidentIndex : IDisposable
             .Concat(overlayEntries.SelectMany(e => e.Allocations))
             .ToArray();
 
+        // --- Compile health, merged by exactly the same replace-per-file rule as the facts above, and
+        // for exactly the same reason: a health row is a per-file fact, and a STALE one is a ghost. In a
+        // resident process the stale direction is the dangerous one — a flag that only ever accumulates
+        // would claim a fixed file is still broken for the whole process lifetime, and a marker that
+        // lies "safe" trains the reader to ignore it. So a re-extracted file's rows come from the
+        // overlay ONLY: it contributes one row if it still has errors and NONE if it is clean, which is
+        // what makes broken -> fixed -> broken track the real state.
+        //
+        // PartialProjects and UnlocatedErrorCount pass through from the base. Both are project- and
+        // compilation-level (no compilation at all, a generator that never ran, a diagnostic with no
+        // source location), so no per-FILE re-extraction can either produce or retire one — that takes a
+        // fresh cold load, which is exactly what a new base result is.
+        var baseHealth = _baseResult.CompilationHealth ?? CompilationHealth.Empty;
+        var compilationHealth = baseHealth with
+        {
+            Files = baseHealth
+                .Files.Where(f => !Overlaid(f.FilePath))
+                .Concat(overlayEntries.SelectMany(e => e.CompileHealth))
+                .OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+        };
+
         // --- TypeRelations/Dispatch carry NO FilePath, so a base row CANNOT be attributed to the file
         // that emitted it. UNION the base rows with the overlay's, de-duplicated on each fact's full
         // identity tuple — NEVER drop a base row by symbol.
@@ -265,6 +288,7 @@ internal sealed class ResidentIndex : IDisposable
             TypeRelations = typeRelations,
             DispatchFacts = dispatchFacts,
             AllocationFacts = allocations,
+            CompilationHealth = compilationHealth,
         };
     }
 
@@ -282,5 +306,9 @@ internal sealed record FileFacts(
     IReadOnlyList<ReferenceFact> References,
     IReadOnlyList<TypeRelationFact> TypeRelations,
     IReadOnlyList<DispatchFact> Dispatch,
-    IReadOnlyList<AllocationFact> Allocations
+    IReadOnlyList<AllocationFact> Allocations,
+    // This file's compile-health rows: exactly ONE when the re-extraction saw error diagnostics in it,
+    // and EMPTY when it did not. Empty is the load-bearing case — it is what clears a base flag on
+    // merge when a broken file is fixed.
+    IReadOnlyList<FileCompileHealth> CompileHealth
 );

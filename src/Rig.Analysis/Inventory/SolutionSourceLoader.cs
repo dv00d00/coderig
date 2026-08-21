@@ -30,6 +30,17 @@ internal static class SolutionSourceLoader
     // retries catches that, and anything still degraded after is treated as a hard, deterministic failure.
     private const int DegradedBuildRetries = 2;
 
+    // How many error diagnostics are PRINTED per project before the rest are replaced by one
+    // "... and N more" line. The uncapped predecessor wrote every diagnostic to raw STDOUT: on an
+    // unrestored MedDBase clone that was 2,387,334 lines / 528 MB interleaved with the answer, which is
+    // the reason that run looked clean. The cap bounds the volume regardless of how broken the tree is;
+    // the TOTAL is still reported (both per project here and in CompilationHealth.TotalErrorCount), so
+    // the truncation can never read as "that was all of them".
+    private const int MaxPrintedErrorsPerProject = 5;
+
+    // How many error lines the end-of-pass summary lists (pre-existing behaviour, kept).
+    private const int MaxSummarisedErrors = 10;
+
     public static async Task<SolutionSourceSet> LoadAsync(
         string solutionPath,
         RuleSet rules,
@@ -75,6 +86,11 @@ internal static class SolutionSourceLoader
         var maxParallelism = Math.Max(val1: 1, val2: parallelism ?? DefaultParallelism);
         var phase = timings is null ? null : Stopwatch.StartNew();
 
+        // Compile health is collected across BOTH halves of the cold load: the generator-wiring pass can
+        // lose a whole generator (generator_emit), and the read pass records the per-file diagnostics
+        // plus no_compilation / generator_run. ONE collector, so the AnalysisResult carries every class.
+        var health = new CompilationHealthCollector();
+
         // Buildalyzer invokes MSBuild.exe out-of-process, completely avoiding the
         // System.Collections.Immutable assembly conflict in Roslyn's BuildHost-net472 that
         // causes TypeInitializationException on XMakeElements under VS18/MSBuild18 when
@@ -108,7 +124,7 @@ internal static class SolutionSourceLoader
         // proxy generator) that Buildalyzer drops: emit each generator project's compilation to a temp
         // DLL and add it as an analyzer reference on the referencing project, so RunSourceGenerators
         // can execute it and the generated types get indexed.
-        await WireGeneratorAnalyzersAsync(workspace, progress, cancellationToken);
+        await WireGeneratorAnalyzersAsync(workspace, progress, health, cancellationToken);
         if (phase is not null)
         {
             timings!.Record("wire-generators", phase.Elapsed);
@@ -125,7 +141,8 @@ internal static class SolutionSourceLoader
             cancellationToken: cancellationToken,
             progress: progress,
             parallelism: parallelism,
-            timings: timings
+            timings: timings,
+            health: health
         );
     }
 
@@ -143,9 +160,15 @@ internal static class SolutionSourceLoader
         CancellationToken cancellationToken,
         Action<string>? progress = null,
         int? parallelism = null,
-        PhaseTimings? timings = null
+        PhaseTimings? timings = null,
+        // Compile-health sink. LoadAsync passes its own (so generator-wiring failures from the earlier
+        // phase land in the same record); a direct caller (ExtractFromSolutionAsync) lets this default
+        // and gets a fresh one. Both the cold path and the incremental whole-solution path go through
+        // here, so there is exactly ONE collection site for located diagnostics.
+        CompilationHealthCollector? health = null
     )
     {
+        var collector = health ?? new CompilationHealthCollector();
         var phase = timings is null ? null : Stopwatch.StartNew();
 
         var workspaceCSharpProjects = solution
@@ -180,7 +203,12 @@ internal static class SolutionSourceLoader
         // large closure (MedDBase: 123 projects) the first pass's compilations are evicted before the
         // second pass reaches them, forcing a rebuild — the read pass measured ~as costly as the compile
         // pass for exactly this reason. Fusing makes it build-once and drops the barrier between passes.
+        // A BOUNDED sample of error strings for the end-of-pass summary — at most
+        // MaxPrintedErrorsPerProject per project. The predecessor bagged EVERY error string, which on
+        // the unrestored MedDBase clone meant retaining 2.4M of them (528 MB) purely to print ten. The
+        // honest count lives in `totalCompilationErrors` / CompilationHealth instead.
         var compilationErrors = new ConcurrentBag<string>();
+        var totalCompilationErrors = 0;
         var projectResults = new ConcurrentBag<ProjectSourceLoadResult>();
         var analyzedProjects = 0;
         // Per-project compile/diagnostics/read seconds (only when timing). Σ far above wall/parallelism, or a
@@ -212,24 +240,24 @@ internal static class SolutionSourceLoader
         }
 
         var compilationErrorList = compilationErrors.OrderBy(e => e, StringComparer.Ordinal).ToArray();
+        var errorCount = Volatile.Read(ref totalCompilationErrors);
 
-        if (compilationErrorList.Length > 0)
+        if (errorCount > 0)
         {
             // Report compilation errors as warnings and continue with partial analysis.
             // Design-time builds commonly miss code-generated types (proxy generators, T4 templates,
             // source generators).  The semantic model is still valid for code that doesn't reference
             // the missing types, so entry point and effect extraction can proceed.
-            var errorCount = compilationErrorList.Length;
             ReportProgress(progress, $"Warning: {errorCount} compilation error(s) — analysis will be partial for affected files");
 
-            foreach (var error in compilationErrorList.Take(10))
+            foreach (var error in compilationErrorList.Take(MaxSummarisedErrors))
             {
                 ReportProgress(progress, $"  {error}");
             }
 
-            if (errorCount > 10)
+            if (errorCount > MaxSummarisedErrors)
             {
-                ReportProgress(progress, $"  ... and {errorCount - 10} more (set --verbose to see all)");
+                ReportProgress(progress, $"  ... and {errorCount - MaxSummarisedErrors} more (full per-file breakdown is recorded on the analysis)");
             }
         }
 
@@ -238,7 +266,8 @@ internal static class SolutionSourceLoader
         // with an order-sensitive GroupBy(SymbolId).First(). Do not "simplify" the comparer or the key.
         return new SolutionSourceSet(
             projectResults.SelectMany(r => r.SourceFiles).OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            projectResults.SelectMany(r => r.Extracted).OrderBy(e => e.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
+            projectResults.SelectMany(r => r.Extracted).OrderBy(e => e.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
+            collector.Build()
         );
 
         async ValueTask ProcessProject(Project project, CancellationToken ct)
@@ -250,16 +279,46 @@ internal static class SolutionSourceLoader
             var compileSec = watch?.Elapsed.TotalSeconds ?? 0;
             if (compilation is null)
             {
+                // Location-less: this project contributes ZERO facts and ZERO source-file rows, so the
+                // per-file channel is structurally blind to it. Record it on the project channel — zero
+                // facts otherwise read as "nothing declares or calls this".
                 compilationErrors.Add($"{project.Name}: compilation unavailable");
+                Interlocked.Increment(ref totalCompilationErrors);
+                collector.AddProjectFailure(project.Name, ProjectCompileFailure.NoCompilation);
                 return; // no semantic model possible — nothing to read for this project
             }
 
             watch?.Restart();
-            foreach (var diagnostic in compilation.GetDiagnostics(ct).Where(d => d.Severity == DiagnosticSeverity.Error))
+            var projectErrors = 0;
+            var printed = 0;
+            foreach (var diagnostic in compilation.GetDiagnostics(ct))
             {
-                compilationErrors.Add($"{project.Name}: {diagnostic}");
-                Console.WriteLine($"{project.Name}: {diagnostic}");
+                if (diagnostic.Severity != DiagnosticSeverity.Error)
+                {
+                    continue;
+                }
+
+                projectErrors++;
+                collector.AddError(diagnostic);
+                if (printed < MaxPrintedErrorsPerProject)
+                {
+                    compilationErrors.Add($"{project.Name}: {diagnostic}");
+                    // STDERR, not stdout: the answer (and `rig index`'s parseable output) must stay
+                    // greppable. Console.Error is synchronized, so parallel projects cannot interleave
+                    // within a line.
+                    Console.Error.WriteLine($"{project.Name}: {diagnostic}");
+                    printed++;
+                }
             }
+
+            if (projectErrors > printed)
+            {
+                Console.Error.WriteLine(
+                    $"{project.Name}: ... and {projectErrors - printed} further compilation error(s) not shown ({projectErrors} total in this project)"
+                );
+            }
+
+            Interlocked.Add(ref totalCompilationErrors, projectErrors);
 
             var diagSec = watch?.Elapsed.TotalSeconds ?? 0;
             watch?.Restart();
@@ -270,6 +329,7 @@ internal static class SolutionSourceLoader
                 rules: rules,
                 extractProject: extractProject,
                 progress: progress,
+                health: collector,
                 cancellationToken: ct
             );
             projectResults.Add(loadResult);
@@ -1289,6 +1349,7 @@ internal static class SolutionSourceLoader
         RuleSet rules,
         Func<IReadOnlyList<SourceModel>, SourceExtractionResult[]> extractProject,
         Action<string>? progress,
+        CompilationHealthCollector health,
         CancellationToken cancellationToken
     )
     {
@@ -1364,7 +1425,7 @@ internal static class SolutionSourceLoader
         // explicitly with a CSharpGeneratorDriver over the project compilation and index the trees it
         // produces — that's what makes the generated proxy base-type facts (the clientpage_proxy
         // effect gate's discriminator) exist.
-        foreach (var generated in await RunSourceGeneratorsAsync(project, compilation, progress, cancellationToken))
+        foreach (var generated in await RunSourceGeneratorsAsync(project, compilation, progress, health, cancellationToken))
         {
             sourceFiles.Add(
                 new SourceFileInfo(
@@ -1413,6 +1474,7 @@ internal static class SolutionSourceLoader
     private static async Task WireGeneratorAnalyzersAsync(
         RigWorkspace workspace,
         Action<string>? progress,
+        CompilationHealthCollector health,
         CancellationToken cancellationToken
     )
     {
@@ -1437,7 +1499,7 @@ internal static class SolutionSourceLoader
                 if (!emittedDllByGeneratorPath.TryGetValue(key: generatorProjectPath, value: out var dllPath))
                 {
                     dllPath = projectByPath.TryGetValue(generatorProjectPath, out var generatorId)
-                        ? await EmitCompilationToTempAsync(solution.GetProject(generatorId)!, progress, cancellationToken)
+                        ? await EmitCompilationToTempAsync(solution.GetProject(generatorId)!, progress, health, cancellationToken)
                         : null;
                     emittedDllByGeneratorPath[generatorProjectPath] = dllPath;
                 }
@@ -1478,6 +1540,7 @@ internal static class SolutionSourceLoader
     private static async Task<string?> EmitCompilationToTempAsync(
         Project project,
         Action<string>? progress,
+        CompilationHealthCollector health,
         CancellationToken cancellationToken
     )
     {
@@ -1486,6 +1549,9 @@ internal static class SolutionSourceLoader
             var compilation = await project.GetCompilationAsync(cancellationToken);
             if (compilation is null)
             {
+                // Location-less: no generated document exists to flag, so the project channel is the
+                // only place this degradation can be recorded.
+                health.AddProjectFailure(project.Name, ProjectCompileFailure.GeneratorEmit);
                 ReportProgress(
                     progress,
                     $"WARN: generator project '{project.Name}' produced no compilation — its source generators will NOT run (generated types will be missing)"
@@ -1499,6 +1565,7 @@ internal static class SolutionSourceLoader
             if (!emitResult.Success)
             {
                 var firstError = emitResult.Diagnostics.FirstOrDefault(d => d.Severity == DiagnosticSeverity.Error);
+                health.AddProjectFailure(project.Name, ProjectCompileFailure.GeneratorEmit);
                 ReportProgress(
                     progress,
                     $"WARN: generator project '{project.Name}' failed to emit — its source generators will NOT run "
@@ -1511,6 +1578,7 @@ internal static class SolutionSourceLoader
         }
         catch (Exception ex)
         {
+            health.AddProjectFailure(project.Name, ProjectCompileFailure.GeneratorEmit);
             ReportProgress(
                 progress,
                 $"WARN: generator project '{project.Name}' emit threw — its source generators will NOT run "
@@ -1531,6 +1599,7 @@ internal static class SolutionSourceLoader
         Project project,
         Compilation compilation,
         Action<string>? progress,
+        CompilationHealthCollector health,
         CancellationToken cancellationToken
     )
     {
@@ -1581,7 +1650,9 @@ internal static class SolutionSourceLoader
         catch (Exception ex)
         {
             // Best-effort: a misbehaving generator must not abort indexing of the real source — but the
-            // dropped generated documents must be VISIBLE, not silent.
+            // dropped generated documents must be VISIBLE, not silent. Location-less (no diagnostic, no
+            // source-file rows), so the project channel is the only one that can carry it.
+            health.AddProjectFailure(project.Name, ProjectCompileFailure.GeneratorRun);
             ReportProgress(
                 progress,
                 $"WARN: source generator run failed for '{project.Name}' — its generated documents are skipped "

@@ -11,7 +11,13 @@ internal sealed record SourceFileClassification(string Status, string Confidence
 // Compilation. ExtractionStreamingTests pins that structurally. (An older shape retained a SourceModel per
 // file for the whole run — ~9 GB of bound-node caches on MedDBase, and a per-generation leak once the
 // process goes resident.)
-internal sealed record SolutionSourceSet(IReadOnlyList<SourceFileInfo> SourceFiles, IReadOnlyList<ExtractedSource> ExtractedSources);
+internal sealed record SolutionSourceSet(
+    IReadOnlyList<SourceFileInfo> SourceFiles,
+    IReadOnlyList<ExtractedSource> ExtractedSources,
+    // Where Roslyn's own error diagnostics landed during this read pass, and which projects produced
+    // nothing at all. Carried out with the facts so the query side can disclose it.
+    CompilationHealth Health
+);
 
 // One extracted file's facts, in the loader's global FilePath order (OrdinalIgnoreCase — the order the
 // *FactIndex surrogate keys are assigned in; see SolutionSourceLoader's sort).

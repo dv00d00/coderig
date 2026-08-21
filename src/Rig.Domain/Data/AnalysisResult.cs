@@ -10,5 +10,10 @@ public sealed record AnalysisResult(
     IReadOnlyList<ReferenceFact>? References = null,
     IReadOnlyList<TypeRelationFact>? TypeRelations = null,
     IReadOnlyList<DispatchFact>? DispatchFacts = null,
-    IReadOnlyList<AllocationFact>? AllocationFacts = null
+    IReadOnlyList<AllocationFact>? AllocationFacts = null,
+    // Compile-health provenance for the tree these facts were extracted from (null = not collected,
+    // e.g. a hand-built AnalysisResult in a test). Travels WITH the facts so every surface that serves
+    // them can disclose that they may be missing or wrong; the resident overlay merges it per file
+    // exactly as it merges the facts themselves (see ResidentIndex.MergeFacts).
+    CompilationHealth? CompilationHealth = null
 );

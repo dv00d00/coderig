@@ -35,6 +35,18 @@ internal static class WatchCommand
             Description = "Answer one query against the booted resident facts (e.g. --query \"reaches Program.Main\"). "
                 + "Composes with --once: boot, answer, exit.",
         };
+        // Same flag, same default, same wording as `rig index --restore` (opt-in since eb6480ff): the
+        // Restore target is the dominant cost of the build phase and rig normally indexes a tree someone
+        // already built. It was reachable through AnalyzeRetainingWorkspaceAsync but had no flag here, so
+        // an unrestored checkout could not be booted at all — every compilation came out effectively
+        // empty (1.79M "Predefined type 'System.Object' is not defined") and every answer was 0.
+        var restore = new Option<bool>("--restore")
+        {
+            Description =
+                "Run the MSBuild Restore target before each design-time build (off by default; needed only "
+                + "when the tree has not been restored/built yet — an unrestored checkout resolves no "
+                + "references, so the compilation is effectively EMPTY and every answer is 0).",
+        };
         var cmd = new Command(
             name: "watch",
             description: "Live background index: cold-analyze once retaining the workspace, then re-extract each saved .cs file "
@@ -45,6 +57,7 @@ internal static class WatchCommand
             rules,
             once,
             query,
+            restore,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -56,6 +69,7 @@ internal static class WatchCommand
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         once: pr.GetValue(once),
                         query: pr.GetValue(query),
+                        restore: pr.GetValue(restore),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -70,6 +84,7 @@ internal static class WatchCommand
         IReadOnlyList<string> extraRules,
         bool once,
         string? query,
+        bool restore,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -93,8 +108,10 @@ internal static class WatchCommand
                 rules: ruleSet,
                 buildCacheDir: buildCacheDir,
                 output: output,
+                error: error,
                 watch: !once,
-                workingDirectory: workingDirectory
+                workingDirectory: workingDirectory,
+                restore: restore
             );
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
@@ -214,6 +231,7 @@ internal sealed class WatchHost : IAsyncDisposable
 
     private readonly ResidentIndex _index;
     private readonly TextWriter _output;
+    private readonly TextWriter _error;
     private readonly RuleSet _rules;
     private readonly string _workingDirectory;
     private readonly TimeSpan _debounce;
@@ -238,10 +256,24 @@ internal sealed class WatchHost : IAsyncDisposable
     // merged-facts field on every apply/reconcile, so a reference change is exactly "the facts moved".
     private LiveFactSource? _liveFacts;
 
-    private WatchHost(ResidentIndex index, string solutionPath, RuleSet rules, string workingDirectory, TextWriter output, bool watch, TimeSpan debounce)
+    // The indexed-path set for the CURRENT fact generation, and the generation it belongs to.
+    private IReadOnlySet<string>? _indexedFiles;
+    private AnalysisResult? _indexedFilesFor;
+
+    private WatchHost(
+        ResidentIndex index,
+        string solutionPath,
+        RuleSet rules,
+        string workingDirectory,
+        TextWriter output,
+        TextWriter error,
+        bool watch,
+        TimeSpan debounce
+    )
     {
         _index = index;
         _output = output;
+        _error = error;
         _rules = rules;
         _workingDirectory = workingDirectory;
         _debounce = debounce;
@@ -288,11 +320,18 @@ internal sealed class WatchHost : IAsyncDisposable
         string? buildCacheDir,
         TextWriter output,
         bool watch,
+        // Where the compile-health footer note goes. STDERR by contract (the existing stderr-notice
+        // family), so the answer on stdout stays greppable. Null = discard, for a test that only reads
+        // the status line.
+        TextWriter? error = null,
         TimeSpan? debounce = null,
         // Where a live query resolves rules and deployments.json from — the directory `rig` was invoked in,
         // exactly as a store-backed query command uses it. Defaults to the solution's own directory, which is
         // what a test driving the host directly wants.
         string? workingDirectory = null,
+        // `rig watch --restore`: run the MSBuild Restore target before each design-time build. Off by
+        // default, exactly as `rig index --restore` is.
+        bool restore = false,
         CancellationToken cancellationToken = default
     )
     {
@@ -302,7 +341,8 @@ internal sealed class WatchHost : IAsyncDisposable
             cancellationToken: cancellationToken,
             // Match `rig index` defaults: tests excluded, dtb cache on (the caller passes the dir).
             excludeTests: true,
-            buildCacheDir: buildCacheDir
+            buildCacheDir: buildCacheDir,
+            restore: restore
         );
         var index = new ResidentIndex(workspace, baseFacts, solutionPath, rules);
         return new WatchHost(
@@ -311,6 +351,7 @@ internal sealed class WatchHost : IAsyncDisposable
             rules,
             workingDirectory ?? Path.GetDirectoryName(Path.GetFullPath(solutionPath))!,
             output,
+            error ?? TextWriter.Null,
             watch,
             debounce ?? DefaultDebounce
         );
@@ -319,14 +360,18 @@ internal sealed class WatchHost : IAsyncDisposable
     public async Task<string> GetStatusLineAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
+        string status;
         try
         {
-            return ComposeStatus();
+            status = ComposeStatus();
+            WriteCompilationHealthNote();
         }
         finally
         {
             _gate.Release();
         }
+
+        return status;
     }
 
     public async Task<IReadOnlyCollection<string>> GetUnreconciledProjectsAsync(CancellationToken cancellationToken = default)
@@ -367,6 +412,9 @@ internal sealed class WatchHost : IAsyncDisposable
         {
             facts = CurrentLiveFacts();
             disclosure = ComposeStatus();
+            // The footer rides with the answer, not only with the boot log. Stderr, so the answer on
+            // stdout stays parseable.
+            WriteCompilationHealthNote();
         }
         finally
         {
@@ -685,6 +733,7 @@ internal sealed class WatchHost : IAsyncDisposable
         {
             await _index.ReconcileAsync(cancellationToken);
             status = ComposeStatus();
+            WriteCompilationHealthNote();
         }
         finally
         {
@@ -711,13 +760,80 @@ internal sealed class WatchHost : IAsyncDisposable
 
     // The product surface (program doc, slice 5): `k project(s) unreconciled` IS the staleness
     // disclosure while the cascade is owed; when it is clear, say so plainly.
+    //
+    // COMPILE HEALTH shares this line, and for the same reason staleness does: a boot banner that
+    // scrolled past thirty seconds ago is not a disclosure on THIS answer. The rule that matters is that
+    // "all projects reconciled" — a health claim — is NOT emitted when the tree did not compile. It is
+    // replaced by what is true, quantified: how many indexed files carried compile errors, and how many
+    // projects contributed nothing at all. On a tree that compiles this adds NOTHING, which is the point:
+    // a disclosure that fires on a healthy tree is one the reader learns to skip.
     private string ComposeStatus()
     {
         var applied = Volatile.Read(ref _appliedFiles);
         var unreconciled = _index.UnreconciledProjects.Count;
-        var disclosure = unreconciled > 0 ? $"{unreconciled} project(s) unreconciled" : "all projects reconciled";
-        var line = $"live: facts current as of {applied} file(s) applied | {disclosure}";
+        var facts = _index.CurrentFacts;
+        var segments = new List<string>();
+        if (unreconciled > 0)
+        {
+            segments.Add($"{unreconciled} project(s) unreconciled");
+        }
+
+        segments.AddRange(CompilationHealthNotice.StatusSegments(facts.CompilationHealth, IndexedFiles(facts)));
+        if (segments.Count == 0)
+        {
+            segments.Add("all projects reconciled");
+        }
+
+        var line = $"live: facts current as of {applied} file(s) applied | {string.Join(" | ", segments)}";
         return _lastEditSeconds < 0 ? line : $"{line} | last edit {_lastEditSeconds:F2}s";
+    }
+
+    // The population the file count is quoted against: the distinct paths this analysis actually
+    // indexed. Memoized per fact GENERATION (the AnalysisResult instance is the generation identity all
+    // over this host), because it is rebuilt on every status line and answer and MedDBase has ~10.5k
+    // rows. Caller must hold `_gate`.
+    private IReadOnlySet<string> IndexedFiles(AnalysisResult facts)
+    {
+        if (_indexedFiles is null || !ReferenceEquals(_indexedFilesFor, facts))
+        {
+            _indexedFiles = CompilationHealthNotice.IndexedFileSet(facts);
+            _indexedFilesFor = facts;
+        }
+
+        return _indexedFiles;
+    }
+
+    // The compile-health footer note for the CURRENT generation, or an empty list when the tree
+    // compiled. Gated like every other read accessor — it reads _index.CurrentFacts, which the worker
+    // mutates.
+    public async Task<IReadOnlyList<string>> GetCompilationHealthNoteAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return ComposeCompilationHealthNote();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    // Caller must hold `_gate`.
+    private IReadOnlyList<string> ComposeCompilationHealthNote()
+    {
+        var facts = _index.CurrentFacts;
+        return CompilationHealthNotice.Note(facts.CompilationHealth, IndexedFiles(facts));
+    }
+
+    // Emit the footer note on STDERR. Called wherever an answer or a status line is served, because the
+    // note is a property of the FACTS, not of one query. Caller must hold `_gate`.
+    private void WriteCompilationHealthNote()
+    {
+        foreach (var line in ComposeCompilationHealthNote())
+        {
+            _error.WriteLine(line);
+        }
     }
 
     private static async Task<string?> ReadAllTextWithRetryAsync(string fullPath, CancellationToken cancellationToken)

@@ -180,7 +180,7 @@ public static class SolutionAnalyzer
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
-        var (sourceFiles, orderedSources, extractionResults) = await ReadAndExtractDocumentsAsync(
+        var (sourceFiles, orderedSources, extractionResults, health) = await ReadAndExtractDocumentsAsync(
             solution: solution,
             documents: documents,
             solutionFullPath: solutionFullPath,
@@ -196,7 +196,8 @@ public static class SolutionAnalyzer
 
         var sourceSet = new SolutionSourceSet(
             sourceFiles.OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            extractedSources
+            extractedSources,
+            health
         );
 
         return ExtractFromSourceSet(
@@ -235,7 +236,7 @@ public static class SolutionAnalyzer
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
-        var (sourceFiles, orderedSources, extractionResults) = await ReadAndExtractDocumentsAsync(
+        var (sourceFiles, orderedSources, extractionResults, health) = await ReadAndExtractDocumentsAsync(
             solution: solution,
             documents: documents,
             solutionFullPath: solutionFullPath,
@@ -262,6 +263,18 @@ public static class SolutionAnalyzer
             builders[sourceFile.FilePath].SourceFiles.Add(sourceFile);
         }
 
+        // Compile health is a per-file fact like any other, so it rides the same replacement grain: a
+        // re-extracted file whose diagnostics are now CLEAN contributes an EMPTY list here, which drops
+        // its base row on merge. That is the whole mechanism by which a fixed file stops being flagged —
+        // in a resident process a flag that only ever accumulates would stick for the process lifetime.
+        foreach (var fileHealth in health.Files)
+        {
+            if (builders.TryGetValue(fileHealth.FilePath, out var healthBuilder))
+            {
+                healthBuilder.CompileHealth.Add(fileHealth);
+            }
+        }
+
         for (var i = 0; i < orderedSources.Count; i++)
         {
             var facts = extractionResults[i];
@@ -284,7 +297,8 @@ public static class SolutionAnalyzer
                 References: builder.References,
                 TypeRelations: builder.TypeRelations,
                 Dispatch: builder.Dispatch,
-                Allocations: builder.Allocations
+                Allocations: builder.Allocations,
+                CompileHealth: builder.CompileHealth
             );
         }
 
@@ -300,6 +314,7 @@ public static class SolutionAnalyzer
         public List<TypeRelationFact> TypeRelations { get; } = [];
         public List<DispatchFact> Dispatch { get; } = [];
         public List<AllocationFact> Allocations { get; } = [];
+        public List<FileCompileHealth> CompileHealth { get; } = [];
     }
 
     // Shared front half of the two per-document entry points above: classify + read + bind the given
@@ -310,7 +325,8 @@ public static class SolutionAnalyzer
     private static async Task<(
         List<SourceFileInfo> SourceFiles,
         List<SourceModel> OrderedSources,
-        SourceExtractionResult[] ExtractionResults
+        SourceExtractionResult[] ExtractionResults,
+        CompilationHealth Health
     )> ReadAndExtractDocumentsAsync(
         Microsoft.CodeAnalysis.Solution solution,
         IReadOnlyCollection<DocumentId> documents,
@@ -321,6 +337,7 @@ public static class SolutionAnalyzer
     {
         var sources = new List<SourceModel>();
         var sourceFiles = new List<SourceFileInfo>();
+        var health = new CompilationHealthCollector();
 
         foreach (var projectGroup in documents.GroupBy(d => d.ProjectId))
         {
@@ -377,13 +394,38 @@ public static class SolutionAnalyzer
 
                 // Bind through the project compilation (not document.GetSemanticModelAsync), exactly as
                 // LoadProjectSourcesAsync does — the document's tree is one of this compilation's trees.
+                var semanticModel = compilation.GetSemanticModel(tree);
+
+                // Per-TREE diagnostics, not the whole-project compilation.GetDiagnostics() the cold pass
+                // runs. Two reasons, both load-bearing:
+                //   - COST: a whole-project bind per single-file re-extract would defeat this path's
+                //     point (the same reason this method has no project-wide diagnostics pass at all).
+                //     Per-tree binds only the trees this call is already binding for extraction.
+                //   - GRAIN: the per-file bucket wants exactly the diagnostics located in THIS file,
+                //     which is exactly what SemanticModel.GetDiagnostics() reports. Diagnostics located
+                //     in OTHER files are that file's business, and the cascade re-extracts it (spec 4.1:
+                //     the error from breaking a declaration lands in the DEPENDENT, and Roslyn re-reports
+                //     it there, so per-file scope needs no propagation).
+                // Consequence, stated: compilation-LEVEL (location-less) diagnostics are not observed on
+                // this path, so an incremental generation keeps the cold load's UnlocatedErrorCount.
+                foreach (var diagnostic in semanticModel.GetDiagnostics(cancellationToken: cancellationToken))
+                {
+                    if (diagnostic.Severity == DiagnosticSeverity.Error)
+                    {
+                        // Key on the DOCUMENT's path, not the diagnostic's reported path: the resident
+                        // overlay replaces by that exact string, and a differently-normalised key would
+                        // leave a stale flag nothing can clear.
+                        health.AddError(diagnostic, document.FilePath);
+                    }
+                }
+
                 sources.Add(
                     new SourceModel(
                         ProjectName: project.Name,
                         FilePath: document.FilePath,
                         Tree: tree,
                         Root: root,
-                        SemanticModel: compilation.GetSemanticModel(tree)
+                        SemanticModel: semanticModel
                     )
                 );
             }
@@ -395,7 +437,7 @@ public static class SolutionAnalyzer
         var orderedSources = sources.OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
         var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
         var extractionResults = ExtractProject(orderedSources, rules, diMethodNames, parallelism: null);
-        return (sourceFiles, orderedSources, extractionResults);
+        return (sourceFiles, orderedSources, extractionResults, health.Build());
     }
 
     // Per-PROJECT extraction sink (live-background-index slice 2), invoked by the loader while that
@@ -549,7 +591,8 @@ public static class SolutionAnalyzer
             References: referenceFacts,
             TypeRelations: typeRelationFacts,
             DispatchFacts: dispatchFacts,
-            AllocationFacts: allocationFacts
+            AllocationFacts: allocationFacts,
+            CompilationHealth: sourceSet.Health
         );
     }
 
