@@ -215,6 +215,29 @@ internal static class EffectDerivation
         // and the caller-supplied set (DeriveCommand / the cached effect wrapper) is the warm reuse.
         unfilteredEffects ??= await DeriveHazardEffectsAsync(context, rules);
 
+        return await GraphHazardFindingsAsync(
+            rules: rules,
+            shapedGraph: shapedGraph,
+            unfilteredEffects: unfilteredEffects,
+            // Deferred, not awaited eagerly: the static-field universe is loaded ONLY inside the
+            // static_init_capture arm on the store path, and a live caller must not pay a whole-symbol scan
+            // for a rule section that is absent.
+            staticFieldIds: () => Reads.LoadStaticFieldIdsAsync(context)
+        );
+    }
+
+    // The graph-tier hazard derivation itself, with EVERY store touch hoisted into its three FEEDS (the shaped
+    // graph, the unfiltered whole-store effect set, the static-field universe). Factored out so the LIVE path
+    // runs the SAME classification over in-memory feeds instead of a second, drifting copy of it — the same
+    // single-sourcing the FactInvocation / CallEdge projections already got. The union ORDER (event_cycle,
+    // cache_coherence, static_init_capture) is load-bearing: it is the order `derive` renders findings in.
+    internal static async Task<IReadOnlyList<DeriveCommand.HazardFinding>> GraphHazardFindingsAsync(
+        RuleSet rules,
+        FactGraphData shapedGraph,
+        IReadOnlyList<DerivedEffect> unfilteredEffects,
+        Func<Task<IReadOnlySet<string>>> staticFieldIds
+    )
+    {
         var findings = new List<DeriveCommand.HazardFinding>();
 
         // event_cycle: a feedback cycle that closes through ≥1 publish→consumer delivery edge. Always derived
@@ -255,7 +278,7 @@ internal static class EffectDerivation
                     FactStaticInitCaptureDeriver.Derive(
                         effects: unfilteredEffects,
                         spec: new StaticInitCaptureSpec(MutableSourcePatterns: sic.MutableSources),
-                        staticFieldIds: await Reads.LoadStaticFieldIdsAsync(context)
+                        staticFieldIds: await staticFieldIds()
                     )
                 )
             );

@@ -1,4 +1,5 @@
 using Rig.Cli.CommandLine;
+using Rig.Cli.Commands;
 using Rig.Cli.Deployments;
 using Rig.Cli.EntryPoints;
 using Rig.Cli.Rendering;
@@ -177,6 +178,42 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
         IReadOnlyList<HandoffEntryPoint> ClassifiedHandoffs,
         IReadOnlyList<DerivedEntryPoint> PromotedOrigins
     )> DeriveEntryPointsAsync(FactEntryPointDeriver.FactEntryPointData epData, RuleSet rules) => Task.FromResult(EntryPointSets(rules, epData));
+
+    // ---- `tree` only, below. ----
+
+    // The per-GENERATION artifact memo, in place of `.rig/cache.db` (asymmetry 2 above, now load-bearing rather
+    // than theoretical: `tree` is the first cached command on this path). The memo lives on the LiveFactSource,
+    // not on this adapter — this adapter is built PER QUERY, so a memo here would never survive to serve the
+    // second question. `useCache:false` yields a memo-less cache that behaves exactly like the store's disabled
+    // one (every Get a miss, every Put dropped).
+    public IQueryArtifactCache OpenArtifactCache(bool useCache) => new LiveQueryArtifactCache(useCache ? Source.ArtifactMemo : null);
+
+    // `rulesHash` and `useCache` are the STORE's cache-key inputs and have no live analogue: the generation is
+    // the cache, and a rules edit that the command has reloaded cannot silently alias a generation's memo (the
+    // hazard artifacts are memoized on the LiveFactSource under the rules the FACTS were extracted with — the
+    // same construction, and the same caveat, as SameShapingAsMemo above; widen this when the live surface
+    // gains `--rules`). `gate` IS honoured: an ungated set is a different set, so it derives fresh.
+    public Task<IReadOnlyList<DerivedEffect>> HazardEffectsAsync(string rulesHash, RuleSet rules, bool useCache, bool gate) =>
+        Task.FromResult(Source.HazardEffectsFor(gate));
+
+    public Task<IReadOnlyList<DeriveCommand.HazardFinding>> GraphHazardFindingsAsync(string rulesHash, RuleSet rules, bool useCache) =>
+        Source.GraphHazardFindingsAsync();
+
+    // Tier 3 of EntryPointContext.LoadOrDeriveEpSiteKindAsync, in memory — the SAME map BuildEpContextAsync
+    // above flattens for its chip, through the same EpSiteKind memo, so the tree's ▶ chip and the `callers
+    // --entrypoints` listing cannot disagree. Tiers 1 (the materialized entry_point_sites table) and 2 (the
+    // cache.db query cache) do not exist here by construction; `workingDirectory`/`extraRules`/`useCache` are
+    // their inputs and are unused for that reason.
+    public Task<IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>> EpSiteKindAsync(
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        RuleSet rules,
+        bool useCache,
+        FactEntryPointDeriver.FactEntryPointData? epData
+    ) => Task.FromResult(EpSiteKind(rules, epData));
+
+    public Task<IReadOnlyList<SymbolRef>> LibraryCallSitesAsync(IReadOnlyCollection<string> enclosingIds) =>
+        Task.FromResult(LiveReads.LibraryCallSites(Source.Facts, enclosingIds));
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 

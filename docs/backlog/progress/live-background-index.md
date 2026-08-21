@@ -965,3 +965,69 @@ Diagnostics go to `Console.Error` directly rather than the CLI's injected error 
 the real process stderr. And the per-line `~compile-error` chip remains the follow-on: this slice gives
 COMPLETENESS (it fires whenever any file or project is affected, including the blind spots a chip cannot
 cover — a lost dispatch edge has no file to flag); the chip gives LOCALITY.
+
+## API COMPAT slice 2 2026-08-21 — `tree` live, and the cache question answered
+
+`tree` (the largest command, ~921 lines, and the only CACHED one) now answers from the resident index.
+**Byte-identical to the store on stdout across 24 comparisons** on two playgrounds, covering the whole
+view/format matrix — default, `--view full`, `--view hazards`, `--view effects`, `--view summary`,
+`--format tsv`, node-budget truncation, depth truncation, the no-match/exit-1 case, and the EP-chip case.
+Truncation was exercised deliberately (`⋯elided` asserted present in three cases) because `TruncationCause` is
+cached state, so a cache-key mistake surfaces exactly there.
+
+### The cache seam: a replacement, not a no-op
+
+The slice added a SECOND seam next to `IQueryFactSource` — `IQueryArtifactCache`, i.e. *where a query memoizes
+derived artifacts*: `StoreQueryArtifactCache` over `.rig/cache.db` (same `QueryCache.Open`, same codecs, same key
+material) and `LiveQueryArtifactCache` over a per-generation bounded memo (objects, not blobs). That is the
+honest shape: the live arm is not a disabled cache, it is a different cache with the same contract. A new
+`AnalysisResult` means a new `LiveFactSource` means a new empty memo — **stronger than a store-identity token,
+because two generations cannot share a slot at all.**
+
+The live memo reuses `QueryCacheKeys.TreeCacheKey` — the same function — keeping every axis except store
+identity: schema, rules fingerprint, pattern, depth, node budget, mode, raw. The collision proof is a test that
+predicts the key from OUTSIDE the command, asserts the memo empty before and populated under exactly that key
+after, then asserts a `--limit`-only variant lands in a DIFFERENT slot and produces a measurably smaller forest
+(1 node vs 3, `⋯elided` present in one answer and absent in the other). Plus a test that a live query never
+touches `.rig/**/cache.db`, with the store query as positive control.
+
+### `HazardEffects` in memory: 3.4s, and the recommendation is DON'T warm
+
+Measured on the restored clone (445,235 symbols / 2,437,358 refs) via a new opt-in harness:
+
+| artifact | in-memory |
+|---|---|
+| `hazardEffects` | **3.4s** (362,368 effects) — the store path's ~18s SQL-cold artifact |
+| `shapedGraph` | 3.9s |
+| `graphHazardFindings` | 5.0s (forces `shapedGraph`; ~1.1s of classification on top) |
+| the already-warmed query set | 6.2s |
+
+So the SQL read *was* most of the 18s. But the marginal warm cost is ~8.4s, which would more than double the warm
+window (6.2s -> ~14.6s) for an arm most queries never touch — and warming is bounded by what the worker's next
+apply must not queue behind, with a `Lazy` factory being uninterruptible once entered. **Left lazy, cost disclosed
+where it is paid** (`hazardEffects 3423.5ms | shapedGraph 3859.0ms | graphHazardFindings 4952.1ms`), and every
+later hazards query in the generation pays nothing. Measure-then-decide, not switch-on-because-available.
+
+### The one divergence is a CONFIRMATION, not a new finding
+
+`tree` has the already-filed
+[intrinsic-hint](../todo/intrinsic-hint-counted-before-reachability-filter.md) bug — and in EVERY view, not just
+hazards, which that item explicitly asked someone to check. Same pattern as the `reaches` measurement named
+(`TeamRepository.AddAsync`), 1 of 5, stderr only. The item now records the confirmed blast radius: `reaches` and
+`tree` (all views); `path`/`callers` do not emit the hint.
+
+### A per-query cost found by reading the code, not the instrument
+
+[Live EP derivation is per-QUERY, not per-generation](../todo/live-ep-derivation-is-per-query-not-per-generation.md):
+`LiveQueryRunner` constructs a fresh `LiveQueryFactSource` per query, so its `_entryPoints`/`_epSiteKind` memos
+die with the query — and what they memoize includes a full `FactGraphProjection.FromAnalysis` over every
+reference fact (~2.4M on MedDBase, ~2.3-3.3s by the equivalent artifact's measurement). It runs whenever
+`deployments.json` exists, which it does on the real analysis dir.
+
+This is the SECOND artifact to hide this way (after `eventSubscriptionSites`), and the reason is identical: it is
+not on `LiveFactSource`, so it is not in `BuildTimes`, so no measurement this program has built can see it.
+**The real invariant is "is it on `LiveFactSource`?", not "is it memoized?"** — worth stating as a rule, because
+reading the instrument would never have found either one.
+
+Filed rather than fixed in review: the key must be the rules FINGERPRINT, not the `RuleSet` instance, because
+`TreeCommand` reloads rules per query and reference-keying would silently preserve the bug at zero hit rate.

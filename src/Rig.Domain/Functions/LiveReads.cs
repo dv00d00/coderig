@@ -182,6 +182,41 @@ public static class LiveReads
             .Select(g => g.First())
             .ToList();
 
+    // Mirrors Reads.LoadLibraryCallSitesAsync: invocation refs to a target that is NOT first-party
+    // (`!TargetInSource`), bounded to the given enclosing methods — the unresolved LIBRARY call sites
+    // `tree --view full` promotes to leaf nodes. NO dedup on either side (the store's `Chunk(500)` is SQL
+    // parameter batching, not a projection concern) and the row order is the reference-fact order, which is the
+    // insertion order the store's rowid scan returns for a single-run store.
+    // Kept in lockstep with Reads by LiveTreeTests (byte-equal `--view full` renderings) and its direct twin
+    // assertion there.
+    public static IReadOnlyList<SymbolRef> LibraryCallSites(AnalysisResult result, IReadOnlyCollection<string> enclosingIds)
+    {
+        var wanted = enclosingIds.ToHashSet(StringComparer.Ordinal);
+        return (result.References ?? [])
+            .Where(r =>
+                r.RefKind == RefKinds.Invocation && !r.TargetInSource && r.EnclosingSymbolId != null && wanted.Contains(r.EnclosingSymbolId)
+            )
+            .Select(r => new SymbolRef(
+                Target: r.TargetSymbolId,
+                Enclosing: r.EnclosingSymbolId,
+                FilePath: r.FilePath,
+                Line: r.Line,
+                EnclosingGuards: r.EnclosingGuards
+            ))
+            .ToList();
+    }
+
+    // Mirrors Reads.LoadStaticFieldIdsAsync: the DocIDs of every STATIC field symbol — the universe the
+    // static_init_capture graph-tier hazard gates its findings against. Same Distinct, same ordinal
+    // `static` token test as VolatileFieldIds (Modifiers is Roslyn-generated and always lower-case, so the
+    // store's case-insensitive `LIKE '%static%'` and this ordinal Contains cannot diverge).
+    // Kept in lockstep with Reads by LiveTreeTests.
+    public static IReadOnlySet<string> StaticFieldIds(AnalysisResult result) =>
+        (result.Symbols ?? [])
+            .Where(s => s.Kind == SymbolKinds.Field && s.Modifiers.Contains("static", StringComparison.Ordinal))
+            .Select(s => s.SymbolId)
+            .ToHashSet(StringComparer.Ordinal);
+
     // Mirrors Reads.LoadStaticFieldAccessRefsByKindAsync: BOTH static-field-access arms from one pass over the
     // read/write refs, joined to the symbol facts on a STATIC target (the fact layer's only source of the
     // accessed slot's modifiers), partitioned by kind and deduped per partition by (FilePath, Line, Target).

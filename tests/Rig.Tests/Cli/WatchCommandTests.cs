@@ -92,7 +92,7 @@ public sealed class WatchCommandTests
             .ToString()
             .ShouldContain(
                 "live: unsupported query 'impact' — supported live queries: `reaches <pattern>`, `path <from> <to>`, "
-                    + "`callers <to>`; `quit` (or EOF) exits."
+                    + "`callers <to>`, `tree <pattern>`; `quit` (or EOF) exits."
             );
     }
 

@@ -21,12 +21,13 @@ namespace Rig.Cli.Live;
 // failure on a mistyped query would make the whole live surface feel broken.
 internal static class LiveQueryRunner
 {
-    // NOTE ON WORD ORDER: the two verbs added in this slice are APPENDED after the `quit` clause rather than
-    // interleaved with `reaches`, because WatchCommandTests pins the leading sentence verbatim and this slice
-    // is not allowed to retarget that assertion. Reword (and update the one string literal in that test)
-    // whenever the list next changes; the content here is complete either way.
+    // NOTE ON WORD ORDER: verbs are APPENDED to the list, before the `quit` clause, and WatchCommandTests pins
+    // this sentence verbatim — so adding one means updating that one string literal too (the assertion's
+    // SUBJECT is unchanged: the banner enumerates exactly the verbs that route). Keep doing it that way rather
+    // than loosening the assertion to a substring: an inaccurate banner tells a user a feature doesn't exist.
     internal const string Usage =
-        "supported live queries: `reaches <pattern>`, `path <from> <to>`, `callers <to>`; `quit` (or EOF) exits.";
+        "supported live queries: `reaches <pattern>`, `path <from> <to>`, `callers <to>`, `tree <pattern>`; "
+        + "`quit` (or EOF) exits.";
 
     // One answer, with the command's two streams kept SEPARATE. Splitting them is not fussiness: the CLI puts
     // the answer on stdout and disclosures (ambiguity, seed notes) on stderr, and a test that claims live
@@ -63,6 +64,11 @@ internal static class LiveQueryRunner
         if (string.Equals(verb, "callers", StringComparison.OrdinalIgnoreCase))
         {
             return argument.Length == 0 ? Rejected("`callers` needs a target pattern") : await CallersAsync(argument, facts, workingDirectory);
+        }
+
+        if (string.Equals(verb, "tree", StringComparison.OrdinalIgnoreCase))
+        {
+            return argument.Length == 0 ? Rejected("`tree` needs an entry-point pattern") : await TreeAsync(argument, facts, workingDirectory);
         }
 
         if (string.Equals(verb, "path", StringComparison.OrdinalIgnoreCase))
@@ -135,6 +141,52 @@ internal static class LiveQueryRunner
                 Format: null,
                 Limit: null,
                 Time: false
+            ),
+            new CommandIo(new TextOutput(Output: output, Error: error), new WorkspaceLocation(WorkingDirectory: workingDirectory)),
+            () => Task.FromResult<IQueryFactSource>(source)
+        );
+
+        return new LiveAnswer(Exit: exit, Out: output.ToString(), Err: error.ToString());
+    }
+
+    // `tree <pattern>` — the call TREE, answered off the resident facts. Same shape as ReachesAsync: the DEFAULT
+    // options record, so this is `--view paths` with no filters and no --format, directly comparable to
+    // `rig tree <pattern>` against a store of the same tree (LiveTreeTests compares exactly that, and drives the
+    // command directly for the view/format matrix the live surface doesn't expose yet).
+    //
+    // NoCache is FALSE here, i.e. caching ON — which on this path means the fact generation's in-memory memo
+    // (LiveQueryFactSource.OpenArtifactCache), never `.rig/cache.db`. Passing NoCache: true would be the wrong
+    // "safe" choice: it would recompute the forest for every repeat question, which is precisely the cost a
+    // resident host exists to avoid.
+    private static async Task<LiveAnswer> TreeAsync(string pattern, LiveFactSource facts, string workingDirectory)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var source = new LiveQueryFactSource(facts);
+        var exit = await TreeCommand.RunAsync(
+            new TreeCommand.Options(
+                FromPattern: pattern,
+                View: "paths",
+                Async: false,
+                IncludeDelivery: false,
+                Raw: false,
+                Files: false,
+                Signatures: false,
+                Plain: false,
+                Guards: false,
+                ExtraRules: [],
+                Depth: null,
+                Limit: null,
+                Only: CommonOptions.FilterSet(null),
+                Exclude: CommonOptions.FilterSet(null),
+                Intrinsic: false,
+                ExcludeNamespaces: CommonOptions.NamespacePrefixes(null),
+                NoCache: false,
+                Gate: true,
+                Amplification: true,
+                Time: false,
+                Format: null,
+                Suppress: null
             ),
             new CommandIo(new TextOutput(Output: output, Error: error), new WorkspaceLocation(WorkingDirectory: workingDirectory)),
             () => Task.FromResult<IQueryFactSource>(source)

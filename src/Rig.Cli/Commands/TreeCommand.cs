@@ -1,6 +1,7 @@
 using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Live;
 using Rig.Cli.Rendering;
 using Rig.Cli.Services;
 using Rig.Domain.Data;
@@ -9,7 +10,6 @@ using Rig.Storage.Queries;
 using static Rig.Cli.Caching.QueryCacheKeys;
 using static Rig.Cli.Effects.EffectDerivation;
 using static Rig.Cli.EntryPoints.EntryPointContext;
-using static Rig.Cli.Graph.TraversalGraphLoader;
 using static Rig.Cli.Rendering.LlmSummaryRenderer;
 using static Rig.Cli.Rendering.SymbolNameFormatter;
 using static Rig.Cli.Rendering.TreeRenderer;
@@ -217,7 +217,8 @@ internal static class TreeCommand
     // Bound option values for `rig tree`. Raw user inputs (View/Format/Suppress kept as the parsed strings);
     // the flag derivations (view -> full/summary/…, format -> llm/llm-ids/tsv, suppress parsing) live at the
     // top of RunAsync, so the cross-flag derivation lives in one place rather than split across SetAction.
-    private sealed record Options(
+    // Internal (was private) so the LIVE query path can build the same options record for the same RunAsync.
+    internal sealed record Options(
         string FromPattern,
         string View,
         bool Async,
@@ -244,7 +245,24 @@ internal static class TreeCommand
         string? Suppress
     );
 
-    private static async Task<int> RunAsync(Options opts, CommandIo io)
+    // The CLI entry: answer off the .rig store, which is what every `rig tree` invocation does. The source is
+    // passed as a FACTORY, not an already-open source, purely to preserve ORDERING: the schema gate must still
+    // fire where the old `await using var context = …` sat (after the rules load and the unknown-filter-token
+    // warning), not before them.
+    private static Task<int> RunAsync(Options opts, CommandIo io) =>
+        RunAsync(opts, io, () => StoreQueryFactSource.OpenAsync(io.WorkspaceLocation));
+
+    // The command body, parameterized on WHERE the facts come from (IQueryFactSource) rather than on a
+    // RigDbContext — so the SAME body answers off a saved store or off the resident live facts, and a
+    // live-served tree is the same answer rather than a parallel one.
+    //
+    // `tree` is the only one of the four migrated traversals that is CACHED, and that is the whole difficulty
+    // of this migration. The cache is not removed on the live path and it is not faked either: the SLOTS and
+    // the KEY DERIVATION below are shared (QueryCacheKeys), and only WHERE the artifact lands differs —
+    // `.rig/cache.db` for a store, the fact generation's in-memory memo for the live index (see
+    // IQueryArtifactCache). So the live memo's key axes are the disk key's axes with the store-identity axis
+    // replaced by "the generation owns the dictionary": a cache-key mistake cannot exist on one path only.
+    internal static async Task<int> RunAsync(Options opts, CommandIo io, Func<Task<IQueryFactSource>> openSource)
     {
         // Flags derived from the raw option values, in one place (not split into SetAction): the --view
         // string fans into the projection bools, and --format into the llm/llm-ids/tsv selectors.
@@ -279,31 +297,35 @@ internal static class TreeCommand
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
         var renderRules = opts.Raw ? FactRenderRules.Empty : rules.Render;
 
-        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
+        await using var source = await openSource();
         var timer = new PhaseTimer(opts.Time, io.TextOutput.Error);
 
         // Query cache (best-effort, opt-out via --no-cache). A `rig tree` query recomputes the call-tree
         // forest (BuildTree) AND its effects (the ~3.8s dominant cost); both are a pure function of the
-        // store + effective rules + traversal params. Cache the pair in a separate writable `.rig/cache.db`
-        // (rig.db itself is opened read-only); a repeat query skips both and only re-loads the cheaper graph
-        // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
-        var rigDir = StoreLayout.ResolveReadStoreDir(io.WorkspaceLocation);
-        var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
+        // FACTS + effective rules + traversal params. Cache the pair through the source's artifact cache — a
+        // separate writable `.rig/cache.db` on the store path (rig.db itself is opened read-only), the fact
+        // generation's memo on the live one; a repeat query skips both and only re-loads the cheaper graph to
+        // render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change (and on
+        // the live path a new generation is a new memo, which is the same guarantee by construction).
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // F6: reuse paths Load resolved.
-        using var cache = opts.NoCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
-        ForestCacheKey? cacheKey = cache is null
-            ? null
-            : TreeCacheKey(
-                storeKey: storeKey,
-                rulesHash: rulesHash,
-                fromPattern: opts.FromPattern,
-                maxDepth: maxDepth,
-                maxNodes: maxNodes,
-                mode: mode,
-                raw: opts.Raw
-            );
+        using var cache = source.OpenArtifactCache(useCache: !opts.NoCache);
+        // Always non-null now: a disabled/unopenable cache is one that MISSES (see IQueryArtifactCache), so the
+        // key is derived unconditionally and it is the Get/Put that no-ops. Same observable behaviour as the
+        // old `cache is null ? null : …` key, one less nullable to thread through five sites.
+        var cacheKey = TreeCacheKey(
+            // The store-identity axis: rig.db size+mtime on the store path; the constant "live" on the live
+            // path, where the per-generation memo IS that axis. Every other axis below is shared verbatim, so
+            // the two paths cannot disagree about what a cached tree is a function of.
+            storeKey: cache.StoreKey,
+            rulesHash: rulesHash,
+            fromPattern: opts.FromPattern,
+            maxDepth: maxDepth,
+            maxNodes: maxNodes,
+            mode: mode,
+            raw: opts.Raw
+        );
 
-        var cached = cacheKey is { } ck && cache!.Get(ck.Value) is { } blob ? TreeCacheCodec.Decode(blob) : null;
+        var cached = cache.Get(cacheKey.Value, TreeCacheCodec.Decode);
         // Render data the graph would otherwise be reloaded to produce, split by filter-dependence so the
         // filter-independent half isn't duplicated across --only/--exclude combos:
         //   - locations (method DocID -> file:line) are filter- AND hazard-independent → keyed by the forest
@@ -311,13 +333,17 @@ internal static class TreeCommand
         //   - seam summaries are derived from the FILTERED effects → keyed by the forest key + the filter
         //     signature (`:seam:<sig>`), since filters are absent from the forest key.
         var filterSig = EffectFilterSignature(only: opts.Only, exclude: opts.Exclude, intrinsic: opts.Intrinsic);
-        RenderSidecarKey? sidecar = cacheKey is { } sk ? new RenderSidecarKey(sk, filterSig, Hazards: hazards, Gate: opts.Gate) : null;
-        var locKey = sidecar?.Locations();
-        var seamKey = sidecar?.Seam();
-        var cachedLocations =
-            cached is not null && locKey is not null && cache!.Get(locKey) is { } locBlob ? LocationsCodec.Decode(locBlob) : null;
-        var cachedSeam =
-            cached is not null && seamKey is not null && cache!.Get(seamKey) is { } seamBlob ? SeamCodec.Decode(seamBlob) : null;
+        var sidecar = new RenderSidecarKey(cacheKey, filterSig, Hazards: hazards, Gate: opts.Gate);
+        var locKey = sidecar.Locations();
+        var seamKey = sidecar.Seam();
+        // Still gated on `cached is not null`: a sidecar without the forest it hangs off is unusable, and
+        // reading it would be a pointless cache round-trip on every cold query.
+        IReadOnlyDictionary<string, (string? File, int Line)>? cachedLocations = cached is null
+            ? null
+            : cache.Get<IReadOnlyDictionary<string, (string? File, int Line)>>(locKey, LocationsCodec.Decode);
+        IReadOnlyDictionary<string, List<string>>? cachedSeam = cached is null
+            ? null
+            : cache.Get<IReadOnlyDictionary<string, List<string>>>(seamKey, SeamCodec.Decode);
         // A render with NO graph load needs the forest + BOTH render halves cached.
         var fullHit = cached is not null && cachedLocations is not null && cachedSeam is not null;
         timer.Lap($"cache lookup (forest={cached is not null}, render={fullHit})");
@@ -341,15 +367,10 @@ internal static class TreeCommand
             // shaped graph to render — locations/seam are written below so the NEXT query is a full hit.
             roots = cached.Forest;
             effects = cached.Effects;
-            graph = await LoadShapedTraversalGraphAsync(
-                context: context,
-                pattern: opts.FromPattern,
-                direction: SqlReachability.Direction.Forward,
-                shaped
-            );
+            graph = await source.LoadShapedTraversalGraphAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
             if (!opts.Raw)
             {
-                graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+                graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
             }
 
             timer.Lap("graph load + event marking (cache hit)");
@@ -361,7 +382,7 @@ internal static class TreeCommand
             // reuses this command's already-open context + already-shaped rules; graph + EP data flow back for
             // the downstream render stages (locations, seam, EP-site chips, --full library calls) and caching.
             var computation = await TreeQueryService.ComputeAsync(
-                context: context,
+                source: source,
                 rules: rules,
                 shaped: shaped,
                 fromPattern: opts.FromPattern,
@@ -377,9 +398,9 @@ internal static class TreeCommand
             timer.Lap("compute (graph + BuildTree + effects)");
             // Cache the UNFILTERED forest+effects (--only/--exclude are applied below so they don't fragment
             // the key). Only when the pattern matched — an empty forest isn't worth a cache slot.
-            if (roots.Count > 0 && cacheKey is { } pk)
+            if (roots.Count > 0)
             {
-                TryCache(() => cache!.Put(pk.Value, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects))));
+                cache.Put(cacheKey.Value, new TreeCachePayload(roots, effects), TreeCacheCodec.Encode);
             }
         }
 
@@ -423,10 +444,7 @@ internal static class TreeCommand
                 CollectTreeMethods(root, treeMethods);
             }
 
-            var hazardEffects = await LoadOrDeriveHazardEffectsAsync(
-                context: context,
-                rigDirectory: rigDir,
-                storeKey: storeKey,
+            var hazardEffects = await source.HazardEffectsAsync(
                 rulesHash: rulesHash,
                 rules: rules,
                 useCache: !opts.NoCache,
@@ -441,10 +459,7 @@ internal static class TreeCommand
             // SAME store+rules-keyed cache `derive` populates (a warm tree is a cache hit — NO graph load), then
             // filtered to the tree's reachable methods exactly as the effect-attached set is. Appended so they
             // get BOTH the inline ⚠ mark (via hazardsByMethod below) AND the tsv `hazard` rows.
-            var graphHazardFindings = await LoadOrDeriveGraphHazardFindingsAsync(
-                context: context,
-                rigDirectory: rigDir,
-                storeKey: storeKey,
+            var graphHazardFindings = await source.GraphHazardFindingsAsync(
                 rulesHash: rulesHash,
                 rules: rules,
                 useCache: !opts.NoCache
@@ -530,7 +545,7 @@ internal static class TreeCommand
             return 0;
         }
 
-        var deployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
+        var deployments = await source.LoadDeploymentsAsync(io.WorkspaceLocation.WorkingDirectory);
         // EP context is built from `locations` (not the graph), so it works on the no-graph full-hit path.
         // The expensive, pattern-independent site->kind map is its own cache (LoadOrDeriveEpSiteKind).
         // F2: thread the EpData the cold-path EF-fallback load already carried (null on cache hits / SQL
@@ -540,8 +555,7 @@ internal static class TreeCommand
             : new EpRenderContext(
                 Deployments: deployments,
                 SiteById: locations,
-                EpSiteKind: await LoadOrDeriveEpSiteKindAsync(
-                    context: context,
+                EpSiteKind: await source.EpSiteKindAsync(
                     workingDirectory: io.WorkspaceLocation.WorkingDirectory,
                     extraRules: opts.ExtraRules,
                     rules: rules,
@@ -658,16 +672,12 @@ internal static class TreeCommand
             // (`:libcalls`), recomputed only when the forest changes, not on every --full run. The `g2` suffix
             // versions the payload: SymbolRef gained EnclosingGuards, so pre-guard blobs must miss (else a
             // stale cache hit would decode null guards and silently drop the ⎇ markers).
-            var libCallsKey = cacheKey is { } lk ? lk.Value + ":libcalls-g2" : null;
-            var libCalls = libCallsKey is not null && cache!.Get(libCallsKey) is { } lcBlob ? LibCallsCodec.Decode(lcBlob) : null;
+            var libCallsKey = cacheKey.Value + ":libcalls-g2";
+            var libCalls = cache.Get<IReadOnlyList<SymbolRef>>(libCallsKey, LibCallsCodec.Decode);
             if (libCalls is null)
             {
-                var loaded = await Reads.LoadLibraryCallSitesAsync(context, treeMethods);
-                libCalls = loaded;
-                if (libCallsKey is not null)
-                {
-                    TryCache(() => cache!.Put(libCallsKey, LibCallsCodec.Encode(loaded)));
-                }
+                libCalls = await source.LibraryCallSitesAsync(treeMethods);
+                cache.Put(libCallsKey, libCalls, LibCallsCodec.Encode);
             }
             foreach (
                 var c in libCalls
@@ -771,14 +781,10 @@ internal static class TreeCommand
         // (see RenderSidecarKey.Seam), so the augmented --hazards seam can never taint the plain-tree seam —
         // tainting is impossible across distinct slots — and the seam write is therefore UNCONDITIONAL.
         var locById = opts.Files ? locations : null;
-        if (graph is not null && locKey is not null)
+        if (graph is not null)
         {
-            TryCache(() => cache!.Put(locKey, LocationsCodec.Encode(locations)));
-        }
-
-        if (graph is not null && seamKey is not null)
-        {
-            TryCache(() => cache!.Put(seamKey, SeamCodec.Encode(seamEffects)));
+            cache.Put(locKey, locations, LocationsCodec.Encode);
+            cache.Put(seamKey, seamEffects, SeamCodec.Encode);
         }
 
         // Print-order source-loc dedup: collapse a repeated trailing path (the --full call-site/leaf locs AND

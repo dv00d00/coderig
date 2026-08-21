@@ -37,6 +37,7 @@ internal sealed class LiveFactSource
     private readonly Lazy<ISet<EventSubscriptionSite>> _eventSubscriptionSites;
     private readonly Lazy<IReadOnlyList<DerivedEffect>> _effects;
     private readonly Lazy<IReadOnlyList<DerivedEffect>> _hazardEffects;
+    private readonly Lazy<Task<IReadOnlyList<Commands.DeriveCommand.HazardFinding>>> _graphHazardFindings;
 
     public LiveFactSource(AnalysisResult facts, RuleSet rules)
     {
@@ -49,7 +50,20 @@ internal sealed class LiveFactSource
         _throwRefs = Memo("throwRefs", () => LiveReads.ThrowRefs(facts));
         _eventSubscriptionSites = Memo("eventSites", () => LiveReads.EventSubscriptionSites(facts));
         _effects = Memo("effects", () => QueryEffectDerivation.ForReach(rules, ReachInputs, TraversalGraph));
-        _hazardEffects = Memo("hazardEffects", () => DeriveHazardEffects(facts, rules, EpData));
+        _hazardEffects = Memo("hazardEffects", () => DeriveHazardEffects(facts, rules, EpData, gate: true));
+        _graphHazardFindings = MemoAsync(
+            "graphHazardFindings",
+            () =>
+                EffectDerivation.GraphHazardFindingsAsync(
+                    rules: rules,
+                    // The `derive`-shaped graph, NOT the traversal graph: the graph-tier hazards are exactly the
+                    // ones that read delivery edges (event_cycle's cycles close through a publish->consumer hop),
+                    // which is what ShapedGraph adds and a traversal must not walk.
+                    shapedGraph: ShapedGraph,
+                    unfilteredEffects: HazardEffects,
+                    staticFieldIds: () => Task.FromResult(LiveReads.StaticFieldIds(facts))
+                )
+        );
     }
 
     // The fact generation this source serves. Immutable — a rebuild produces a new LiveFactSource.
@@ -111,8 +125,31 @@ internal sealed class LiveFactSource
     public IReadOnlyList<DerivedEffect> Effects => _effects.Value;
 
     // Mirrors EffectDerivation.DeriveHazardEffectsAsync — the whole-store hazard-augmented effect set, i.e.
-    // exactly what `derive` computes.
+    // exactly what `derive` computes. The FR-1 write-pairing gate is ON, matching `derive`'s (and
+    // `tree --view hazards`') default; HazardEffectsFor is the gate-parameterized entry.
     public IReadOnlyList<DerivedEffect> HazardEffects => _hazardEffects.Value;
+
+    // The gate-aware entry point for the hazard-augmented effect set. The DEFAULT (gate on) is the memo above —
+    // one derivation per generation, shared by every hazard query. `--no-gate` is a DIFFERENT effect set, so it
+    // derives fresh and uncached rather than being served the gated memo: the store path keeps the two in
+    // separate cache slots for exactly this reason, and silently returning gated counts for an ungated question
+    // is the failure a fact tool cannot have. Unreachable from today's live surface (no --no-gate there), and
+    // implemented honestly anyway — a member that lies when a flag is added is worse than one that is slow.
+    public IReadOnlyList<DerivedEffect> HazardEffectsFor(bool gate) => gate ? HazardEffects : DeriveHazardEffects(Facts, Rules, EpData, gate: false);
+
+    // Mirrors EffectDerivation.DeriveGraphHazardFindingsAsync — the whole-store GRAPH-TIER findings
+    // (event_cycle / cache_coherence / static_init_capture), through the SAME
+    // EffectDerivation.GraphHazardFindingsAsync classification the store path runs, with the shaped graph, the
+    // unfiltered hazard effect set and the static-field universe supplied from memory. Memoized per generation
+    // like everything else here; `derive`'s own opt-in rule gates (cacheCoherence / staticInitCapture) still
+    // decide which arms fire, so a repo without those sections pays only the event-cycle pass.
+    public Task<IReadOnlyList<Commands.DeriveCommand.HazardFinding>> GraphHazardFindingsAsync() => _graphHazardFindings.Value;
+
+    // The per-GENERATION artifact memo the live query-cache arm writes into (LiveQueryArtifactCache). It lives
+    // here, not on LiveQueryFactSource, because that adapter is constructed PER QUERY — a memo on it would be
+    // discarded before the second question, which is the entire point of memoizing a tree. Bounded (see
+    // BoundedArtifactMemo): tree artifacts are O(queries), unlike every other artifact here.
+    public BoundedArtifactMemo ArtifactMemo { get; } = new BoundedArtifactMemo();
 
     // Per-artifact FIRST-ACCESS build cost for this generation, in construction-independent access order.
     // The program's headline latency ("edit → facts servable in ~0.75s") measures FACTS; a QUERY additionally
@@ -140,12 +177,26 @@ internal sealed class LiveFactSource
     // Force the artifacts a QUERY needs, so the first query of a generation does not pay for them. Called by
     // WatchHost on a background task right after an eager apply; see the note there for the scheduling rules.
     //
-    // WHICH artifacts, and why not the others: reaches/path/callers touch exactly TraversalGraph, Invocations,
-    // EpData, ThrowRefs (all four via ReachInputs) and Effects — measured on MedDBase at
-    // `traversalGraph 2198ms | invocations 242ms | epData 371ms | throwRefs 147ms | effects 1038ms` ≈ 4.0s.
-    // ShapedGraph and HazardEffects are deliberately NOT warmed: they are `derive`-shaped (ShapedGraph adds the
-    // delivery edges a traversal must NOT walk, HazardEffects is the whole-store hazard pass) and no live query
-    // path reads either today — warming them would burn tens of seconds per edit for nothing.
+    // WHICH artifacts, and why not the others: reaches/path/callers/tree touch exactly TraversalGraph,
+    // Invocations, EpData, ThrowRefs (all four via ReachInputs) and Effects — measured on MedDBase at
+    // `traversalGraph 2198ms | invocations 242ms | epData 371ms | throwRefs 147ms | effects 1038ms` ≈ 4.0s
+    // (re-measured 2026-08-21 on the -2 clone: 3258/432/550/343/1424ms + eventSites 213ms ≈ 6.2s).
+    //
+    // ShapedGraph, HazardEffects and GraphHazardFindings are deliberately still NOT warmed, and as of the
+    // `tree` slice that is a MEASURED call rather than an assumption — `tree --view hazards` reads all three,
+    // so "no live query path touches them" stopped being the reason. On MedDBase, in memory:
+    //
+    //     hazardEffects        3.4s  (362,368 effects)   <- the store path's ~18s SQL-cold artifact
+    //     shapedGraph          3.9s
+    //     graphHazardFindings  5.0s  (incl. the shapedGraph it forces; ~1.1s of classification on top)
+    //
+    // i.e. ~8.4s of marginal cost, which would MORE THAN DOUBLE the warm window (6.2s -> ~14.6s) to serve an
+    // arm most queries never ask for. Warming is bounded by what the worker's next apply must not wait behind,
+    // and a Lazy factory cannot be interrupted once entered — so warming these would extend the
+    // uninterruptible window by up to 8.4s per edit for the benefit of the occasional hazards query. Left LAZY,
+    // with the cost DISCLOSED on the answer that pays it: the "derived layer built this generation" line names
+    // each artifact and its milliseconds, so the one query that pays 8.4s is told it did, and every later
+    // hazards query in the generation pays nothing. Revisit if a hazards view becomes a default surface.
     //
     // Forced ONE AT A TIME with a cancellation check between, because a Lazy factory cannot be interrupted
     // once entered: the granularity of "stop warming" is therefore one artifact, and the ORDER below is the
@@ -202,16 +253,42 @@ internal sealed class LiveFactSource
             return value;
         });
 
+    // The async twin of Memo, for an artifact whose derivation is shared with an ASYNC store-side function
+    // (the graph-tier hazard findings: its store arm awaits a SQL read for the static-field universe, so the
+    // one shared classification is a Task-returning method on both paths).
+    //
+    // Lazy<Task<T>> is the correct shape here, not Lazy<T> over a blocking wait: the FACTORY runs once
+    // (ExecutionAndPublication) and produces the ONE Task every caller awaits, so the derivation happens once
+    // per generation without a thread ever blocking on it. `.GetAwaiter().GetResult()` inside a Lazy<T> would
+    // memoize the same value and be sync-over-async — the hazard this tool ships a detector for.
+    private Lazy<Task<T>> MemoAsync<T>(string artifact, Func<Task<T>> build) => new Lazy<Task<T>>(() => TimedAsync(artifact, build));
+
+    // Records the artifact's wall time around the AWAIT, not around task creation — timing the factory call
+    // alone would report ~0ms for the whole derivation and be an instrument that hides what it measures.
+    private async Task<T> TimedAsync<T>(string artifact, Func<Task<T>> build)
+    {
+        var watch = Stopwatch.StartNew();
+        var value = await build();
+        watch.Stop();
+        lock (_buildTimeLock)
+        {
+            _buildTimes.Add((artifact, watch.Elapsed));
+        }
+
+        return value;
+    }
+
     // The in-memory equivalent of EffectDerivation.DeriveHazardEffectsAsync: the SAME EffectDerivation.
     // DeriveEffects call with the SAME arguments, each feed sourced from LiveReads instead of Reads. Kept
     // argument-for-argument aligned with that method — including `deriveHazards: true` and the `async`-modifier
-    // filter that feeds sync_over_async — so the live effect set cannot drift from the store one. The `gate`
-    // stays at its default (the FR-1 read-arm write-pairing gate ON), matching `derive`'s default; a
-    // `--no-gate` live path would thread it through here.
+    // filter that feeds sync_over_async — so the live effect set cannot drift from the store one. `gate` is the
+    // FR-1 read-arm write-pairing gate, threaded through exactly as the store path threads `--no-gate`; the
+    // memoized artifact is the gated (default) one and HazardEffectsFor is what routes the other.
     private static IReadOnlyList<DerivedEffect> DeriveHazardEffects(
         AnalysisResult facts,
         RuleSet rules,
-        FactEntryPointDeriver.FactEntryPointData epData
+        FactEntryPointDeriver.FactEntryPointData epData,
+        bool gate
     )
     {
         var (staticFieldWriteRefs, staticFieldReadRefs) = LiveReads.StaticFieldAccessRefsByKind(facts);
@@ -233,6 +310,7 @@ internal sealed class LiveFactSource
             threadStaticCells: LiveReads.ThreadStaticFieldIds(facts),
             volatileCells: LiveReads.VolatileFieldIds(facts),
             asyncMethodIds: asyncMethodIds,
+            gate: gate,
             // AllocationFacts needs no LiveReads twin: Reads.LoadAllocationFactsAsync (whole-store) applies no
             // filter and no dedup, so the extracted list already IS its return value.
             allocationFacts: facts.AllocationFacts ?? []

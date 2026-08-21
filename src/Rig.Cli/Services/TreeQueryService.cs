@@ -1,11 +1,9 @@
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Live;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
-using Rig.Storage.Storage;
-using static Rig.Cli.Effects.EffectDerivation;
-using static Rig.Cli.Graph.TraversalGraphLoader;
 
 namespace Rig.Cli.Services;
 
@@ -62,12 +60,14 @@ public static class TreeQueryService
         // --raw parity: zero the graph-shaping rules so the tree is the exact unfiltered structure.
         var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = await OpenReadContextGatedAsync(
+        // The web host is a STORE consumer: same schema-gated read-only open as before, now expressed as the
+        // store arm of the fact-source seam so the shared compute below has exactly one implementation.
+        await using var source = await StoreQueryFactSource.OpenAsync(
             new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
         );
 
         var computation = await ComputeAsync(
-            context: context,
+            source: source,
             rules: rules,
             shaped: shaped,
             fromPattern: fromPattern,
@@ -87,13 +87,17 @@ public static class TreeQueryService
     }
 
     // The COLD tree computation shared by the web host (BuildAsync, above) and `rig tree`'s cold path
-    // (TreeCommand). It operates on an ALREADY-OPEN context + ALREADY-LOADED/SHAPED rules, so a caller that
+    // (TreeCommand). It operates on an ALREADY-OPEN fact SOURCE + ALREADY-LOADED/SHAPED rules, so a caller that
     // holds those — TreeCommand does, plus its query-cache — reuses them instead of re-opening/re-loading.
     // Returns the graph + entry-point data too (not just roots/effects): the CLI threads those into its
     // downstream render stages (locations, seam, EP-site chips, --full library calls). This is the single
     // source of truth for the forest + effects, so `rig tree` and `/api/tree` cannot diverge.
+    //
+    // Parameterized on IQueryFactSource rather than RigDbContext (2026-08-21) so the SAME cold compute also
+    // serves the resident live index — the forest a `rig watch` query answers with is this function's output,
+    // not a parallel in-memory reimplementation of it.
     internal static async Task<TreeComputation> ComputeAsync(
-        RigDbContext context,
+        IQueryFactSource source,
         RuleSet rules,
         RuleSet shaped,
         string fromPattern,
@@ -103,29 +107,21 @@ public static class TreeQueryService
         bool raw
     )
     {
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, shaped);
+        var inputs = await source.LoadEffectReachInputsAsync(fromPattern, SqlReachability.Direction.Forward, shaped);
         var graph = inputs.Graph;
         // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls — mark them
         // as handoffs so the sync tree doesn't expand the handler as if the registrar ran it. Skipped under --raw.
         if (!raw)
         {
-            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
         }
 
         var roots = MonomorphCollapse.CollapseTree(FactPathFinder.BuildTree(graph, fromPattern, maxDepth, maxNodes: maxNodes, mode: mode));
 
-        IReadOnlyList<DerivedEffect> effects =
-            roots.Count == 0
-                ? []
-                : DeriveEffects(
-                    effectRules: rules.Effects,
-                    observationRules: rules.Observations,
-                    invocations: inputs.Invocations,
-                    baseEdges: BaseEdgeTuples(graph),
-                    ctorRefs: inputs.CtorRefs,
-                    throwRefs: inputs.ThrowRefs,
-                    allocationFacts: inputs.AllocationFacts
-                );
+        // The one shared effect derivation (QueryEffectDerivation.ForReach, through the source so a resident
+        // host can serve its per-generation memo) — same arguments as before the seam, and still skipped
+        // entirely when the pattern matched nothing.
+        IReadOnlyList<DerivedEffect> effects = roots.Count == 0 ? [] : await source.DeriveEffectsAsync(inputs, graph, rules);
 
         return new TreeComputation(roots, effects, graph, inputs.EpData);
     }

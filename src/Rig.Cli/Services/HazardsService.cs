@@ -45,7 +45,9 @@ public static class HazardsService
 
         // Build the tree (sync, full) to get the set of reachable methods to filter hazards to.
         var computation = await TreeQueryService.ComputeAsync(
-            context: context,
+            // The shared cold compute now takes the fact-source seam; this consumer is store-only and keeps its
+            // own context for the WarmStore reads below, so it BORROWS rather than opening a second one.
+            source: Live.StoreQueryFactSource.Borrowing(context, ws),
             rules: rules,
             shaped: rules,
             fromPattern: fromPattern,

@@ -56,3 +56,19 @@ Check `tree --hazards` and any other `SelectEffects` caller for the same pre-fil
 
 Pinned (not fixed) by `tests/Rig.Tests/Live/LiveReachesTests.cs`, which compares stdout byte-for-byte and
 stderr with this one line stripped from both sides, asserting the asymmetry is confined to it.
+
+## CONFIRMED for `tree` — 2026-08-21, all views
+
+This item's Fix section asked someone to "check `tree --hazards` and any other `SelectEffects` caller for the
+same pre-filter ordering". Checked while migrating `tree` onto the live seam: **it has the bug, and in EVERY
+view, not just hazards.** `SelectEffects` computes `HiddenIntrinsic` over what the derivation produced, before
+`tree`'s own reachable-method filter.
+
+Measured the same way as `reaches`: 1 of 5 patterns diverges live-vs-store on `tree`
+(`TeamRepository.AddAsync`, EntryPointEffects — the SAME pattern the `reaches` comparison named), with stdout
+byte-identical across all 24 view/format comparisons and only this stderr line differing. The store is silent
+because its SQL-bounded closure happens to contain no alloc/throw; the live path derives over the whole fact set.
+Neither side is right.
+
+So the fix's blast radius is now known: `reaches` and `tree` (all views), and the acceptance test should cover
+both. `path` and `callers` do not emit the hint.
