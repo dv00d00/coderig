@@ -23,8 +23,10 @@ namespace Rig.Analysis.Inventory;
 // bug this class can have. TypeRelationFact/DispatchFact carry NO FilePath, so they cannot be replaced
 // per file: the merged tables are the UNION of base and overlay rows, de-duplicated on each fact's
 // full identity tuple (see MergeFacts for why a row is NEVER dropped by symbol, and the ghost trade
-// that buys). Each re-extraction call covers exactly ONE file path (all its linked DocumentIds at
-// once), so an overlay entry's relation/dispatch lists are exactly that file's emissions.
+// that buys). Re-extraction is BATCHED (one ExtractFromDocumentsByFileAsync call per ReextractAsync),
+// and the batch result comes back already partitioned by file — grouped from the per-SourceModel
+// extraction results before any flattening — so an overlay entry's relation/dispatch lists are exactly
+// that file's emissions, across all its linked DocumentIds.
 internal sealed class ResidentIndex : IDisposable
 {
     private readonly RigWorkspace _workspace;
@@ -139,41 +141,37 @@ internal sealed class ResidentIndex : IDisposable
 
     public void Dispose() => _workspace.Dispose();
 
-    // Re-extract the given documents, one FILE PATH per extraction call: the overlay's replacement
-    // grain is the file, and a single-path call makes the result's TypeRelation/Dispatch lists exactly
-    // that file's emissions (they carry no FilePath, so a multi-file call could not be split). A file
-    // linked into several projects is extracted with ALL its DocumentIds in the one call, mirroring
-    // the cold pass where each project context extracts its copy.
+    // Re-extract the given documents in ONE batched call. The overlay's replacement grain is the file,
+    // and ExtractFromDocumentsByFileAsync returns the batch already partitioned by file path (grouped
+    // from the per-SourceModel extraction results, so TypeRelation/Dispatch attribution is exact even
+    // though those facts carry no FilePath). Batching is what makes the cascade affordable: the
+    // per-call setup the old one-call-per-path loop re-paid per file (the DI method-name set,
+    // XmlDiMiner.Mine, a compilation bind per file) is paid once per reconcile, and extraction runs
+    // Parallel across the whole batch. A file linked into several projects still contributes ALL its
+    // DocumentIds' emissions to its one slice, mirroring the cold pass where each project context
+    // extracts its copy.
+    //
+    // Cancellation-safe: the overlay is written only AFTER the whole batch has extracted, so a
+    // cancelled re-extraction leaves the overlay (and _pendingDocuments, cleared by the caller only on
+    // completion) untouched.
     private async Task ReextractAsync(IReadOnlyCollection<DocumentId> documents, CancellationToken cancellationToken)
     {
-        var solution = CurrentSolution;
-        var byPath = new Dictionary<string, List<DocumentId>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var documentId in documents)
+        if (documents.Count == 0)
         {
-            var filePath = solution.GetDocument(documentId)?.FilePath;
-            if (filePath is null)
-            {
-                continue;
-            }
-
-            if (!byPath.TryGetValue(filePath, out var group))
-            {
-                byPath[filePath] = group = [];
-            }
-
-            group.Add(documentId);
+            return;
         }
 
-        foreach (var (filePath, documentIds) in byPath)
+        var slices = await SolutionAnalyzer.ExtractFromDocumentsByFileAsync(
+            solution: CurrentSolution,
+            documents: documents,
+            solutionPath: _solutionPath,
+            rules: _rules,
+            cancellationToken: cancellationToken
+        );
+
+        foreach (var (filePath, facts) in slices)
         {
-            var result = await SolutionAnalyzer.ExtractFromDocumentsAsync(
-                solution: solution,
-                documents: documentIds,
-                solutionPath: _solutionPath,
-                rules: _rules,
-                cancellationToken: cancellationToken
-            );
-            _overlay[filePath] = FileFacts.From(result, filePath);
+            _overlay[filePath] = facts;
         }
     }
 
@@ -270,32 +268,19 @@ internal sealed class ResidentIndex : IDisposable
         };
     }
 
-    // One overlaid file's facts, split out of a single-path ExtractFromDocumentsAsync result.
-    private sealed record FileFacts(
-        IReadOnlyList<SourceFileInfo> SourceFiles,
-        IReadOnlyList<DiRegistrationInfo> DiRegistrations,
-        IReadOnlyList<SymbolFact> Symbols,
-        IReadOnlyList<ReferenceFact> References,
-        IReadOnlyList<TypeRelationFact> TypeRelations,
-        IReadOnlyList<DispatchFact> Dispatch,
-        IReadOnlyList<AllocationFact> Allocations
-    )
-    {
-        public static FileFacts From(AnalysisResult result, string filePath)
-        {
-            // Path filters guard the overlay's per-file invariant. They matter for DI registrations in
-            // particular: ExtractFromSourceSet appends the rules-static and XML-mined registrations to
-            // EVERY result, and keeping those here would duplicate the base's copies on merge.
-            bool Owns(string path) => string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase);
-            return new FileFacts(
-                SourceFiles: result.SourceFiles.Where(f => Owns(f.FilePath)).ToArray(),
-                DiRegistrations: result.DiRegistrations.Where(r => Owns(r.FilePath)).ToArray(),
-                Symbols: (result.Symbols ?? []).Where(s => Owns(s.FilePath)).ToArray(),
-                References: (result.References ?? []).Where(r => Owns(r.FilePath)).ToArray(),
-                TypeRelations: result.TypeRelations ?? [],
-                Dispatch: result.DispatchFacts ?? [],
-                Allocations: (result.AllocationFacts ?? []).Where(a => Owns(a.FilePath)).ToArray()
-            );
-        }
-    }
 }
+
+// One overlaid file's facts — the overlay's value type, and the per-file slice
+// SolutionAnalyzer.ExtractFromDocumentsByFileAsync returns. Slices carry only facts the file itself
+// emitted: no XML-mined or rules-static DI registrations (those live on the BASE side only — they are
+// appended by ExtractFromSourceSet, which the by-file path deliberately bypasses), and
+// TypeRelations/Dispatch are exactly the file's own emissions, grouped per source before flattening.
+internal sealed record FileFacts(
+    IReadOnlyList<SourceFileInfo> SourceFiles,
+    IReadOnlyList<DiRegistrationInfo> DiRegistrations,
+    IReadOnlyList<SymbolFact> Symbols,
+    IReadOnlyList<ReferenceFact> References,
+    IReadOnlyList<TypeRelationFact> TypeRelations,
+    IReadOnlyList<DispatchFact> Dispatch,
+    IReadOnlyList<AllocationFact> Allocations
+);

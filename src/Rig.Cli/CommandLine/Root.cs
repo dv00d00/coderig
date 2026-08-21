@@ -41,6 +41,7 @@ internal static class Root
             EntryPointsCommand.Build(output, error, workingDirectory),
             ImpactCommand.Build(output, error, workingDirectory),
             ServeCommand.Build(output, error, workingDirectory),
+            WatchCommand.Build(output, error, workingDirectory),
             // `dead` is DISABLED, but registered as an explaining STUB rather than simply absent. It ran on
             // the all-hops dispatch superset that the one-hop engine no longer matches (see the two-stage
             // dispatch notes in CLAUDE.md), so its answers would now be wrong. Left unregistered, it failed

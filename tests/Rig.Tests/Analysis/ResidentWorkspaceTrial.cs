@@ -157,6 +157,39 @@ public sealed class ResidentWorkspaceTrial
                 + $"  | workingSet {Process.GetCurrentProcess().WorkingSet64 / (1024.0 * 1024 * 1024):F2} GB"
         );
 
+        // SET equivalence, not counts. Counts are the WRONG comparison and cost this program a wrong
+        // diagnosis: the cold store holds 30,069 dispatch rows but only ~22,876 DISTINCT ones, because the
+        // same edge is emitted from several files (partial types, shared bases). The overlay merge dedups on
+        // the full identity tuple, so its count is legitimately lower while the SET is unchanged. Only a
+        // symmetric difference can tell a real loss from base-internal duplication.
+        static HashSet<string> RelSet(AnalysisResult r) =>
+            (r.TypeRelations ?? []).Select(x => $"{x.TypeSymbolId}|{x.RelationKind}|{x.RelatedSymbolId}").ToHashSet(StringComparer.Ordinal);
+        static HashSet<string> DispSet(AnalysisResult r) =>
+            (r.DispatchFacts ?? []).Select(x => $"{x.SourceMember}|{x.TargetMember}|{x.Kind}").ToHashSet(StringComparer.Ordinal);
+
+        var coldRel = RelSet(coldResult);
+        var coldDisp = DispSet(coldResult);
+        var eagerRel = RelSet(eagerFacts);
+        var eagerDisp = DispSet(eagerFacts);
+        Say(
+            $"[trial] SET vs cold (eager)      : rel distinct cold={coldRel.Count} resident={eagerRel.Count}"
+                + $" | missing={coldRel.Except(eagerRel).Count()} extra={eagerRel.Except(coldRel).Count()}"
+                + $"  ||  disp distinct cold={coldDisp.Count} resident={eagerDisp.Count}"
+                + $" | missing={coldDisp.Except(eagerDisp).Count()} extra={eagerDisp.Except(coldDisp).Count()}"
+        );
+
+        // DI is checked SEPARATELY and deliberately: the batched re-extract path bypasses XmlDiMiner, and
+        // DeepChain carries no XML DI descriptors, so every DeepChain gate is structurally blind to a DI
+        // regression. MedDBase has real descriptors, so this is the only place the bypass gets tested.
+        static HashSet<string> DiSet(AnalysisResult r) =>
+            r.DiRegistrations.Select(d => $"{d.ServiceType}|{d.ImplementationType}|{d.Lifetime}|{d.FilePath}:{d.Line}").ToHashSet(StringComparer.Ordinal);
+        var coldDi = DiSet(coldResult);
+        var eagerDi = DiSet(eagerFacts);
+        Say(
+            $"[trial] SET vs cold (DI, eager)  : cold={coldDi.Count} resident={eagerDi.Count}"
+                + $" | missing={coldDi.Except(eagerDi).Count()} extra={eagerDi.Except(coldDi).Count()}"
+        );
+
         var reconcileWatch = Stopwatch.StartNew();
         await index.ReconcileAsync();
         reconcileWatch.Stop();
@@ -168,6 +201,26 @@ public sealed class ResidentWorkspaceTrial
                 + $"  | {index.UnreconciledProjects.Count} still unreconciled"
                 + $"  | workingSet {Process.GetCurrentProcess().WorkingSet64 / (1024.0 * 1024 * 1024):F2} GB"
         );
+
+        var recRel = RelSet(reconciledFacts);
+        var recDisp = DispSet(reconciledFacts);
+        Say(
+            $"[trial] SET vs cold (reconciled) : rel missing={coldRel.Except(recRel).Count()} extra={recRel.Except(coldRel).Count()}"
+                + $"  ||  disp missing={coldDisp.Except(recDisp).Count()} extra={recDisp.Except(coldDisp).Count()}"
+        );
+        var recDi = DiSet(reconciledFacts);
+        Say(
+            $"[trial] SET vs cold (DI, recon)  : missing={coldDi.Except(recDi).Count()} extra={recDi.Except(coldDi).Count()}"
+        );
+        foreach (var sample in coldDi.Except(recDi).Take(3))
+        {
+            Say($"[trial]   sample MISSING di: {sample}");
+        }
+
+        foreach (var sample in coldDisp.Except(recDisp).Take(3))
+        {
+            Say($"[trial]   sample MISSING dispatch: {sample}");
+        }
 
         Say(
             $"[trial] SLO (edit -> servable)    : {editWatch.Elapsed.TotalSeconds + mergeWatch.Elapsed.TotalSeconds:F2}s"
@@ -230,5 +283,6 @@ public sealed class ResidentWorkspaceTrial
 
     private static string Counts(AnalysisResult result) =>
         $"{(result.Symbols ?? []).Count} sym / {(result.References ?? []).Count} ref / "
-        + $"{(result.TypeRelations ?? []).Count} rel / {(result.DispatchFacts ?? []).Count} disp";
+        + $"{(result.TypeRelations ?? []).Count} rel / {(result.DispatchFacts ?? []).Count} disp / "
+        + $"{result.DiRegistrations.Count} di";
 }

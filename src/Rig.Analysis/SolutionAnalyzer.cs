@@ -180,6 +180,145 @@ public static class SolutionAnalyzer
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
+        var (sourceFiles, orderedSources, extractionResults) = await ReadAndExtractDocumentsAsync(
+            solution: solution,
+            documents: documents,
+            solutionFullPath: solutionFullPath,
+            rules: rules,
+            cancellationToken: cancellationToken
+        );
+
+        var extractedSources = new List<ExtractedSource>(orderedSources.Count);
+        for (var i = 0; i < orderedSources.Count; i++)
+        {
+            extractedSources.Add(new ExtractedSource(orderedSources[i].ProjectName, orderedSources[i].FilePath, extractionResults[i]));
+        }
+
+        var sourceSet = new SolutionSourceSet(
+            sourceFiles.OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
+            extractedSources
+        );
+
+        return ExtractFromSourceSet(
+            solutionPath: solutionPath,
+            solutionFullPath: solutionFullPath,
+            sourceSet: sourceSet,
+            rules: rules,
+            projectIdentity: null,
+            progress: progress,
+            timings: null,
+            phase: null
+        );
+    }
+
+    // BATCHED per-file extraction (live-background-index integration slice): one call covers the whole
+    // pending set, and the result comes back PARTITIONED BY FILE PATH — the resident overlay's
+    // replacement grain. The partition is EXACT for every fact kind, including TypeRelation/Dispatch
+    // (which carry no FilePath): facts are grouped from the per-SourceModel extraction results BEFORE
+    // any flattening, so each file's lists are exactly its own emissions — the same property the
+    // one-call-per-path loop bought, without the per-call bill. Batching is what makes ReconcileAsync
+    // affordable: the per-call setup the single-file path re-paid per file (the DI method-name set, and
+    // ExtractFromSourceSet's XmlDiMiner.Mine over the rules' XML files) is paid at most once per batch
+    // here (XmlDiMiner not at all — the per-file slices never carry XML/static DI rows, exactly as
+    // FileFacts.From filtered them out), each project's compilation is bound once per batch instead of
+    // once per file, and extraction runs Parallel across the whole batch instead of file-at-a-time.
+    //
+    // Every distinct file path among `documents` gets an entry, even when nothing was extracted for it
+    // (excluded project, no compilation, not classified "indexed") — mirroring the single-file path,
+    // where such a call produced an EMPTY slice that replaces the file's base rows on merge.
+    internal static async Task<Dictionary<string, FileFacts>> ExtractFromDocumentsByFileAsync(
+        Microsoft.CodeAnalysis.Solution solution,
+        IReadOnlyCollection<DocumentId> documents,
+        string solutionPath,
+        RuleSet rules,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var solutionFullPath = Path.GetFullPath(solutionPath);
+        var (sourceFiles, orderedSources, extractionResults) = await ReadAndExtractDocumentsAsync(
+            solution: solution,
+            documents: documents,
+            solutionFullPath: solutionFullPath,
+            rules: rules,
+            cancellationToken: cancellationToken
+        );
+
+        // Seed an (empty) builder for every input document's path, then fill from the per-source
+        // results. A file linked into several projects contributes one SourceModel per project context;
+        // its slice is the concatenation, exactly as the old single-path call (all DocumentIds at once)
+        // produced.
+        var builders = new Dictionary<string, FileFactsBuilder>(StringComparer.OrdinalIgnoreCase);
+        foreach (var documentId in documents)
+        {
+            var filePath = solution.GetDocument(documentId)?.FilePath;
+            if (filePath is not null && !builders.ContainsKey(filePath))
+            {
+                builders[filePath] = new FileFactsBuilder();
+            }
+        }
+
+        foreach (var sourceFile in sourceFiles)
+        {
+            builders[sourceFile.FilePath].SourceFiles.Add(sourceFile);
+        }
+
+        for (var i = 0; i < orderedSources.Count; i++)
+        {
+            var facts = extractionResults[i];
+            var builder = builders[orderedSources[i].FilePath];
+            builder.DiRegistrations.AddRange(facts.DiRegistrations);
+            builder.Symbols.AddRange(facts.Symbols);
+            builder.References.AddRange(facts.References);
+            builder.TypeRelations.AddRange(facts.TypeRelations);
+            builder.Dispatch.AddRange(facts.Dispatch);
+            builder.Allocations.AddRange(facts.Allocations);
+        }
+
+        var slices = new Dictionary<string, FileFacts>(builders.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (filePath, builder) in builders)
+        {
+            slices[filePath] = new FileFacts(
+                SourceFiles: builder.SourceFiles,
+                DiRegistrations: builder.DiRegistrations,
+                Symbols: builder.Symbols,
+                References: builder.References,
+                TypeRelations: builder.TypeRelations,
+                Dispatch: builder.Dispatch,
+                Allocations: builder.Allocations
+            );
+        }
+
+        return slices;
+    }
+
+    private sealed class FileFactsBuilder
+    {
+        public List<SourceFileInfo> SourceFiles { get; } = [];
+        public List<DiRegistrationInfo> DiRegistrations { get; } = [];
+        public List<SymbolFact> Symbols { get; } = [];
+        public List<ReferenceFact> References { get; } = [];
+        public List<TypeRelationFact> TypeRelations { get; } = [];
+        public List<DispatchFact> Dispatch { get; } = [];
+        public List<AllocationFact> Allocations { get; } = [];
+    }
+
+    // Shared front half of the two per-document entry points above: classify + read + bind the given
+    // documents (one GetCompilationAsync per project GROUP — each compilation is bound once per call,
+    // however many of its files are in the batch), then extract them all in ONE ExtractProject pass
+    // (Parallel across the batch, one SymbolStringCache, one DI method-name set). Returns the
+    // classification rows plus the extraction results, positionally aligned with the ordered sources.
+    private static async Task<(
+        List<SourceFileInfo> SourceFiles,
+        List<SourceModel> OrderedSources,
+        SourceExtractionResult[] ExtractionResults
+    )> ReadAndExtractDocumentsAsync(
+        Microsoft.CodeAnalysis.Solution solution,
+        IReadOnlyCollection<DocumentId> documents,
+        string solutionFullPath,
+        RuleSet rules,
+        CancellationToken cancellationToken
+    )
+    {
         var sources = new List<SourceModel>();
         var sourceFiles = new List<SourceFileInfo>();
 
@@ -256,27 +395,7 @@ public static class SolutionAnalyzer
         var orderedSources = sources.OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
         var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
         var extractionResults = ExtractProject(orderedSources, rules, diMethodNames, parallelism: null);
-        var extractedSources = new List<ExtractedSource>(orderedSources.Count);
-        for (var i = 0; i < orderedSources.Count; i++)
-        {
-            extractedSources.Add(new ExtractedSource(orderedSources[i].ProjectName, orderedSources[i].FilePath, extractionResults[i]));
-        }
-
-        var sourceSet = new SolutionSourceSet(
-            sourceFiles.OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            extractedSources
-        );
-
-        return ExtractFromSourceSet(
-            solutionPath: solutionPath,
-            solutionFullPath: solutionFullPath,
-            sourceSet: sourceSet,
-            rules: rules,
-            projectIdentity: null,
-            progress: progress,
-            timings: null,
-            phase: null
-        );
+        return (sourceFiles, orderedSources, extractionResults);
     }
 
     // Per-PROJECT extraction sink (live-background-index slice 2), invoked by the loader while that
