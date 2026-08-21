@@ -81,6 +81,7 @@ internal static class TreeCommand
             allowedValues: ["tsv", "llm", "llm-ids"]
         );
         var store = CommonOptions.Store();
+        var noLive = CommonOptions.NoLive();
         var suppress = new Option<string>("--suppress")
         {
             Description =
@@ -110,6 +111,7 @@ internal static class TreeCommand
             time,
             format,
             store,
+            noLive,
             suppress,
         };
         // --format llm and --format llm-ids are compatible with paths/full/effects but not with summary or hazards.
@@ -178,37 +180,38 @@ internal static class TreeCommand
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
-                () =>
-                    RunAsync(
-                        new Options(
-                            FromPattern: pr.GetValue(from)!,
-                            View: pr.GetValue(view) ?? "paths",
-                            Async: pr.GetValue(async),
-                            IncludeDelivery: pr.GetValue(includeDelivery),
-                            Raw: pr.GetValue(raw),
-                            Files: pr.GetValue(files),
-                            Signatures: pr.GetValue(signatures),
-                            Plain: pr.GetValue(plain),
-                            Guards: pr.GetValue(guards),
-                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                            Depth: pr.GetValue(depth),
-                            Limit: pr.GetValue(limit),
-                            Only: CommonOptions.FilterSet(pr.GetValue(only)),
-                            Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
-                            Intrinsic: pr.GetValue(intrinsic),
-                            ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
-                            NoCache: pr.GetValue(noCache),
-                            Gate: !pr.GetValue(noGate),
-                            Amplification: !pr.GetValue(noAmplification),
-                            Time: pr.GetValue(time),
-                            Format: pr.GetValue(format),
-                            Suppress: pr.GetValue(suppress)
-                        ),
-                        new CommandIo(
-                            new TextOutput(Output: output, Error: error),
-                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
-                        )
-                    )
+                async () =>
+                {
+                    var opts = new Options(
+                        FromPattern: pr.GetValue(from)!,
+                        View: pr.GetValue(view) ?? "paths",
+                        Async: pr.GetValue(async),
+                        IncludeDelivery: pr.GetValue(includeDelivery),
+                        Raw: pr.GetValue(raw),
+                        Files: pr.GetValue(files),
+                        Signatures: pr.GetValue(signatures),
+                        Plain: pr.GetValue(plain),
+                        Guards: pr.GetValue(guards),
+                        ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        Depth: pr.GetValue(depth),
+                        Limit: pr.GetValue(limit),
+                        Only: CommonOptions.FilterSet(pr.GetValue(only)),
+                        Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                        Intrinsic: pr.GetValue(intrinsic),
+                        ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
+                        NoCache: pr.GetValue(noCache),
+                        Gate: !pr.GetValue(noGate),
+                        Amplification: !pr.GetValue(noAmplification),
+                        Time: pr.GetValue(time),
+                        Format: pr.GetValue(format),
+                        Suppress: pr.GetValue(suppress)
+                    );
+                    var io = new CommandIo(
+                        new TextOutput(Output: output, Error: error),
+                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                    );
+                    return await LiveRoute.TryAnswerAsync(LiveQueryVerbs.Tree, opts, io, pr.GetValue(noLive)) ?? await RunAsync(opts, io);
+                }
             )
         );
         return cmd;

@@ -56,6 +56,7 @@ internal static class CallersCommand
         var limit = CommonOptions.Limit();
         var time = CommonOptions.Time();
         var store = CommonOptions.Store();
+        var noLive = CommonOptions.NoLive();
         var cmd = new Command(name: "callers", description: "Reverse reachability: which methods reach the target.")
         {
             to,
@@ -71,6 +72,7 @@ internal static class CallersCommand
             limit,
             time,
             store,
+            noLive,
         };
         // --orphans (the candidate heuristic) and --entrypoints (the precise rule set) are distinct lenses.
         cmd.Validators.Add(result =>
@@ -84,27 +86,28 @@ internal static class CallersCommand
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
-                () =>
-                    RunAsync(
-                        new Options(
-                            ToPattern: pr.GetValue(to)!,
-                            RootsOnly: pr.GetValue(orphans),
-                            EntrypointsOnly: pr.GetValue(entrypoints),
-                            IncludeReverseOnly: pr.GetValue(includeReverseOnly),
-                            Async: pr.GetValue(async),
-                            IncludeDelivery: pr.GetValue(includeDelivery),
-                            Raw: pr.GetValue(raw),
-                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                            Depth: pr.GetValue(depth),
-                            Format: pr.GetValue(format),
-                            Limit: pr.GetValue(limit),
-                            Time: pr.GetValue(time)
-                        ),
-                        new CommandIo(
-                            new TextOutput(Output: output, Error: error),
-                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
-                        )
-                    )
+                async () =>
+                {
+                    var opts = new Options(
+                        ToPattern: pr.GetValue(to)!,
+                        RootsOnly: pr.GetValue(orphans),
+                        EntrypointsOnly: pr.GetValue(entrypoints),
+                        IncludeReverseOnly: pr.GetValue(includeReverseOnly),
+                        Async: pr.GetValue(async),
+                        IncludeDelivery: pr.GetValue(includeDelivery),
+                        Raw: pr.GetValue(raw),
+                        ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        Depth: pr.GetValue(depth),
+                        Format: pr.GetValue(format),
+                        Limit: pr.GetValue(limit),
+                        Time: pr.GetValue(time)
+                    );
+                    var io = new CommandIo(
+                        new TextOutput(Output: output, Error: error),
+                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                    );
+                    return await LiveRoute.TryAnswerAsync(LiveQueryVerbs.Callers, opts, io, pr.GetValue(noLive)) ?? await RunAsync(opts, io);
+                }
             )
         );
         return cmd;

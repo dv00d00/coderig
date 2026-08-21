@@ -140,6 +140,21 @@ internal static class CommonOptions
 
     internal static Option<bool> Time() => new("--time") { Description = "Print per-phase timings to stderr." };
 
+    // --no-live: read the .rig STORE even when a `rig watch` resident index is serving this directory.
+    //
+    // The default is the other way round on purpose (see LiveRoute): while a host is running, the store is
+    // the STALE answer — pinned to whatever commit was indexed — and the live index is the tree as it is
+    // now. So this flag is for the cases where the indexed SNAPSHOT is what you actually want: reproducing a
+    // report, comparing against a commit, or checking whether a difference is your edit or the index.
+    // RIG_NO_LIVE=1 is the same choice made once for a whole shell.
+    internal static Option<bool> NoLive() =>
+        new("--no-live")
+        {
+            Description =
+                "Answer from the .rig store even when a `rig watch` resident index is serving this directory (default: use the "
+                + "resident index when one is running, since the store is pinned to the last indexed commit). Env: RIG_NO_LIVE=1.",
+        };
+
     internal static Option<bool> Files() => new("--files") { Description = "Append each node's source location." };
 
     internal static Option<bool> Signatures() => new("--signatures", "--sig") { Description = "Show compact parameter signatures." };

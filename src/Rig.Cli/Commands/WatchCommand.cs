@@ -19,7 +19,10 @@ namespace Rig.Cli.Commands;
 // (`N project(s) unreconciled`) printed until it clears. ResidentIndex deliberately owns no
 // threads/timers — this command is the loop's owner: watcher, debounce, scheduling, status lines.
 //
-// Query SERVING from the resident facts is explicitly the NEXT slice; this one proves the loop.
+// Queries are served three ways, all off the same fact generation: `--query` (one answer at boot), the stdin
+// loop, and — in watch mode — a named-pipe endpoint named after this working directory, so a plain one-shot
+// `rig reaches/path/callers/tree` in the same directory answers from these live facts instead of the store.
+// See LiveQueryTransport for why the endpoint is a derived pipe name and not a published port.
 internal static class WatchCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
@@ -147,6 +150,24 @@ internal static class WatchCommand
                 return 0;
             }
 
+            // THE ONE-SHOT TRANSPORT — what makes the resident index reachable by anything other than this
+            // process's own stdin. Published only in WATCH mode: `--once` exits within milliseconds, so an
+            // endpoint there would be created and torn down before any client could find it, and a client that
+            // did catch the window would be racing a shutdown.
+            //
+            // The endpoint's NAME is derived from `workingDirectory`, which is also what a one-shot `rig`
+            // invocation hashes — so there is nothing to publish, nothing to keep fresh, and nothing to go
+            // stale. See LiveQueryTransport.
+            // TryStart, not Start: a query endpoint that cannot be published must not cost the resident loop.
+            // The host still maintains live facts and still answers its own stdin; it just says so.
+            await using var server = LiveQueryServer.TryStart(workingDirectory, host.ServeAsync, output);
+            if (server is not null)
+            {
+                output.WriteLine(
+                    $"watch: serving `reaches`, `path`, `callers` and `tree` for {workingDirectory} over {LiveQueryTransport.EndpointPath(server.PipeName)} "
+                        + "— those commands now answer from these live facts; pass --no-live (or set RIG_NO_LIVE=1) to read the .rig store instead."
+                );
+            }
             output.WriteLine(
                 "watch: watching for .cs saves (obj/ and bin/ excluded). Type a query "
                     + $"({LiveQueryRunner.Usage}) or press Ctrl+C to stop."
@@ -242,6 +263,13 @@ internal sealed class WatchHost : IAsyncDisposable
     private readonly Task _loop;
 
     private int _appliedFiles;
+
+    // STICKY once set, for the process lifetime, and deliberately not clearable. A FileSystemWatcher
+    // overflow means events were dropped before we saw them, so we do not know WHICH files went stale —
+    // and a background reconcile cannot recover them, because it only re-extracts the cascade of files it
+    // knows are dirty. Only a cold boot re-reads everything. So this is a permanent "some edits may be
+    // missing" caveat on every subsequent answer, not a transient condition.
+    private int _watcherOverflowed;
     private double _lastEditSeconds = -1;
 
     // The in-flight background warm (and its cancellation), owned by the worker loop. Kept as FIELDS rather
@@ -303,7 +331,13 @@ internal sealed class WatchHost : IAsyncDisposable
         // Overflow is a staleness hazard, not a crash: disclose it — rig's contract is never to serve
         // silently-stale facts as current.
         _watcher.Error += (_, e) =>
+        {
+            // Record it BEFORE printing: the console line only reaches whoever is watching the terminal,
+            // while the status segment reaches every answer, including one served over the transport to a
+            // client that cannot see this process at all.
+            Interlocked.Exchange(ref _watcherOverflowed, 1);
             _output.WriteLine($"live: WATCHER OVERFLOW — changes may have been missed; edits since may not be reflected ({e.GetException().Message})");
+        };
         _watcher.EnableRaisingEvents = true;
         _loop = Task.Run(() => RunLoopAsync(_shutdown.Token));
     }
@@ -426,6 +460,65 @@ internal sealed class WatchHost : IAsyncDisposable
         var costLine =
             facts.BuildTimes.Count == built ? "" : $"{Environment.NewLine}live: derived layer built this generation: {facts.BuildTimeLine()}";
         return $"{disclosure}{Environment.NewLine}{answer.Text.TrimEnd('\r', '\n')}{costLine}";
+    }
+
+    // Answer one TRANSPORT request — a one-shot `rig reaches/path/callers/tree` in this working directory,
+    // arriving over the named pipe. Same fact generation, same command bodies and same disclosure discipline
+    // as AnswerQueryAsync; what differs is where the three parts of the answer go.
+    //
+    // The split is deliberate and it is the reason the response record has three text fields rather than one.
+    // stdout carries ONLY what the command wrote, byte for byte, so `--format tsv` survives the trip and a
+    // routed answer is directly comparable to an in-process one. Everything the HOST has to say — the
+    // source/staleness line, the compile-health note, the derived-layer cost — goes to stderr, which is where
+    // rig already puts every disclosure precisely so stdout stays parseable.
+    public async Task<LiveServeResult> ServeAsync(LiveQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        LiveFactSource facts;
+        string disclosure;
+        IReadOnlyList<string> health;
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            facts = CurrentLiveFacts();
+            disclosure = ComposeSourceDisclosure();
+            // Captured, NOT written to the host's own stderr: this note belongs to the answer being sent
+            // back, and writing it locally as well would leave the note in the wrong terminal.
+            health = ComposeCompilationHealthNote();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        var built = facts.BuildTimes.Count; // artifacts already memoized before this query
+        var result = await LiveQueryRunner.RunRequestAsync(request, facts, _workingDirectory);
+        if (result.DeclineReason is not null)
+        {
+            return LiveServeResult.Declined(result.DeclineReason);
+        }
+
+        var answer = result.Answer!;
+        var notes = new StringBuilder();
+        foreach (var line in health)
+        {
+            notes.AppendLine(line);
+        }
+
+        if (answer.Err.Length > 0)
+        {
+            notes.Append(answer.Err);
+            if (!answer.Err.EndsWith('\n'))
+            {
+                notes.AppendLine();
+            }
+        }
+
+        if (facts.BuildTimes.Count != built)
+        {
+            notes.AppendLine($"live: derived layer built this generation: {facts.BuildTimeLine()}");
+        }
+
+        return LiveServeResult.Answered(exit: answer.Exit, standardOut: answer.Out, standardError: notes.ToString(), disclosure: disclosure);
     }
 
     public async Task<AnalysisResult> GetCurrentFactsAsync(CancellationToken cancellationToken = default)
@@ -767,7 +860,16 @@ internal sealed class WatchHost : IAsyncDisposable
     // replaced by what is true, quantified: how many indexed files carried compile errors, and how many
     // projects contributed nothing at all. On a tree that compiles this adds NOTHING, which is the point:
     // a disclosure that fires on a healthy tree is one the reader learns to skip.
-    private string ComposeStatus()
+    private string ComposeStatus() => $"live: facts current as of {StatusBody()}";
+
+    // The same facts, led with the SOURCE rather than with currency — what a routed one-shot answer carries.
+    // A `rig watch` session already knows where its answers come from; a plain `rig reaches` in another
+    // process does not, and "which of the two possible sources answered me" is the first thing its reader
+    // needs. The em-dash form is the one the program doc specified for this line.
+    private string ComposeSourceDisclosure() => $"live: facts from resident index — {StatusBody()}";
+
+    // Caller must hold `_gate`.
+    private string StatusBody()
     {
         var applied = Volatile.Read(ref _appliedFiles);
         var unreconciled = _index.UnreconciledProjects.Count;
@@ -779,13 +881,21 @@ internal sealed class WatchHost : IAsyncDisposable
         }
 
         segments.AddRange(CompilationHealthNotice.StatusSegments(facts.CompilationHealth, IndexedFiles(facts)));
+        if (Volatile.Read(ref _watcherOverflowed) != 0)
+        {
+            // Must be a segment rather than a one-off console line: otherwise an answer computed from a
+            // generation that silently missed edits still claims "all projects reconciled" — exactly the
+            // shape of the broken-compilation defect this host already discloses.
+            segments.Add("file-watcher overflowed — some edits may be MISSING; restart to be certain");
+        }
+
         if (segments.Count == 0)
         {
             segments.Add("all projects reconciled");
         }
 
-        var line = $"live: facts current as of {applied} file(s) applied | {string.Join(" | ", segments)}";
-        return _lastEditSeconds < 0 ? line : $"{line} | last edit {_lastEditSeconds:F2}s";
+        var body = $"{applied} file(s) applied | {string.Join(" | ", segments)}";
+        return _lastEditSeconds < 0 ? body : $"{body} | last edit {_lastEditSeconds:F2}s";
     }
 
     // The population the file count is quoted against: the distinct paths this analysis actually

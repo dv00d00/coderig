@@ -1054,3 +1054,99 @@ re-queue it.
 
 **The live query surface is therefore: `reaches`, `path`, `callers`, `tree`. Deliberately store-only: `derive`
 (this decision), `impact` (a pure function of two IMMUTABLE stores, by definition), `dead` (disabled repo-wide).**
+
+## TRANSPORT SHIPPED 2026-08-21 — a one-shot `rig` command now answers from the resident index
+
+This closes the gap the whole query effort existed to close. Verified CROSS-PROCESS on rig's own solution:
+`rig watch` in one process, plain `rig reaches` in another.
+
+```
+$ rig reaches FactGraphProjection.FromAnalysis
+live: facts from resident index — 0 file(s) applied | all projects reconciled
+Reachable methods (<= depth 2147483647): 29
+...
+$ rig reaches FactGraphProjection.FromAnalysis --no-live
+The store at C:\Git\coderig\.rig\62fd160d9009\rig.db is schema v1, this rig expects v5 — re-index that commit.
+```
+
+A better demonstration than the one designed for: **the live index answered a question the store could not answer
+at all.** And the full edit loop, cross-process, on rig's own source — a `File.Exists` call added to
+`FactGraphProjection.FromAnalysis`, then reverted:
+
+```
+BEFORE  Direct effects (real call paths): 30
+EDIT    live: facts from resident index — 1 file(s) applied | ... | last edit 0.16s
+        Direct effects (real call paths): 31    +  d0  io read  IO.File  <- FactGraphProjection.FromAnalysis
+REVERT  live: facts from resident index — 2 file(s) applied | ... | last edit 0.04s
+        Direct effects (real call paths): 30
+```
+
+### Design, and the two places it departed from the plan for good reasons
+
+**Named pipe with a DERIVED name** — `rig-live-{16 hex of sha256(normalised cwd)}` — so discovery is a pure
+function of the working directory. No port file to go stale, no PID liveness check, no crashed-host cleanup, and
+the kernel does access control before a byte is read (one explicit ACE for the current user; no token needed).
+Truncated to 64 bits deliberately: it is collision-avoidance, not a security boundary — a collision is caught by
+the working-directory guard, which is checked BEFORE the verb and asserted (in test) to reject without the query
+layer ever being invoked.
+
+**An allowlisted VERB, not argv.** `LiveQueryRunner.RunRequestAsync` is a four-arm `switch`; each arm decodes into
+the type it chose and calls that command's `RunAsync`. No argv, no command lookup, no reflection — a verb outside
+the four has no code path at all. Carrying rendered output keeps `--format tsv` and every flag working for free.
+
+1. **The disclosure went to stderr, not stdout.** The design note specified the line but not the stream. On stdout
+   it would prepend `live:` to TSV and break every awk consumer rig has — which would forfeit half the reason for
+   carrying rendered text. It also matches where rig already puts every disclosure. `live: facts from resident
+   index —` on stderr is a POSITIVE marker: present means resident facts, absent means the store, and there is no
+   third source it could be.
+2. **`--rules` is DECLINED rather than obeyed.** Two existing comments say the live memos must widen "if the live
+   surface ever gains `--rules`", and this transport gives it one. Obeying it is unachievable — extraction-time
+   rules shaped the facts the host holds, and no query-time rule set can retroactively change what was extracted.
+   So the choice was a silently-wrong answer or an honest decline. Declined with a reason; the store is one
+   fallback away and applies `--rules` correctly.
+
+### Costs
+
+**No-host overhead: 48-50 us** per invocation (1000 attempts) — an allowlist lookup, a SHA-256 of a short path,
+one zero-budget connect. Four orders below a store query. The gate on it exists because the obvious
+implementation is a regression: `ConnectAsync` POLLS until its timeout, so probing with a real budget would tax
+every invocation on every machine by that whole timeout.
+
+Timeouts: stage-one connect 0 ms (instant either way); a 500 ms retry only once an endpoint is known to exist;
+a 30 s whole-request backstop for a WEDGED host (a host that dies is detected by the OS via EOF, no timer).
+30 s sits above the worst real answer — ~4 s of derived layer on MedDBase, +12 s for `tree --view hazards` — and
+far below anything read as a hang. Note the cost direction: expiring means the store redoes the query, so a
+tight deadline would double the cost of the slowest queries.
+
+### A trap worth carrying forward
+
+On Windows, `File.Exists(@"\.\pipe\name")` against a LIVE pipe **consumes the server's pending accept** — proved
+in isolation (a `WaitForConnectionAsync` completes the instant the probe runs). The first cut probed before
+connecting, which burned an accept per query and made a single-instance host look like one that refuses
+connections. Hence connect-first discovery and an always-armed listener.
+
+### Two review fixes
+
+**Watcher overflow is now a status SEGMENT, sticky for the process lifetime.** It was printed to the host's own
+console only, so a routed answer from a generation that silently missed edits still said `all projects
+reconciled` — the same defect shape as the broken-compilation disclosure, and the transport widened its blast
+radius from "whoever is watching the terminal" to "any client". Sticky and unclearable on purpose: an overflow
+means events were dropped before we saw them, so we do not know WHICH files went stale, and a background
+reconcile cannot recover them (it only re-extracts files it knows are dirty). Only a cold boot re-reads
+everything.
+
+**The no-host perf gate was flaky.** A 1 ms wall-clock bound inside a 1060-test parallel suite failed once under
+load and passed 3/3 in isolation. Raised to 50 ms: the regression it guards against is hundreds of milliseconds,
+so 50 ms still catches it with two orders of margin over the ~50 us actual. A perf gate that fails for reasons
+unrelated to what it guards teaches people to re-run it, which is worse than no gate.
+
+### Still undisclosed on a routed answer (ranked)
+
+1. **New files** — `ResidentIndex` has no add-document path, and the "not a workspace document (new file?)" notice
+   goes to the HOST's console. A client querying after adding a file gets an answer that silently omits it. The
+   transport widened this from a terminal-watcher problem to a client problem.
+2. **Generated documents** aren't re-extracted per file — generator-emitted facts stay at base until a cold boot.
+3. **Two hosts, one directory** both bind (the always-armed listener was chosen over a single-instance cap,
+   because the cap's failure mode was a silent stale answer through an accept gap). Two clients could then be
+   answered by hosts booted with different rules. Disclosed only in the host log; a single-instance cap that
+   fails LOUDLY is the alternative and needs a decision.

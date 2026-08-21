@@ -29,6 +29,7 @@ internal static class PathCommand
         var format = CommonOptions.Format();
         var time = CommonOptions.Time();
         var store = CommonOptions.Store();
+        var noLive = CommonOptions.NoLive();
         var cmd = new Command(name: "path", description: "Print the first call path from one method to another.")
         {
             from,
@@ -41,29 +42,31 @@ internal static class PathCommand
             format,
             time,
             store,
+            noLive,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
-                () =>
-                    RunAsync(
-                        new Options(
-                            FromPattern: pr.GetValue(from)!,
-                            ToPattern: pr.GetValue(to)!,
-                            Async: pr.GetValue(async),
-                            IncludeDelivery: pr.GetValue(includeDelivery),
-                            Raw: pr.GetValue(raw),
-                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                            Depth: pr.GetValue(depth),
-                            Format: pr.GetValue(format),
-                            Time: pr.GetValue(time)
-                        ),
-                        new CommandIo(
-                            new TextOutput(Output: output, Error: error),
-                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
-                        )
-                    )
+                async () =>
+                {
+                    var opts = new Options(
+                        FromPattern: pr.GetValue(from)!,
+                        ToPattern: pr.GetValue(to)!,
+                        Async: pr.GetValue(async),
+                        IncludeDelivery: pr.GetValue(includeDelivery),
+                        Raw: pr.GetValue(raw),
+                        ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        Depth: pr.GetValue(depth),
+                        Format: pr.GetValue(format),
+                        Time: pr.GetValue(time)
+                    );
+                    var io = new CommandIo(
+                        new TextOutput(Output: output, Error: error),
+                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                    );
+                    return await LiveRoute.TryAnswerAsync(LiveQueryVerbs.Path, opts, io, pr.GetValue(noLive)) ?? await RunAsync(opts, io);
+                }
             )
         );
         return cmd;

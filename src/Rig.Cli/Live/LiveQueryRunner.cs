@@ -1,20 +1,24 @@
+using System.Text.Json;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Commands;
 
 namespace Rig.Cli.Live;
 
-// Parses and answers ONE query against ONE generation of live facts, returning the rendered text.
+// Answers ONE query against ONE generation of live facts, returning the rendered text. Two ways in, one body:
 //
-// The transport is deliberately trivial (a line of text in, a block of text out) because the interesting part
-// is NOT the transport: it is that the answer comes out of the same ReachesCommand / PathCommand /
-// CallersCommand body, through the same renderer, as the store-backed CLI. A real one-shot client/host
-// protocol is a later slice; keeping this a pure string→string function means that slice can be built without
-// unpicking anything here.
+//   * a LINE OF TEXT (`AnswerAsync`) — the stdin loop `rig watch` exposes to a human at a terminal. Every
+//     verb here is the DEFAULT invocation of its command, no flags, which is exactly what makes each answer
+//     directly comparable to `rig <verb> …` against a store of the same tree (LiveReachesTests,
+//     LivePathCallersTests and LiveTreeTests all compare precisely that).
+//   * a TRANSPORT REQUEST (`RunRequestAsync`) — an allowlisted verb plus that verb's own strongly-typed
+//     options record, arriving over the named pipe from a one-shot `rig` invocation. This is where the
+//     rendering flags come from: `--format tsv`, `--limit`, `--view`, `--depth` and the rest are already in
+//     the options record the CLI parsed, so carrying it gets them all with no per-flag work.
 //
-// Every verb here is the DEFAULT invocation of its command — no flags on the live surface yet. That is what
-// makes each answer directly comparable to `rig <verb> …` against a store of the same tree, which is exactly
-// what LiveReachesTests and LivePathCallersTests do. Adding a flag means widening the shaping check in
-// LiveQueryFactSource.SameShapingAsMemo, not just parsing one more token.
+// THE ALLOWLIST IS THE SWITCH IN RunRequestAsync, and it is the only place a verb becomes a command. There is
+// no argv, no command lookup and no reflection anywhere on this path: a verb outside the four arms has no
+// code to reach, which is a stronger statement than "is rejected". LiveQueryVerbs.Routable names the same
+// four for the client's benefit, and LiveTransportRoutingTests asserts the two agree.
 //
 // Nothing is written to Console: the caller owns presentation (and TUnit does not surface console output, a
 // lesson this program has already paid for). Unrecognized input answers with what IS supported — an obscure
@@ -37,6 +41,109 @@ internal static class LiveQueryRunner
     {
         public string Text => Err.Length == 0 ? Out : Out + Err;
     }
+
+    // The outcome of a TRANSPORT request: an answer, or a DECLINE. A decline carries no rendered output on
+    // purpose — the client must fall back to the store, and an empty result would read as "no matches".
+    internal sealed record RequestResult(LiveAnswer? Answer, string? DeclineReason)
+    {
+        internal static RequestResult Declined(string reason) => new(null, reason);
+    }
+
+    // THE VERB ALLOWLIST. Four arms, one per live-servable command, each decoding the options record its own
+    // command declared. This is the entire attack surface of the transport: there is no path from request text
+    // to a command name, a file path, or a process — only from one of four constants to one of four bodies.
+    //
+    // Decoding failures decline rather than throw. A client from a different build whose options record gained
+    // a required member should get a store answer with a stated reason, not a stack trace and no answer.
+    internal static async Task<RequestResult> RunRequestAsync(LiveQueryRequest request, LiveFactSource facts, string workingDirectory)
+    {
+        switch (request.Verb)
+        {
+            case LiveQueryVerbs.Reaches:
+                return await ServeAsync<ReachesCommand.Options>(request, o => o.ExtraRules, o => RunReachesAsync(Normalize(o), facts, workingDirectory));
+
+            case LiveQueryVerbs.Path:
+                return await ServeAsync<PathCommand.Options>(request, o => o.ExtraRules, o => RunPathAsync(o, facts, workingDirectory));
+
+            case LiveQueryVerbs.Callers:
+                return await ServeAsync<CallersCommand.Options>(request, o => o.ExtraRules, o => RunCallersAsync(o, facts, workingDirectory));
+
+            case LiveQueryVerbs.Tree:
+                return await ServeAsync<TreeCommand.Options>(request, o => o.ExtraRules, o => RunTreeAsync(Normalize(o), facts, workingDirectory));
+
+            default:
+                return RequestResult.Declined($"`{request.Verb}` is not served from the resident index — {Usage}");
+        }
+    }
+
+    // WHY `--rules` IS DECLINED RATHER THAN OBEYED, and why this guard is not optional.
+    //
+    // The live artifacts are memoized under the rules the FACTS were extracted with, and the two identity
+    // checks that protect them — LiveQueryFactSource.SameShapingAsMemo (three gated slice SIZES) and
+    // DeriveEffectsAsync's reference-identity test — were both written when the live surface had no `--rules`
+    // flag, and both carry a comment saying they must be WIDENED if it ever gained one. This transport gives
+    // it one: a routed request carries the command's whole options record, `ExtraRules` included.
+    //
+    // Obeying it is not achievable here, and not only because of those memos. Extraction-time rules (file
+    // include/exclude, DI descriptors) shaped the facts the host is holding; no query-time rule set can
+    // retroactively change what was extracted. So the choices are a silently-wrong answer or a decline, and
+    // the store — which applies `--rules` correctly, from scratch — is one fallback away.
+    //
+    // Note what is NOT declined: a query with NO `--rules`, which is the ordinary case and the agent case.
+    // Its rules come from the same cascade, anchored at the same working directory, that the host booted with
+    // (RuleSetLoader.Load auto-discovers the local rig.rules.json), so the two rule sets are equal by
+    // construction — which is exactly the argument those two memo checks already rest on.
+    private const string RulesNotHonoured =
+        "--rules is not honoured by the resident index: its facts were extracted, and its derived layer memoized, "
+        + "under the rules `rig watch` booted with. Re-boot the host with those rules, or drop --rules";
+
+    private static async Task<RequestResult> ServeAsync<TOptions>(
+        LiveQueryRequest request,
+        Func<TOptions, IReadOnlyList<string>?> extraRulesOf,
+        Func<TOptions, Task<LiveAnswer>> run
+    )
+        where TOptions : class
+    {
+        if (Decode<TOptions>(request.Options) is not { } options)
+        {
+            return RequestResult.Declined($"unreadable options for `{request.Verb}`");
+        }
+
+        return extraRulesOf(options) is { Count: > 0 } ? RequestResult.Declined(RulesNotHonoured) : new RequestResult(await run(options), null);
+    }
+
+    private static T? Decode<T>(string json)
+        where T : class
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<T>(json, LiveQueryTransport.Json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    // The one thing a JSON round-trip LOSES, restored explicitly. `--only`/`--exclude` are built by
+    // CommonOptions.FilterSet as CASE-INSENSITIVE sets; System.Text.Json reconstructs a HashSet<string> with
+    // the DEFAULT (ordinal) comparer, so `--only EFCORE` would silently match nothing on the routed path while
+    // matching everything on the store path. Rebuilding through the same factory the CLI used is the fix, and
+    // it is the reason the transport carries an options RECORD rather than pretending a record is just data.
+    // Pinned by Routed_case_insensitive_effect_filters_behave_exactly_as_they_do_in_process.
+    private static ReachesCommand.Options Normalize(ReachesCommand.Options options) =>
+        options with
+        {
+            Only = CommonOptions.FilterSet([.. options.Only ?? []]),
+            Exclude = CommonOptions.FilterSet([.. options.Exclude ?? []]),
+        };
+
+    private static TreeCommand.Options Normalize(TreeCommand.Options options) =>
+        options with
+        {
+            Only = CommonOptions.FilterSet([.. options.Only ?? []]),
+            Exclude = CommonOptions.FilterSet([.. options.Exclude ?? []]),
+        };
 
     internal static async Task<LiveAnswer> AnswerAsync(string query, LiveFactSource facts, string workingDirectory)
     {
@@ -89,12 +196,8 @@ internal static class LiveQueryRunner
     // builds when only the positional pattern is given — no --async/--raw/--depth/--limit/--format on the live
     // surface yet, so the output is the default human rendering and is directly comparable to
     // `rig reaches <pattern>` against a store of the same tree (which is exactly what LiveReachesTests does).
-    private static async Task<LiveAnswer> ReachesAsync(string pattern, LiveFactSource facts, string workingDirectory)
-    {
-        var output = new StringWriter();
-        var error = new StringWriter();
-        var source = new LiveQueryFactSource(facts);
-        var exit = await ReachesCommand.RunAsync(
+    private static Task<LiveAnswer> ReachesAsync(string pattern, LiveFactSource facts, string workingDirectory) =>
+        RunReachesAsync(
             new ReachesCommand.Options(
                 FromPattern: pattern,
                 Async: false,
@@ -109,6 +212,29 @@ internal static class LiveQueryRunner
                 Limit: null,
                 Time: false
             ),
+            facts,
+            workingDirectory
+        );
+
+    private static Task<LiveAnswer> RunReachesAsync(ReachesCommand.Options options, LiveFactSource facts, string workingDirectory) =>
+        RunCommandAsync(options, facts, workingDirectory, ReachesCommand.RunAsync);
+
+    // The ONE place a live query is actually executed, shared by all four verbs: build the writers, wrap the
+    // fact generation in the IQueryFactSource adapter, run the command's own body, hand back the two streams.
+    // Parameterised on the command's RunAsync so a verb arm is a single line and cannot diverge in how it
+    // wires IO — the divergence that would make one verb's routed answer subtly unlike its in-process one.
+    private static async Task<LiveAnswer> RunCommandAsync<TOptions>(
+        TOptions options,
+        LiveFactSource facts,
+        string workingDirectory,
+        Func<TOptions, CommandIo, Func<Task<IQueryFactSource>>, Task<int>> run
+    )
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var source = new LiveQueryFactSource(facts);
+        var exit = await run(
+            options,
             new CommandIo(new TextOutput(Output: output, Error: error), new WorkspaceLocation(WorkingDirectory: workingDirectory)),
             // The live source is owned by the HOST (it is one fact generation, shared by every query against
             // it), so the adapter's DisposeAsync is a no-op and the command's `await using` cannot close
@@ -122,12 +248,8 @@ internal static class LiveQueryRunner
     // `callers <to>` — the REVERSE traversal, answered off the resident facts. Same shape as ReachesAsync: the
     // DEFAULT options record (no --orphans/--entrypoints/--async/--raw/--limit/--format on the live surface
     // yet), so the rendering is directly comparable to `rig callers <to>` against a store of the same tree.
-    private static async Task<LiveAnswer> CallersAsync(string pattern, LiveFactSource facts, string workingDirectory)
-    {
-        var output = new StringWriter();
-        var error = new StringWriter();
-        var source = new LiveQueryFactSource(facts);
-        var exit = await CallersCommand.RunAsync(
+    private static Task<LiveAnswer> CallersAsync(string pattern, LiveFactSource facts, string workingDirectory) =>
+        RunCallersAsync(
             new CallersCommand.Options(
                 ToPattern: pattern,
                 RootsOnly: false,
@@ -142,12 +264,12 @@ internal static class LiveQueryRunner
                 Limit: null,
                 Time: false
             ),
-            new CommandIo(new TextOutput(Output: output, Error: error), new WorkspaceLocation(WorkingDirectory: workingDirectory)),
-            () => Task.FromResult<IQueryFactSource>(source)
+            facts,
+            workingDirectory
         );
 
-        return new LiveAnswer(Exit: exit, Out: output.ToString(), Err: error.ToString());
-    }
+    private static Task<LiveAnswer> RunCallersAsync(CallersCommand.Options options, LiveFactSource facts, string workingDirectory) =>
+        RunCommandAsync(options, facts, workingDirectory, CallersCommand.RunAsync);
 
     // `tree <pattern>` — the call TREE, answered off the resident facts. Same shape as ReachesAsync: the DEFAULT
     // options record, so this is `--view paths` with no filters and no --format, directly comparable to
@@ -158,12 +280,8 @@ internal static class LiveQueryRunner
     // (LiveQueryFactSource.OpenArtifactCache), never `.rig/cache.db`. Passing NoCache: true would be the wrong
     // "safe" choice: it would recompute the forest for every repeat question, which is precisely the cost a
     // resident host exists to avoid.
-    private static async Task<LiveAnswer> TreeAsync(string pattern, LiveFactSource facts, string workingDirectory)
-    {
-        var output = new StringWriter();
-        var error = new StringWriter();
-        var source = new LiveQueryFactSource(facts);
-        var exit = await TreeCommand.RunAsync(
+    private static Task<LiveAnswer> TreeAsync(string pattern, LiveFactSource facts, string workingDirectory) =>
+        RunTreeAsync(
             new TreeCommand.Options(
                 FromPattern: pattern,
                 View: "paths",
@@ -188,12 +306,12 @@ internal static class LiveQueryRunner
                 Format: null,
                 Suppress: null
             ),
-            new CommandIo(new TextOutput(Output: output, Error: error), new WorkspaceLocation(WorkingDirectory: workingDirectory)),
-            () => Task.FromResult<IQueryFactSource>(source)
+            facts,
+            workingDirectory
         );
 
-        return new LiveAnswer(Exit: exit, Out: output.ToString(), Err: error.ToString());
-    }
+    private static Task<LiveAnswer> RunTreeAsync(TreeCommand.Options options, LiveFactSource facts, string workingDirectory) =>
+        RunCommandAsync(options, facts, workingDirectory, TreeCommand.RunAsync);
 
     // `path <from> <to>` — the only two-argument live verb, so the only one that tokenizes its remainder.
     // Whitespace separates the two patterns; double quotes group, so a DocID-shaped pattern whose signature
@@ -208,10 +326,7 @@ internal static class LiveQueryRunner
             return Rejected("`path` needs exactly two patterns, a from and a to (quote a pattern containing spaces)");
         }
 
-        var output = new StringWriter();
-        var error = new StringWriter();
-        var source = new LiveQueryFactSource(facts);
-        var exit = await PathCommand.RunAsync(
+        return await RunPathAsync(
             new PathCommand.Options(
                 FromPattern: endpoints[0],
                 ToPattern: endpoints[1],
@@ -223,12 +338,13 @@ internal static class LiveQueryRunner
                 Format: null,
                 Time: false
             ),
-            new CommandIo(new TextOutput(Output: output, Error: error), new WorkspaceLocation(WorkingDirectory: workingDirectory)),
-            () => Task.FromResult<IQueryFactSource>(source)
+            facts,
+            workingDirectory
         );
-
-        return new LiveAnswer(Exit: exit, Out: output.ToString(), Err: error.ToString());
     }
+
+    private static Task<LiveAnswer> RunPathAsync(PathCommand.Options options, LiveFactSource facts, string workingDirectory) =>
+        RunCommandAsync(options, facts, workingDirectory, PathCommand.RunAsync);
 
     // Whitespace-separated positional arguments with double-quote grouping. Deliberately minimal (no escapes,
     // no single quotes): this is a query line typed at a terminal, not a shell.

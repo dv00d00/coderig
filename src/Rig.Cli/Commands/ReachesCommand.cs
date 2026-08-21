@@ -34,6 +34,7 @@ internal static class ReachesCommand
         var limit = CommonOptions.Limit();
         var time = CommonOptions.Time();
         var store = CommonOptions.Store();
+        var noLive = CommonOptions.NoLive();
         var cmd = new Command(name: "reaches", description: "Effects reachable from an entry point, by depth.")
         {
             from,
@@ -49,32 +50,37 @@ internal static class ReachesCommand
             limit,
             time,
             store,
+            noLive,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
-                () =>
-                    RunAsync(
-                        new Options(
-                            FromPattern: pr.GetValue(from)!,
-                            Async: pr.GetValue(async),
-                            IncludeDelivery: pr.GetValue(includeDelivery),
-                            Raw: pr.GetValue(raw),
-                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                            Depth: pr.GetValue(depth),
-                            Format: pr.GetValue(format),
-                            Only: CommonOptions.FilterSet(pr.GetValue(only)),
-                            Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
-                            Intrinsic: pr.GetValue(intrinsic),
-                            Limit: pr.GetValue(limit),
-                            Time: pr.GetValue(time)
-                        ),
-                        new CommandIo(
-                            new TextOutput(Output: output, Error: error),
-                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
-                        )
-                    )
+                async () =>
+                {
+                    var opts = new Options(
+                        FromPattern: pr.GetValue(from)!,
+                        Async: pr.GetValue(async),
+                        IncludeDelivery: pr.GetValue(includeDelivery),
+                        Raw: pr.GetValue(raw),
+                        ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        Depth: pr.GetValue(depth),
+                        Format: pr.GetValue(format),
+                        Only: CommonOptions.FilterSet(pr.GetValue(only)),
+                        Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                        Intrinsic: pr.GetValue(intrinsic),
+                        Limit: pr.GetValue(limit),
+                        Time: pr.GetValue(time)
+                    );
+                    var io = new CommandIo(
+                        new TextOutput(Output: output, Error: error),
+                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                    );
+                    // Route to the resident index if one is watching this directory, else the store. The
+                    // already-parsed options record IS the request payload, which is why every rendering flag
+                    // above works identically on both paths. See LiveRoute for the default and the disclosure.
+                    return await LiveRoute.TryAnswerAsync(LiveQueryVerbs.Reaches, opts, io, pr.GetValue(noLive)) ?? await RunAsync(opts, io);
+                }
             )
         );
         return cmd;
