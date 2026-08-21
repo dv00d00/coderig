@@ -34,6 +34,7 @@ internal sealed class LiveFactSource
     private readonly Lazy<FactEntryPointDeriver.FactEntryPointData> _epData;
     private readonly Lazy<IReadOnlyList<FactInvocation>> _invocations;
     private readonly Lazy<IReadOnlyList<SymbolRef>> _throwRefs;
+    private readonly Lazy<ISet<EventSubscriptionSite>> _eventSubscriptionSites;
     private readonly Lazy<IReadOnlyList<DerivedEffect>> _effects;
     private readonly Lazy<IReadOnlyList<DerivedEffect>> _hazardEffects;
 
@@ -46,6 +47,7 @@ internal sealed class LiveFactSource
         _epData = Memo("epData", () => LiveReads.FactEntryPointData(facts));
         _invocations = Memo("invocations", () => LiveReads.InvocationRefs(facts));
         _throwRefs = Memo("throwRefs", () => LiveReads.ThrowRefs(facts));
+        _eventSubscriptionSites = Memo("eventSites", () => LiveReads.EventSubscriptionSites(facts));
         _effects = Memo("effects", () => QueryEffectDerivation.ForReach(rules, ReachInputs, TraversalGraph));
         _hazardEffects = Memo("hazardEffects", () => DeriveHazardEffects(facts, rules, EpData));
     }
@@ -76,6 +78,12 @@ internal sealed class LiveFactSource
 
     // Mirrors Reads.LoadThrowRefsAsync.
     public IReadOnlyList<SymbolRef> ThrowRefs => _throwRefs.Value;
+
+    // Mirrors Reads.EventSubscriptionSitesAsync. Memoized like every other artifact: the traversal commands
+    // apply MarkEventSubscriptionHandoffs on EVERY non---raw query, so an unmemoized projection over the whole
+    // reference-fact set would be re-run per query for the life of a generation — a real per-query cost that
+    // was invisible precisely because it was not in BuildTimes.
+    public ISet<EventSubscriptionSite> EventSubscriptionSites => _eventSubscriptionSites.Value;
 
     // The in-memory twin of what TraversalGraphLoader.LoadEffectReachInputsAsync hands a traversal command —
     // same record, same fields. The one structural difference from the store path is DISCLOSED rather than
@@ -128,6 +136,38 @@ internal sealed class LiveFactSource
     // Empty when nothing was built this generation (every artifact already memoized).
     public string BuildTimeLine() =>
         string.Join(" | ", BuildTimes.Select(t => $"{t.Artifact} {t.Elapsed.TotalMilliseconds.ToString("F1", CultureInfo.InvariantCulture)}ms"));
+
+    // Force the artifacts a QUERY needs, so the first query of a generation does not pay for them. Called by
+    // WatchHost on a background task right after an eager apply; see the note there for the scheduling rules.
+    //
+    // WHICH artifacts, and why not the others: reaches/path/callers touch exactly TraversalGraph, Invocations,
+    // EpData, ThrowRefs (all four via ReachInputs) and Effects — measured on MedDBase at
+    // `traversalGraph 2198ms | invocations 242ms | epData 371ms | throwRefs 147ms | effects 1038ms` ≈ 4.0s.
+    // ShapedGraph and HazardEffects are deliberately NOT warmed: they are `derive`-shaped (ShapedGraph adds the
+    // delivery edges a traversal must NOT walk, HazardEffects is the whole-store hazard pass) and no live query
+    // path reads either today — warming them would burn tens of seconds per edit for nothing.
+    //
+    // Forced ONE AT A TIME with a cancellation check between, because a Lazy factory cannot be interrupted
+    // once entered: the granularity of "stop warming" is therefore one artifact, and the ORDER below is the
+    // access order the query path itself uses, so BuildTimes still reads as disjoint per-artifact rows.
+    // Everything here is idempotent and side-effect-free — a cancelled warm leaves whatever it finished
+    // memoized and correct, and a query that arrives mid-warm either finds the artifact already built or
+    // joins the in-flight build (Lazy's default ExecutionAndPublication mode) rather than duplicating it.
+    public void WarmQueryArtifacts(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = TraversalGraph;
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = Invocations;
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = EpData;
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = ThrowRefs;
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = Effects;
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = EventSubscriptionSites;
+    }
 
     // The traversal-graph projection, factored out so an uncached caller (a `--raw`-style rule variant that
     // this generation's memo does not cover) can build one without disturbing the memo. Mirrors

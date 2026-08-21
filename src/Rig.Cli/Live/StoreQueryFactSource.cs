@@ -35,6 +35,9 @@ internal sealed class StoreQueryFactSource(RigDbContext context) : IQueryFactSou
         RuleSet shapedRules
     ) => TraversalGraphLoader.LoadEffectReachInputsAsync(context, pattern, direction, shapedRules);
 
+    public Task<FactGraphData> LoadShapedTraversalGraphAsync(string pattern, SqlReachability.Direction direction, RuleSet shapedRules) =>
+        TraversalGraphLoader.LoadShapedTraversalGraphAsync(context, pattern, direction, shapedRules);
+
     public Task<ISet<EventSubscriptionSite>> EventSubscriptionSitesAsync() => Reads.EventSubscriptionSitesAsync(context);
 
     public Task<IReadOnlyList<DerivedEffect>> DeriveEffectsAsync(SqlReachability.ReachInputs inputs, FactGraphData graph, RuleSet rules) =>
@@ -63,6 +66,17 @@ internal sealed class StoreQueryFactSource(RigDbContext context) : IQueryFactSou
 
     public Task ReportNoNodeMatchAsync(TextWriter output, string pattern) =>
         SeedResolutionNotice.ReportNoNodeMatchAsync(output, context, pattern);
+
+    public Task<bool> SymbolExistsAnywhereAsync(string pattern) => SeedResolutionNotice.ExistsInStoreAsync(context, pattern);
+
+    public Task<FactEntryPointDeriver.FactEntryPointData> LoadEntryPointDataAsync() => Reads.LoadFactEntryPointDataAsync(context);
+
+    public Task<(
+        IReadOnlyList<DerivedEntryPoint> Derived,
+        IReadOnlyList<HandoffEntryPoint> ClassifiedHandoffs,
+        IReadOnlyList<DerivedEntryPoint> PromotedOrigins
+    )> DeriveEntryPointsAsync(FactEntryPointDeriver.FactEntryPointData epData, RuleSet rules) =>
+        EntryPoints.EntryPointContext.DeriveEntryPointsAsync(context, epData, rules);
 
     public ValueTask DisposeAsync() => context.DisposeAsync();
 }

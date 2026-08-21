@@ -199,6 +199,15 @@ internal static class WatchCommand
 // the worker, and the worker is the only writer. Reconcile runs as a background task the worker
 // starts after an apply and CANCELS when the next edit arrives — an edit never queues behind the
 // cascade, which is the whole point of the converging overlay.
+//
+// WARMING runs on a SECOND background task started at the same point and cancelled by the same next edit,
+// because facts being current is not the same as a query being fast: the per-generation derived layer costs
+// ~4.0s on MedDBase on first access and nothing thereafter, so before this the first query after EVERY edit
+// paid it. Warming builds it off the worker's path so that query pays nothing. The two tasks differ in one
+// respect and it is deliberate: the worker AWAITS the cancelled reconcile before touching the index (the
+// ResidentIndex is single-writer, so it must), but it does NOT await the cancelled warm — warming only forces
+// Lazy fields on an IMMUTABLE LiveFactSource and touches no index state, so it is safe to abandon, and
+// awaiting it would be exactly the "an edit waits for warming" trade that warming must always lose.
 internal sealed class WatchHost : IAsyncDisposable
 {
     private static readonly TimeSpan DefaultDebounce = TimeSpan.FromMilliseconds(300);
@@ -216,6 +225,13 @@ internal sealed class WatchHost : IAsyncDisposable
 
     private int _appliedFiles;
     private double _lastEditSeconds = -1;
+
+    // The in-flight background warm (and its cancellation), owned by the worker loop. Kept as FIELDS rather
+    // than locals of RunLoopAsync — unlike the reconcile, this task outlives the iteration that started it
+    // (it is cancelled, not awaited, when the next edit arrives), so DisposeAsync must still be able to
+    // cancel and observe it instead of leaving a fire-and-forget task running past the host's lifetime.
+    private Task? _warm;
+    private CancellationTokenSource? _warmCts;
 
     // The query-ready derived layer for the CURRENT fact generation, built on first query and thrown away the
     // moment the facts move. Generation identity is the AnalysisResult INSTANCE: ResidentIndex nulls its
@@ -393,6 +409,19 @@ internal sealed class WatchHost : IAsyncDisposable
         }
         catch (OperationCanceledException) { }
 
+        // Warming is linked to the shutdown token, so it is already cancelled; await the most recent one so a
+        // disposed host leaves no thread still touching a fact generation (the `_gate` dispose below would
+        // otherwise race a warm that had not yet noticed).
+        if (_warm is not null)
+        {
+            try
+            {
+                await _warm;
+            }
+            catch (OperationCanceledException) { }
+        }
+
+        _warmCts?.Dispose();
         _shutdown.Dispose();
         _gate.Dispose();
         _index.Dispose();
@@ -468,6 +497,10 @@ internal sealed class WatchHost : IAsyncDisposable
                 }
 
                 await StopReconcileAsync();
+                // Cancel — but deliberately do NOT await — any in-flight warm before touching the index. It
+                // holds no index state, so abandoning it is safe, and awaiting it would make this edit wait on
+                // work whose only purpose is to make a LATER query fast. Warming always loses that trade.
+                CancelWarming();
 
                 // Debounce: one save fires several watcher events (and editors write in bursts) —
                 // absorb until the channel has been quiet for the debounce window, so one save is one
@@ -496,6 +529,12 @@ internal sealed class WatchHost : IAsyncDisposable
                 var applied = await ApplyBatchAsync(batch, cancellationToken);
                 if (applied == 0)
                 {
+                    // Nothing applied (an obj/ escapee, a non-workspace file, a file deleted mid-burst), so the
+                    // fact generation did NOT move — but the warm was already cancelled above. Restart it so a
+                    // stray save cannot leave the current generation permanently half-warmed. Cheap and silent:
+                    // whatever it already built is memoized, so this only finishes the remainder, and the
+                    // completion line is suppressed when there was no remainder to build.
+                    await StartWarmingAsync(cancellationToken);
                     continue;
                 }
 
@@ -503,14 +542,89 @@ internal sealed class WatchHost : IAsyncDisposable
 
                 reconcileCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 reconcile = ReconcileInBackgroundAsync(reconcileCts.Token);
+                await StartWarmingAsync(cancellationToken);
             }
         }
         catch (OperationCanceledException) { }
         finally
         {
             await StopReconcileAsync();
+            CancelWarming();
         }
     }
+
+    // Start warming the CURRENT generation's derived layer. The LiveFactSource is resolved under `_gate` (it
+    // reads _index.CurrentFacts, which the worker mutates) but the BUILD runs outside it — holding the gate for
+    // seconds would block the next apply, which is the one thing this loop must never do. Nothing here is
+    // ordered against a query either: LiveFactSource is immutable per generation, so a query arriving mid-warm
+    // either finds its artifact already memoized or joins the in-flight build.
+    private async Task StartWarmingAsync(CancellationToken cancellationToken)
+    {
+        LiveFactSource facts;
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            facts = CurrentLiveFacts();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        // The previous CTS is already cancelled (CancelWarming ran at the top of this iteration); disposing it
+        // here is safe even if its abandoned task is still running, because that task only ever reads the
+        // token's IsCancellationRequested flag.
+        _warmCts?.Dispose();
+        _warmCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _warm = WarmInBackgroundAsync(facts, _warmCts.Token);
+    }
+
+    // Cancel the in-flight warm without waiting for it. Every warm CTS is LINKED to the shutdown token, so a
+    // task abandoned here is also cancelled by DisposeAsync — it cannot outlive the host even though only the
+    // most recent one is awaited there.
+    private void CancelWarming() => _warmCts?.Cancel();
+
+    private Task WarmInBackgroundAsync(LiveFactSource facts, CancellationToken cancellationToken) =>
+        Task.Run(
+            () =>
+            {
+                // Artifacts already memoized before this warm — the same before/after count AnswerQueryAsync
+                // uses, and for the same reason: it is the only way to tell "I built this" from "it was
+                // already there", and reporting the generation's accumulated costs as if THIS task had just
+                // paid them would be a false disclosure.
+                var built = facts.BuildTimes.Count;
+                var watch = Stopwatch.StartNew();
+                try
+                {
+                    facts.WarmQueryArtifacts(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return; // a newer edit (or shutdown) superseded this generation — nothing to say
+                }
+                catch (Exception exception)
+                {
+                    // A warm failure must never take the host down and must never pass silently: the layer
+                    // stays unbuilt, so the next query builds it and would hit the same fault where the user
+                    // can see it. Disclose and move on.
+                    _output.WriteLine($"live: background warm of the derived layer FAILED: {exception.Message}");
+                    return;
+                }
+
+                watch.Stop();
+                if (facts.BuildTimes.Count == built)
+                {
+                    return; // nothing left to build (a restarted warm on an unchanged generation) — say nothing
+                }
+
+                // The counterpart of AnswerQueryAsync's cost line: this says the cost was paid HERE, off the
+                // query path, so the absence of a cost line on the next answer is explained rather than
+                // mysterious. The artifact list is the GENERATION's, which on the normal path is exactly what
+                // this task built.
+                _output.WriteLine($"live: derived layer warmed in {watch.Elapsed.TotalSeconds:F2}s: {facts.BuildTimeLine()}");
+            },
+            cancellationToken
+        );
 
     private async Task<int> ApplyBatchAsync(IReadOnlyCollection<string> batch, CancellationToken cancellationToken)
     {

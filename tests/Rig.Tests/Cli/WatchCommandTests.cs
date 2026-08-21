@@ -88,7 +88,12 @@ public sealed class WatchCommandTests
         );
 
         exitCode.ShouldBe(0, output.ToString() + error.ToString());
-        output.ToString().ShouldContain("live: unsupported query 'impact' — supported live queries: `reaches <pattern>`; `quit` (or EOF) exits.");
+        output
+            .ToString()
+            .ShouldContain(
+                "live: unsupported query 'impact' — supported live queries: `reaches <pattern>`, `path <from> <to>`, "
+                    + "`callers <to>`; `quit` (or EOF) exits."
+            );
     }
 
     // Acceptance 2: the loop end-to-end on a temp copy of DeepChain — boot with the watcher live,

@@ -2,12 +2,12 @@ using System.CommandLine;
 using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Live;
 using Rig.Cli.Rendering;
 using Rig.Cli.Telemetry;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.EntryPoints.EntryPointContext;
-using static Rig.Cli.Graph.TraversalGraphLoader;
 using static Rig.Cli.Rendering.SymbolNameFormatter;
 
 namespace Rig.Cli.Commands;
@@ -71,7 +71,8 @@ internal static class PathCommand
 
     // Bound option values for `rig path`. Raw user inputs (Format kept as the parsed string);
     // flag derivations (format -> tsv, mode) live at the top of RunAsync.
-    private sealed record Options(
+    // Internal (was private) so the LIVE query path can build the same options record for the same RunAsync.
+    internal sealed record Options(
         string FromPattern,
         string ToPattern,
         bool Async,
@@ -83,7 +84,15 @@ internal static class PathCommand
         bool Time
     );
 
-    private static async Task<int> RunAsync(Options opts, CommandIo io)
+    // The CLI entry: answer off the .rig store, which is what every `rig path` invocation does. The source is
+    // passed as a FACTORY, not an already-open source, purely to preserve ORDERING: the schema gate must still
+    // fire where the old `await using var context = …` sat (after the rules load), not before it.
+    private static Task<int> RunAsync(Options opts, CommandIo io) =>
+        RunAsync(opts, io, () => StoreQueryFactSource.OpenAsync(io.WorkspaceLocation));
+
+    // The command body, parameterized on WHERE the facts come from (IQueryFactSource) rather than on a
+    // RigDbContext — so the SAME body answers off a saved store or off the resident live facts.
+    internal static async Task<int> RunAsync(Options opts, CommandIo io, Func<Task<IQueryFactSource>> openSource)
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
         var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
@@ -95,18 +104,15 @@ internal static class PathCommand
         var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
+        await using var source = await openSource();
 
         var graphWatch = Stopwatch.StartNew();
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
         // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
-        // same first path as the full graph. Falls back to the full EF graph when `rig graph` hasn't run.
-        var graph = await LoadShapedTraversalGraphAsync(
-            context: context,
-            pattern: opts.FromPattern,
-            direction: SqlReachability.Direction.Forward,
-            shaped
-        );
+        // same first path as the full graph. Falls back to the full EF graph when `rig graph` hasn't run;
+        // the live source has no SQL to bound with at all and hands back the whole shaped graph, which is
+        // a superset of the same closure — see the "Fact graph:" banner note below.
+        var graph = await source.LoadShapedTraversalGraphAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
         // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
         // (ReachesCommand/TreeCommand do the same). The handler genuinely runs LATER via the event, not
         // synchronously at the `+=` site, so it must be sync-cut by default and only crossed under --async.
@@ -114,7 +120,7 @@ internal static class PathCommand
         // over-reach). `--raw` bypasses all shaping, so it is gated the same way reaches/tree gate it.
         if (!opts.Raw)
         {
-            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
         }
 
         graphWatch.Stop();
@@ -139,6 +145,12 @@ internal static class PathCommand
         AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.FromPattern, graph);
         AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.ToPattern, graph);
 
+        // LOAD DIAGNOSTIC, NOT AN ANSWER — and the one line in this command whose value depends on the fact
+        // SOURCE rather than on the question. It reports the size of the subgraph that was LOADED: on a store
+        // with `rig graph` run that is the SQL-bounded forward slice; on the same store without it, the full EF
+        // graph; on the resident live source, the whole in-memory graph. The three numbers differ by
+        // construction and always have (the store path has reported two different values for the same query
+        // since the bounded loader landed). The path itself, and every other line below, is identical.
         if (!tsv)
         {
             io.TextOutput.Output.WriteLine(
@@ -169,7 +181,7 @@ internal static class PathCommand
             // and only here on the negative path, where the query has already failed.
             if (
                 FactPathFinder.DistinctMatchTargets(symbolIds, opts.ToPattern).Count == 0
-                && !await SeedResolutionNotice.ExistsInStoreAsync(context, opts.ToPattern)
+                && !await source.SymbolExistsAnywhereAsync(opts.ToPattern)
             )
             {
                 SeedResolutionNotice.ReportNoMatch(io.TextOutput.Output, opts.ToPattern, endpoint: "to");
@@ -205,14 +217,16 @@ internal static class PathCommand
 
         // Deployment/EP chip on the from-node (path[0]): which service(s) host this entry point.
         // Opt-in via deployments.json; no-op otherwise.
-        var pathDeployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
-        var pathEpContext = await BuildEpContextAsync(
-            context,
-            graph,
-            io.WorkspaceLocation.WorkingDirectory,
-            opts.ExtraRules,
-            rules,
-            pathDeployments
+        var pathDeployments = await source.LoadDeploymentsAsync(io.WorkspaceLocation.WorkingDirectory);
+        var pathEpContext = await source.BuildEpContextAsync(
+            graph: graph,
+            workingDirectory: io.WorkspaceLocation.WorkingDirectory,
+            extraRules: opts.ExtraRules,
+            rules: rules,
+            deployments: pathDeployments,
+            // The store path's BuildEpContextAsync default: `path` never loaded the EP fact bundle itself (it
+            // loads the graph only), so there is nothing to thread and tier 3 loads its own, exactly as before.
+            epData: null
         );
 
         io.TextOutput.Output.WriteLine($"Path '{opts.FromPattern}' -> '{opts.ToPattern}' ({path.Count} nodes):");

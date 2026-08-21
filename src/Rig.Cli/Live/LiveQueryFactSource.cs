@@ -23,7 +23,10 @@ namespace Rig.Cli.Live;
 //     reach closure (SqlReachability); with no SQL there is nothing to narrow with, so the live derivation
 //     runs over the WHOLE fact set. The command then filters effects by `reachable.ContainsKey(
 //     EnclosingSymbolId)` on both paths, which is what makes the ANSWERS agree — LiveReachesTests measures
-//     that byte-for-byte on real playgrounds rather than assuming it.
+//     that byte-for-byte on real playgrounds rather than assuming it. The same holds for the graph-only load
+//     `path`/`callers` take (LoadShapedTraversalGraphAsync): the whole graph is a superset of either
+//     direction's bounded closure and the traversal narrows it, measured in LivePathCallersTests — which is
+//     also where the one VISIBLE consequence is pinned, `path`'s "Fact graph: N call edges …" load banner.
 //  2. NO QUERY CACHE. The store path memoizes the (expensive, pattern-independent) EP-site map in
 //     .rig/cache.db keyed by store identity; live facts change per edit, so a disk cache keyed on them would
 //     be a liability. The equivalent here is per-GENERATION memoization: derive once, reuse for every query
@@ -33,6 +36,11 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
     private readonly object _gate = new();
 
     private IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>? _epSiteKind;
+    private (
+        IReadOnlyList<DerivedEntryPoint> Derived,
+        IReadOnlyList<HandoffEntryPoint> ClassifiedHandoffs,
+        IReadOnlyList<DerivedEntryPoint> PromotedOrigins
+    )? _entryPoints;
 
     public LiveFactSource Source { get; } = live;
 
@@ -43,21 +51,42 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
     )
     {
         // `pattern`/`direction` have no live analogue (see asymmetry 1 above) and are intentionally unused.
-        //
-        // `shapedRules` is NOT ignored. The memo was shaped with the rules the FACTS were extracted under, and
-        // a caller shaping differently must not be silently served the wrong graph. Today exactly one such
-        // divergence is reachable: `--raw`, which zeroes Cut/Context. Everything else is equal by
-        // construction — the live query surface has no `--rules` flag, and ReachesCommand reloads rules from
-        // the SAME working directory the host booted with, so the two rule sets differ only where the command
-        // deliberately gates them. Cut/Context sizes are therefore a sufficient discriminator TODAY; adding
-        // `--rules` (or any other rule-gating flag) to the live surface means widening this check, not
-        // trusting it.
-        var rules = Source.Rules;
-        var sameShaping = shapedRules.Cut.Count == rules.Cut.Count && shapedRules.Context.Count == rules.Context.Count;
-        return Task.FromResult(sameShaping ? Source.ReachInputs : Source.ReachInputs with { Graph = LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules) });
+        // `shapedRules` is NOT ignored — see SameShapingAsMemo for why its three gated slice sizes are the
+        // discriminator and what would force that check to widen.
+        return Task.FromResult(
+            SameShapingAsMemo(shapedRules)
+                ? Source.ReachInputs
+                : Source.ReachInputs with
+                {
+                    Graph = LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules),
+                }
+        );
     }
 
-    public Task<ISet<EventSubscriptionSite>> EventSubscriptionSitesAsync() => Task.FromResult(LiveReads.EventSubscriptionSites(Source.Facts));
+    // `path`/`callers`' graph-only load. Same memo, same shaping discriminator — the only difference from
+    // LoadEffectReachInputsAsync is that nothing but the graph is wanted, so nothing but the graph is touched
+    // (on the live path that also means the effect derivation is never forced by a `path`/`callers` query).
+    //
+    // `direction` is intentionally unused: there is no SQL to bound the load with, so the live graph is the
+    // WHOLE shaped graph — a superset of both the Forward and the Reverse closure. FactPathFinder narrows it
+    // per direction at traversal time on both paths, which is what makes a REVERSE (`callers`) answer agree.
+    public Task<FactGraphData> LoadShapedTraversalGraphAsync(string pattern, SqlReachability.Direction direction, RuleSet shapedRules) =>
+        Task.FromResult(SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules));
+
+    // Does `shapedRules` shape the graph the same way the memo was shaped? The memo was built with the rules
+    // the FACTS were extracted under, and a caller shaping differently must not be silently served the wrong
+    // graph. Today exactly two such divergences are reachable, both `--raw`: `reaches --raw` zeroes Cut/Context,
+    // and `path`/`callers --raw` additionally zero Factory. Everything else is equal by construction — the live
+    // query surface has no `--rules` flag, and the commands reload rules from the SAME working directory the
+    // host booted with, so the two rule sets differ only where a command deliberately gates them. The three
+    // gated slice SIZES are therefore a sufficient discriminator TODAY; adding `--rules` (or any other
+    // rule-gating flag) to the live surface means widening this check, not trusting it.
+    private bool SameShapingAsMemo(RuleSet shapedRules) =>
+        shapedRules.Factory.Count == Source.Rules.Factory.Count
+        && shapedRules.Cut.Count == Source.Rules.Cut.Count
+        && shapedRules.Context.Count == Source.Rules.Context.Count;
+
+    public Task<ISet<EventSubscriptionSite>> EventSubscriptionSitesAsync() => Task.FromResult(Source.EventSubscriptionSites);
 
     public Task<IReadOnlyList<DerivedEffect>> DeriveEffectsAsync(SqlReachability.ReachInputs inputs, FactGraphData graph, RuleSet rules)
     {
@@ -129,7 +158,63 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
         return Task.CompletedTask;
     }
 
+    // The in-memory twin of SeedResolutionNotice.ExistsInStoreAsync. Same conservative rule — ANY indexed
+    // symbol of ANY kind counts as "exists", so the no-match claim is only made when the fact set genuinely
+    // has nothing by that name — and the same LIKE-arm semantics as ReportNoNodeMatchAsync above (a
+    // case-insensitive substring on Name OR SymbolId), for the same reason: symbol_fts is built by `rig graph`
+    // and the live index has no materialized graph at all.
+    public Task<bool> SymbolExistsAnywhereAsync(string pattern) =>
+        Task.FromResult(
+            (Source.Facts.Symbols ?? []).Any(s =>
+                s.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase) || s.SymbolId.Contains(pattern, StringComparison.OrdinalIgnoreCase)
+            )
+        );
+
+    public Task<FactEntryPointDeriver.FactEntryPointData> LoadEntryPointDataAsync() => Task.FromResult(Source.EpData);
+
+    public Task<(
+        IReadOnlyList<DerivedEntryPoint> Derived,
+        IReadOnlyList<HandoffEntryPoint> ClassifiedHandoffs,
+        IReadOnlyList<DerivedEntryPoint> PromotedOrigins
+    )> DeriveEntryPointsAsync(FactEntryPointDeriver.FactEntryPointData epData, RuleSet rules) => Task.FromResult(EntryPointSets(rules, epData));
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    // EntryPointContext.DeriveEntryPointsAsync, in memory: the SAME FactEntryPointDeriver.Derive + handoff
+    // classification + PromoteHandoffOrigins, with the graph supplied by FactGraphProjection instead of the
+    // store. Memoized because BOTH live consumers (`callers --entrypoints` and the EP-site map below) want the
+    // same answer within one query, and the handoff arm re-projects the whole call graph.
+    //
+    // Mirrors Reads.DeriveHandoffEntryPointsAsync's FALLBACK arm (its fast arm reads the `call_edges` table
+    // `rig graph` materialized, which does not exist here): classify the UNSHAPED, handoff-classified graph's
+    // edges. Unshaped is the store fallback's own choice (LoadFactGraphAsync, not LoadShapedGraphAsync) —
+    // mirrored, not re-decided.
+    private (
+        IReadOnlyList<DerivedEntryPoint> Derived,
+        IReadOnlyList<HandoffEntryPoint> ClassifiedHandoffs,
+        IReadOnlyList<DerivedEntryPoint> PromotedOrigins
+    ) EntryPointSets(RuleSet rules, FactEntryPointDeriver.FactEntryPointData? epData)
+    {
+        lock (_gate)
+        {
+            if (_entryPoints is { } memo)
+            {
+                return memo;
+            }
+
+            var derived = FactEntryPointDeriver.Derive(epData ?? Source.EpData, rules.EntryPoints, rules.ClassInheritance);
+            var edges = FactGraphProjection.FromAnalysis(Source.Facts, handoffRules: rules.Handoff, redirectRules: rules.Redirect).CallEdges;
+            var classifiedHandoffs = HandoffClassifier.HandoffEntryPoints(edges, rules.Handoff).Where(h => h.Dispatcher is not null).ToList();
+            var promoted = EntryPointContext.PromoteHandoffOrigins(classifiedHandoffs, derived);
+            var sets = (
+                (IReadOnlyList<DerivedEntryPoint>)derived,
+                (IReadOnlyList<HandoffEntryPoint>)classifiedHandoffs,
+                (IReadOnlyList<DerivedEntryPoint>)promoted
+            );
+            _entryPoints = sets;
+            return sets;
+        }
+    }
 
     // EntryPointContext.DeriveEpSiteKindAsync's tier 3 (the live derive), in memory and memoized for this fact
     // generation. Tier 1 (the entry_point_sites table `rig graph` materializes) and tier 2 (the cache.db query
@@ -146,15 +231,9 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
                 return _epSiteKind;
             }
 
-            var data = epData ?? Source.EpData;
-            var derived = FactEntryPointDeriver.Derive(data, rules.EntryPoints, rules.ClassInheritance);
-
-            // Reads.DeriveHandoffEntryPointsAsync's FALLBACK arm (no materialized call_edges, which is always
-            // the live case): classify the UNSHAPED, handoff-classified graph's edges. Unshaped is the store
-            // fallback's own choice (LoadFactGraphAsync, not LoadShapedGraphAsync) — mirrored, not re-decided.
-            var edges = FactGraphProjection.FromAnalysis(Source.Facts, handoffRules: rules.Handoff, redirectRules: rules.Redirect).CallEdges;
-            var classifiedHandoffs = HandoffClassifier.HandoffEntryPoints(edges, rules.Handoff).Where(h => h.Dispatcher is not null).ToList();
-            var promoted = EntryPointContext.PromoteHandoffOrigins(classifiedHandoffs, derived);
+            // The SAME live EP derivation `callers --entrypoints` gets (EntryPointSets), flattened to the
+            // site->kind map EpRenderContext wants — so the chip and the EP listing can never disagree.
+            var (derived, _, promoted) = EntryPointSets(rules, epData);
 
             var map = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
             foreach (var e in derived.Concat(promoted))

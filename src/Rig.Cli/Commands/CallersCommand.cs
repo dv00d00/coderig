@@ -3,14 +3,13 @@ using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Deployments;
+using Rig.Cli.Live;
 using Rig.Cli.Rendering;
 using Rig.Cli.Telemetry;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
-using Rig.Storage.Storage;
 using static Rig.Cli.EntryPoints.EntryPointContext;
-using static Rig.Cli.Graph.TraversalGraphLoader;
 using static Rig.Cli.Rendering.EntryPointListRenderer;
 using static Rig.Cli.Rendering.SymbolNameFormatter;
 
@@ -113,7 +112,8 @@ internal static class CallersCommand
 
     // Bound option values for `rig callers`. Raw user inputs (Format kept as the parsed string);
     // the flag derivations (tsv, max, maxDepth, mode) live at the top of RunAsync.
-    private sealed record Options(
+    // Internal (was private) so the LIVE query path can build the same options record for the same RunAsync.
+    internal sealed record Options(
         string ToPattern,
         bool RootsOnly,
         bool EntrypointsOnly,
@@ -128,7 +128,16 @@ internal static class CallersCommand
         bool Time
     );
 
-    private static async Task<int> RunAsync(Options opts, CommandIo io)
+    // The CLI entry: answer off the .rig store, which is what every `rig callers` invocation does. The source
+    // is passed as a FACTORY, not an already-open source, purely to preserve ORDERING: the schema gate must
+    // still fire where the old `await using var context = …` sat (after the rules load), not before it.
+    private static Task<int> RunAsync(Options opts, CommandIo io) =>
+        RunAsync(opts, io, () => StoreQueryFactSource.OpenAsync(io.WorkspaceLocation));
+
+    // The command body, parameterized on WHERE the facts come from (IQueryFactSource) rather than on a
+    // RigDbContext — so the SAME body answers off a saved store or off the resident live facts. `callers` is
+    // the first REVERSE-direction traversal to run on the live path.
+    internal static async Task<int> RunAsync(Options opts, CommandIo io, Func<Task<IQueryFactSource>> openSource)
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
         var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded
@@ -143,12 +152,13 @@ internal static class CallersCommand
         var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
+        await using var source = await openSource();
 
-        // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives all
-        // three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.
+        // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph; the whole
+        // in-memory graph on the live path, which has no SQL to bound with) drives all three callers modes —
+        // the set, the no-predecessor roots, and the rule-detected entrypoints.
         var graphWatch = Stopwatch.StartNew();
-        var graph = await LoadShapedTraversalGraphAsync(context, opts.ToPattern, SqlReachability.Direction.Reverse, shaped);
+        var graph = await source.LoadShapedTraversalGraphAsync(opts.ToPattern, SqlReachability.Direction.Reverse, shaped);
 
         // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
         // (and now path). The handler runs LATER via the event, not synchronously at the `+=` site, so it
@@ -158,7 +168,7 @@ internal static class CallersCommand
         // event handlers surface under --roots/--entrypoints only via --async. `--raw` bypasses shaping.
         if (!opts.Raw)
         {
-            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
         }
 
         graphWatch.Stop();
@@ -171,9 +181,9 @@ internal static class CallersCommand
         {
             // F9: load the DeploymentMap here and pass it into RunEntryPointsAsync, eliminating the
             // LoadDeploymentsAsync call that was inside RunEntryPointsAsync (depth-1 in the call tree).
-            var epDeployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
+            var epDeployments = await source.LoadDeploymentsAsync(io.WorkspaceLocation.WorkingDirectory);
             var epResult = await RunEntryPointsAsync(
-                context,
+                source,
                 graph,
                 toPattern: opts.ToPattern,
                 maxDepth: maxDepth,
@@ -193,13 +203,15 @@ internal static class CallersCommand
         // lazily to avoid the EP-site derivation when it isn't read.
         EpRenderContext? epContext = tsv
             ? null
-            : await BuildEpContextAsync(
-                context,
-                graph,
-                io.WorkspaceLocation.WorkingDirectory,
-                opts.ExtraRules,
-                rules,
-                await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory)
+            : await source.BuildEpContextAsync(
+                graph: graph,
+                workingDirectory: io.WorkspaceLocation.WorkingDirectory,
+                extraRules: opts.ExtraRules,
+                rules: rules,
+                deployments: await source.LoadDeploymentsAsync(io.WorkspaceLocation.WorkingDirectory),
+                // The store path's BuildEpContextAsync default: `callers` loads the GRAPH only, so there is no
+                // EP fact bundle to thread and tier 3 loads its own, exactly as before.
+                epData: null
             );
 
         if (opts.RootsOnly)
@@ -397,8 +409,10 @@ internal static class CallersCommand
     // F9: `deployments` is passed in from `RunAsync` (already loaded there) so this method no longer
     // calls `LoadDeploymentsAsync` itself. Default null so future callers that don't have a pre-loaded
     // map still work (they pass null and the method loads its own below). All current callers pass it in.
+    // `source` is the IQueryFactSource seam, not a RigDbContext: this whole method is fact-source-agnostic, so
+    // `--entrypoints` answers off the resident live facts too.
     private static async Task<int> RunEntryPointsAsync(
-        RigDbContext context,
+        IQueryFactSource source,
         FactGraphData graph,
         string toPattern,
         int maxDepth,
@@ -429,7 +443,7 @@ internal static class CallersCommand
 
         // F9: use the passed-in map when the caller already loaded it; fall back to loading if null
         // (defensive — the current caller always passes it).
-        deployments ??= await LoadDeploymentsAsync(context, workingDirectory);
+        deployments ??= await source.LoadDeploymentsAsync(workingDirectory);
 
         // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites. Sourced
         // from the already-loaded graph's method nodes (the same Kind==Method set, deduped by SymbolId) rather
@@ -437,8 +451,8 @@ internal static class CallersCommand
         var reachableSites = graph.Methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
 
         // The rule-detected entry points (identical derivation to `rig derive`) + promoted handoff origins.
-        var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, rules);
+        var epData = await source.LoadEntryPointDataAsync();
+        var (derivedEps, _, promoted) = await source.DeriveEntryPointsAsync(epData, rules);
 
         // (file,line) -> handler DocID, so each entry-point line/row carries the queryable FQN beside its
         // slash route (the route matches nothing as a `rig tree`/`reaches` pattern — this is the handle).
