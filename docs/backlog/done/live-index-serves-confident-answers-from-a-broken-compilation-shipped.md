@@ -1,6 +1,6 @@
 # `rig watch` boots on a tree that does not compile, reports "all projects reconciled", and answers 0 — plus 2.4M error lines to stdout
 
-**Status:** todo · **Priority: CRITICAL** (the tool's entire contract is that it states facts and discloses its
+**Status:** SHIPPED 2026-08-21 (live path; store-side chip is the follow-on) · **Priority: CRITICAL** (the tool's entire contract is that it states facts and discloses its
 limits; here it states a confident wrong answer with a clean bill of health) · **Found:** 2026-08-21, real-data
 run on a fresh MedDBase clone · **Family:** disclosure / resident index
 
@@ -76,3 +76,47 @@ health belongs in the same line.
   [baked call_edges](baked-call-edges-ignore-rules-edits.md),
   [path disclosures](path-disclosures-computed-off-the-loaded-subgraph.md)). This one is worse in kind: the
   disclosure is not merely mis-scoped, it is absent while a health claim is made in its place.
+
+## SHIPPED 2026-08-21 — commit `78581485`
+
+All three defects fixed on the live path. Calibrated in the PRODUCTION configuration
+(`rig watch --rules rig.rules.json`, restored clone):
+
+```
+live: facts current as of 0 file(s) applied | 3 of 11938 indexed file(s) had compile errors
+stderr: 4 lines — the 3 named diagnostics + one note.
+```
+
+1. **Disclosure** — `CompilationHealth` on `AnalysisResult`, per-file + per-project, merged by `ResidentIndex`
+   with the same replace-per-file rule as the facts. A re-extracted CLEAN file contributes an EMPTY list, which
+   is what drops its base row; keyed on `document.FilePath` so the overlay can actually clear it. Prefixed to
+   EVERY answer, not just the boot log, plus the stderr footer note with the spec's exact wording rules
+   ("may be MISSING or WRONG", never "is wrong"; the project line as a RECALL warning).
+2. **Output volume** — stdout 2,387,334 lines / 528 MB -> **7 lines / 476 bytes**; diagnostics routed to stderr,
+   capped at 5 per project with a truthful total; memory retention from ~528 MB of strings to <=5/project.
+3. **`rig watch --restore`** — verified on a deliberately unrestored tree: without it,
+   `24 of 26 indexed file(s) had compile errors` + `Reachable methods: 7`; with it, `all projects reconciled` +
+   `Reachable methods: 8`.
+
+Tests: `tests/Rig.Tests/Analysis/FailedCompilationDisclosureTests.cs` (6), including
+`Broken_then_fixed_then_broken_over_one_retained_workspace` — the resident-specific case, which passes with
+identical evidence on both broken phases — and a clean-tree arm asserting NO disclosure noise.
+
+### Two lessons the fix paid for
+
+- **Calibrate in the configuration you ship.** An intermediate run (no rules overlay) reported 8 in-set + 41
+  outside-set files and looked like a noise problem worth redesigning for. The 41 were `obj/` `AssemblyInfo`
+  files in projects that clone had never built, which the production rules exclude. Tuning against them would
+  have been tuning against invented noise.
+- **A ratio's halves must come from one population.** The first cut printed `10648 of 10565` — numerator above
+  denominator — because Roslyn reports diagnostics in files rig never indexed. Same defect class as the
+  intrinsic-effects count dropped for overstating by 8x.
+
+### Follow-ons
+
+- The store-side half: `source_files`/`runs` columns, the per-line `~compile-error` chip joined on `FilePath`,
+  `rig files --compile-errors`. Vocabulary is reserved, not spent. This slice gives COMPLETENESS (it fires for
+  blind spots a chip cannot reach — a lost dispatch edge has no file to flag); the chip gives LOCALITY.
+- [`--exclude-tests` matches on project NAME only](test-project-exclusion-is-name-only-and-leaks.md), surfaced by
+  this calibration.
+- Generated documents' diagnostics are still unobserved (spec row 7a).
