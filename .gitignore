@@ -33,3 +33,6 @@ BenchmarkDotNet.Artifacts/
 relevant-projects.json
 trace-*.txt
 *.pyc
+
+# Deterministic LiveScaleGenerator outputs (the generator and seed manifest are tracked).
+artifacts/live-scale/

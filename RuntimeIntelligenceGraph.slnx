@@ -14,6 +14,7 @@
   <Folder Name="/files/scripts/">
     <File Path="scripts/format.ps1" />
     <File Path="scripts/mini-ci.ps1" />
+    <Project Path="scripts/LiveScaleGenerator/LiveScaleGenerator.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Rig.Analysis/Rig.Analysis.csproj" />

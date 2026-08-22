@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "presets": {
+    "smoke": {
+      "projectCount": 12,
+      "filesPerProject": 18,
+      "oversizedProjectExtraFiles": 12,
+      "methodsPerFile": 10,
+      "callsPerMethod": 2,
+      "vocabularyCardinality": 64,
+      "topology": {
+        "coreHubIndex": 0,
+        "runtimeIndex": 1,
+        "oversizedProjectIndices": [ 2, 3 ],
+        "diamondStride": 4,
+        "oversizedCoverageNumerator": 4,
+        "oversizedCoverageDenominator": 5
+      },
+      "optionalGeneratedFilesPerProject": 1
+    },
+    "scale": {
+      "projectCount": 100,
+      "filesPerProject": 50,
+      "oversizedProjectExtraFiles": 500,
+      "methodsPerFile": 20,
+      "callsPerMethod": 3,
+      "vocabularyCardinality": 2048,
+      "topology": {
+        "coreHubIndex": 0,
+        "runtimeIndex": 1,
+        "oversizedProjectIndices": [ 2, 3 ],
+        "diamondStride": 4,
+        "oversizedCoverageNumerator": 4,
+        "oversizedCoverageDenominator": 5
+      },
+      "optionalGeneratedFilesPerProject": 1
+    },
+    "stress": {
+      "projectCount": 200,
+      "filesPerProject": 50,
+      "oversizedProjectExtraFiles": 1000,
+      "methodsPerFile": 25,
+      "callsPerMethod": 3,
+      "vocabularyCardinality": 4096,
+      "topology": {
+        "coreHubIndex": 0,
+        "runtimeIndex": 1,
+        "oversizedProjectIndices": [ 2, 3 ],
+        "diamondStride": 4,
+        "oversizedCoverageNumerator": 4,
+        "oversizedCoverageDenominator": 5
+      },
+      "optionalGeneratedFilesPerProject": 1
+    }
+  }
+}
