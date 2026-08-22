@@ -23,6 +23,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Rig.Tests" />
+    <InternalsVisibleTo Include="Rig.IntegrationTests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Rig.Analysis\Rig.Analysis.csproj" />

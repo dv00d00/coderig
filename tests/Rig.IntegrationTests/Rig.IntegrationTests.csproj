@@ -1,18 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="..\Rig.IntegrationTests\MsBuildIntegrationSources.props" />
+  <Import Project="MsBuildIntegrationSources.props" />
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Rig.IntegrationTests</AssemblyName>
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="@(MsBuildIntegrationSource->'%(Link)')" />
-  </ItemGroup>
-  <ItemGroup>
     <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
-    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
     <PackageReference Include="TUnit" />
     <PackageReference Include="Shouldly" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
@@ -23,6 +20,8 @@
     <ProjectReference Include="..\..\src\Rig.Storage\Rig.Storage.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="@(MsBuildIntegrationSource)" Link="%(MsBuildIntegrationSource.Link)" />
+    <Compile Include="@(MsBuildIntegrationSupport)" Link="%(MsBuildIntegrationSupport.Link)" />
     <Content Include="..\..\src\Rig.Cli\builtin-rules.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

@@ -92,13 +92,25 @@ demand-driven refinement.
   and tuple arguments. Tree, graph-hazard, and impact cache schemas advance for the same-input/different-output
   derivation change. Twenty-two tests bring exact discovery to **1,134 tests**. The demand source remains
   deliberately dormant at command level until the live `path` wiring slice.
+- **Slice 6B3:** indexed live `path` now materializes only the matched seed's forward closure from keyed caller,
+  method, dispatch, and type-relation partitions. The existing `FactPathFinder` remains the sole traversal and
+  one-hop dispatch engine; caller-local event classification avoids the global event-site scan, and flattened
+  legacy fixtures disclose their whole-graph fallback explicitly. Dispatch relation indexes preserve generic-
+  stripped base closure and unresolved-interface recovery without a corpus scan; ordinary delegate binds,
+  delegate-field joins, factory bridges, monomorphized callers, cut/context rules, and max depth are parity-gated.
+  Production WatchHost tests prove `path` builds neither `traversalGraph` nor `eventSites` and loads a strict
+  partial graph. Eleven tests bring exact discovery to **1,145 tests**.
 - **macOS suite gate:** canonical temp roots prevent NuGet from seeing `/var` and `/private/var` as two copies of
-  one referenced project; the resident equivalence fixture uses deterministic one-at-a-time project loading;
-  and `mini-ci.ps1` caps outer TUnit workers at two on macOS because Buildalyzer already parallelizes projects.
-  The full **1,134-test** suite improved from **17m22s** (one 998s outlier) to **3m28s**, with 1,133 pass, one
-  intentional skip, zero failures, and a 32.2s slowest test.
-- **Next:** Slice 6B3, wire live `path` to the demand source with locality counters before demand-driven exact
-  refinement.
+  one referenced project, and the resident equivalence fixture uses deterministic one-at-a-time project loading.
+  All tests that launch `dotnet`, load/retain solutions, drive CLI indexing/watch hosts, or consume the shared
+  analyzed-playground session now live in a separate `Rig.IntegrationTests` executable. `mini-ci.ps1` runs the
+  ordinary suite at normal parallelism, then runs the integration process with one outer worker on every OS.
+  SolutionAnalyzer is also pinned to one project worker for that isolated process. A single source manifest owns
+  the classification. On macOS the ordinary lane passes **944/944 in 15s**; the serialized integration lane
+  passes **200 + one intentional skip in 13m37s**. Exact discovery is **1,145**, with zero failures. The process
+  boundary removes nested workspace/MSBuild fan-out risk without throttling unrelated tests and turns the slow
+  lane into a deterministic release gate rather than a 17-minute main-suite outlier.
+- **Next:** Slice 7, demand-driven exact refinement of dirty project debt.
 
 ## Why — the workflow that makes this the target
 

@@ -11,6 +11,11 @@ namespace Rig.Analysis;
 
 public static class SolutionAnalyzer
 {
+    // Process-wide host/test safety valve. Explicit per-call parallelism always wins. The isolated
+    // integration-test executable sets this to one for its lifetime so Buildalyzer/MSBuild project
+    // loads cannot fan out internally even though the test runner itself is already serialized.
+    internal static int? ProcessParallelismOverride { get; set; }
+
     public static async Task<AnalysisResult> AnalyzeAsync(
         string solutionPath,
         RuleSet rules,
@@ -38,6 +43,7 @@ public static class SolutionAnalyzer
         bool restore = false
     )
     {
+        parallelism ??= ProcessParallelismOverride;
         var solutionFullPath = Path.GetFullPath(solutionPath);
         var phase = timings is null ? null : Stopwatch.StartNew();
 
@@ -105,6 +111,7 @@ public static class SolutionAnalyzer
         StringInterner? interner = null
     )
     {
+        parallelism ??= ProcessParallelismOverride;
         var solutionFullPath = Path.GetFullPath(solutionPath);
         RigWorkspace? retained = null;
         var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);

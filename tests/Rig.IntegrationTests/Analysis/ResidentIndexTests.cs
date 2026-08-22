@@ -7,7 +7,7 @@ using Rig.Domain.Data;
 using Rig.Tests.Fixtures;
 using Shouldly;
 
-namespace Rig.Tests.Analysis;
+namespace Rig.IntegrationTests.Analysis;
 
 // Slice 3 of live-background-index: the equivalence gate, extended from the raw incremental spike
 // (IncrementalExtractionSpikeTests) to the CONVERGING OVERLAY. A cold-analyzed base + ResidentIndex
@@ -16,7 +16,7 @@ namespace Rig.Tests.Analysis;
 // references, the two fields a duplicate-assembly-identity regression moves while every DocID stays
 // identical. The ghost-fact test pins the replace-not-append property: a call REMOVED by an edit must
 // leave no stale reference row behind.
-[NotInParallel(TestResourceKeys.ResidentIndexWorkspace)]
+[NotInParallel]
 public sealed class ResidentIndexTests
 {
     private const string GetByIdTarget = "M:Contracts.IPatientRepository.GetById(System.Int32)";

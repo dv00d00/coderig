@@ -128,13 +128,27 @@ The rules that make this produce mergeable code, not plausible diffs:
   **No need to format first / inline** — mini-ci formats the whole repo on publish as its first step (the
   repo is kept clean, so it only rewrites the files that drifted). `scripts/format.ps1 -Check` still gives a
   verify-only pass if you want one.
-- **Tests are TUnit on Microsoft.Testing.Platform, not vstest.** For every focused test run, pass TUnit's
-  filter after the `--` separator; `dotnet test --filter` does NOT work (prints help, "Zero tests ran"):
-  `dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"`
-  (path is `/Assembly/Namespace/Class/Test`; `*` wildcards each segment). `dotnet test` with no filter is fine.
-  On macOS, cap the full suite at two outer workers (`-- --maximum-parallel-tests 2`): Buildalyzer/MSBuild
-  already parallelizes projects internally, and four or more outer workers can turn that nested fan-out into
-  multi-minute stalls. `mini-ci.ps1` applies this macOS ceiling automatically.
+- **Tests are TUnit on Microsoft.Testing.Platform, not vstest.** The ordinary suite and all tests that launch
+  `dotnet`, load/retain solutions through `SolutionAnalyzer`, drive `CliApplication index` / `WatchHost`, or
+  consume session-wide `AnalyzedPlaygrounds` are separate executables. This process boundary keeps nested
+  Buildalyzer/MSBuild fan-out out of the main suite. Focused commands (ordinary, then integration) are:
+
+  ```bash
+  dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"
+  dotnet run --project tests/Rig.IntegrationTests --no-build -- --maximum-parallel-tests 1 --treenode-filter "/*/*/<ClassName>/*"
+  ```
+
+  The full local gate is these two commands in order; the integration process is deliberately single-worker,
+  and its session hook also pins `SolutionAnalyzer` to one project worker so inner Buildalyzer fan-out cannot
+  reappear beneath the serialized test runner:
+
+  ```bash
+  dotnet test tests/Rig.Tests/Rig.Tests.csproj --no-build --no-restore
+  dotnet test tests/Rig.IntegrationTests/Rig.IntegrationTests.csproj --no-build --no-restore -- --maximum-parallel-tests 1
+  ```
+
+  `mini-ci.ps1` enforces the same process boundary on every OS. `dotnet test --filter` does NOT work (prints
+  help, "Zero tests ran"). TUnit paths are `/Assembly/Namespace/Class/Test`; `*` wildcards each segment.
   Do not put MSBuild switches such as `-m:1` or `--no-incremental` on `dotnet test`: MTP forwards unknown
   switches to TUnit, which rejects them. When those switches are needed, run `dotnet build ... -m:1
   --no-incremental` first, then `dotnet test ... --no-build --no-restore`.

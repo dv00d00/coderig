@@ -7,27 +7,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Get-HostRid {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
-    $archPart = switch ($arch) {
-        "x64"   { "x64" }
-        "x86"   { "x86" }
-        "arm64" { "arm64" }
-        "arm"   { "arm" }
-        default { "x64" }
-    }
-    if ($IsWindows) { return "win-$archPart" }
-    if ($IsMacOS)   { return "osx-$archPart" }
-    if ($IsLinux)   { return "linux-$archPart" }
-    # Windows PowerShell 5.1 has no $IsWindows; assume Windows
-    return "win-$archPart"
-}
-
-$HostRid = Get-HostRid
-
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $solution = Join-Path $repoRoot "RuntimeIntelligenceGraph.slnx"
 $toolProject = Join-Path $repoRoot "src/Rig.Cli/Rig.Cli.csproj"
+$mainTestProject = Join-Path $repoRoot "tests/Rig.Tests/Rig.Tests.csproj"
+$integrationTestProject = Join-Path $repoRoot "tests/Rig.IntegrationTests/Rig.IntegrationTests.csproj"
 $packageOutput = Join-Path $repoRoot ".rig-nupkg"
 
 if ([string]::IsNullOrWhiteSpace($ToolVersion)) {
@@ -49,15 +33,13 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE) - not testing/packing." }
 
     if (-not $SkipTests) {
-        $testArguments = @("test", $solution, "-c", $Configuration, "--no-build", "--no-restore")
-        if ($HostRid.StartsWith("osx-")) {
-            # Several tests invoke Buildalyzer/MSBuild, which already parallelizes projects internally.
-            # More than two outer TUnit workers can multiply that fan-out into multi-minute stalls on macOS.
-            $testArguments += @("--", "--maximum-parallel-tests", "2")
-        }
+        # Keep the ordinary suite at its normal parallelism. Tests that launch dotnet or retain/load
+        # MSBuild workspaces run in a separate executable afterward with one outer worker.
+        dotnet test $mainTestProject -c $Configuration --no-build --no-restore
+        if ($LASTEXITCODE -ne 0) { throw "Main tests failed (exit $LASTEXITCODE) - not packing/installing." }
 
-        dotnet @testArguments
-        if ($LASTEXITCODE -ne 0) { throw "Tests failed (exit $LASTEXITCODE) - not packing/installing." }
+        dotnet test $integrationTestProject -c $Configuration --no-build --no-restore -- --maximum-parallel-tests 1
+        if ($LASTEXITCODE -ne 0) { throw "Integration tests failed (exit $LASTEXITCODE) - not packing/installing." }
     }
     
     dotnet pack $toolProject `

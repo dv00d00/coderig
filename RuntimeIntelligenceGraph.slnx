@@ -23,6 +23,7 @@
     <Project Path="src/Rig.Cli/Rig.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Rig.IntegrationTests/Rig.IntegrationTests.csproj" />
     <Project Path="tests/Rig.Tests/Rig.Tests.csproj" />
   </Folder>
 </Solution>
