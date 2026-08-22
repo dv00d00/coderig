@@ -1,8 +1,8 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–2 completed locally 2026-08-22: deterministic scale/trial baselines,
-emitter provenance, and immutable snapshot generations with atomic publication. Next: a composite fact view
-that removes full `AnalysisResult` materialization from the live path.
+**Status:** PROGRESS — Slices 0–3 completed locally 2026-08-22: deterministic scale/trial baselines,
+emitter provenance, immutable snapshot generations with atomic publication, and a streaming composite fact
+view. Next: dirty-only watcher batching and removal of unconditional derived-artifact warming.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -25,8 +25,14 @@ that removes full `AnalysisResult` materialization from the live path.
   facts plus disclosure. Retired nonempty overlays, file slices, and solutions are proven collectible. Four
   deterministic publication tests bring exact discovery to **1,077 tests**. This adopts rust-glancer's
   private-candidate/publication-validation pattern without its whole-project clone or predecessor retention.
-- **Next:** Slice 3, `IFactSnapshotView`: live queries enumerate the segmented base/overlay view directly;
-  retain flattening only as a cold-oracle and compatibility adapter.
+- **Slice 3:** Domain-level `IFactSnapshotView` lets cold `AnalysisResult` values and resident snapshots share
+  one Roslyn-free projection surface. Live queries, status, indexed-file disclosure, and compilation health
+  now enumerate base rows not replaced by an overlay followed by immutable per-emitter slices; empty slices
+  are deletion tombstones, and relation/dispatch provenance remains a multiset until graph projection. Full
+  `AnalysisResult` materialization is now confined to explicit compatibility/oracle accessors and is memoized
+  once. Three deterministic composite-view tests bring exact discovery to **1,080 tests**.
+- **Next:** Slice 4, make the watcher dirty-only and batched, then remove automatic query-artifact warming so
+  publication work remains bounded by the changed input until a query actually demands a derived artifact.
 
 ## Why — the workflow that makes this the target
 

@@ -36,10 +36,10 @@ internal static class CompilationHealthNotice
     // different populations is exactly the defect that forced the intrinsic-effects count to be dropped;
     // deriving both halves from ONE set makes it impossible by construction, and the files outside the
     // set are disclosed separately rather than folded in or hidden.
-    internal static IReadOnlySet<string> IndexedFileSet(AnalysisResult facts)
+    internal static IReadOnlySet<string> IndexedFileSet(IFactSnapshotView facts)
     {
         var indexed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in facts.SourceFiles)
+        foreach (var file in facts.EnumerateSourceFiles())
         {
             if (string.Equals(file.Status, "indexed", StringComparison.Ordinal))
             {

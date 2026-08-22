@@ -42,7 +42,8 @@ internal static class WatchCommand
         };
         var query = new Option<string?>("--query")
         {
-            Description = "Answer one query against the booted resident facts (e.g. --query \"reaches Program.Main\"). "
+            Description =
+                "Answer one query against the booted resident facts (e.g. --query \"reaches Program.Main\"). "
                 + "Composes with --once: boot, answer, exit.",
         };
         // Same flag, same default, same wording as `rig index --restore` (opt-in since eb6480ff): the
@@ -126,7 +127,9 @@ internal static class WatchCommand
             error.WriteLine($"rig: a resident index is already watching {workingDirectory}");
             error.WriteLine($"     (endpoint {LiveQueryTransport.EndpointPath(LiveQueryTransport.PipeNameFor(workingDirectory))})");
             error.WriteLine("");
-            error.WriteLine("     Stop it first, or pass --no-serve to run a second host that maintains facts but does not answer queries.");
+            error.WriteLine(
+                "     Stop it first, or pass --no-serve to run a second host that maintains facts but does not answer queries."
+            );
             return 2;
         }
 
@@ -260,7 +263,10 @@ internal static class WatchCommand
             }
 
             var trimmed = line.Trim();
-            if (string.Equals(trimmed, "quit", StringComparison.OrdinalIgnoreCase) || string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(trimmed, "quit", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 return;
             }
@@ -381,7 +387,9 @@ internal sealed class WatchHost : IAsyncDisposable
             // while the status segment reaches every answer, including one served over the transport to a
             // client that cannot see this process at all.
             Interlocked.Exchange(ref _watcherOverflowed, 1);
-            _output.WriteLine($"live: WATCHER OVERFLOW — changes may have been missed; edits since may not be reflected ({e.GetException().Message})");
+            _output.WriteLine(
+                $"live: WATCHER OVERFLOW — changes may have been missed; edits since may not be reflected ({e.GetException().Message})"
+            );
         };
         _watcher.EnableRaisingEvents = true;
         _loop = Task.Run(() => RunLoopAsync(_shutdown.Token));
@@ -510,7 +518,9 @@ internal sealed class WatchHost : IAsyncDisposable
         var built = facts.BuildTimes.Count; // artifacts already memoized before this query
         var answer = await LiveQueryRunner.AnswerAsync(query, facts, _workingDirectory);
         var costLine =
-            facts.BuildTimes.Count == built ? "" : $"{Environment.NewLine}live: derived layer built this generation: {facts.BuildTimeLine()}";
+            facts.BuildTimes.Count == built
+                ? ""
+                : $"{Environment.NewLine}live: derived layer built this generation: {facts.BuildTimeLine()}";
         return $"{disclosure}{Environment.NewLine}{answer.Text.TrimEnd('\r', '\n')}{costLine}";
     }
 
@@ -571,9 +581,16 @@ internal sealed class WatchHost : IAsyncDisposable
             notes.AppendLine($"live: derived layer built this generation: {facts.BuildTimeLine()}");
         }
 
-        return LiveServeResult.Answered(exit: answer.Exit, standardOut: answer.Out, standardError: notes.ToString(), disclosure: disclosure);
+        return LiveServeResult.Answered(
+            exit: answer.Exit,
+            standardOut: answer.Out,
+            standardError: notes.ToString(),
+            disclosure: disclosure
+        );
     }
 
+    // Explicit compatibility/oracle boundary for tests and callers that still require AnalysisResult.
+    // The resident query/status path captures and consumes FactSnapshot directly.
     public async Task<AnalysisResult> GetCurrentFactsAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
@@ -635,7 +652,10 @@ internal sealed class WatchHost : IAsyncDisposable
     {
         foreach (var segment in fullPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
         {
-            if (string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase) || string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase))
+            if (
+                string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 return true;
             }
@@ -747,8 +767,8 @@ internal sealed class WatchHost : IAsyncDisposable
         }
     }
 
-    // Start warming the CURRENT generation's derived layer. The LiveFactSource is resolved under `_gate` (it
-    // reads _index.CurrentFacts, which the worker mutates) but the BUILD runs outside it — holding the gate for
+    // Start warming the CURRENT generation's derived layer. The LiveFactSource is resolved under `_gate` from
+    // one captured snapshot, but the BUILD runs outside it — holding the gate for
     // seconds would block the next apply, which is the one thing this loop must never do. Nothing here is
     // ordered against a query either: LiveFactSource is immutable per generation, so a query arriving mid-warm
     // either finds its artifact already memoized or joins the in-flight build.
@@ -904,7 +924,7 @@ internal sealed class WatchHost : IAsyncDisposable
     {
         if (_liveFacts is null || !ReferenceEquals(_liveFactsFor, snapshot))
         {
-            _liveFacts = new LiveFactSource(snapshot.FlattenedFacts, _rules);
+            _liveFacts = new LiveFactSource(snapshot, _rules);
             _liveFactsFor = snapshot;
         }
 
@@ -933,14 +953,13 @@ internal sealed class WatchHost : IAsyncDisposable
     {
         var applied = Volatile.Read(ref _appliedFiles);
         var unreconciled = snapshot.Dirty.PendingProjects.Count;
-        var facts = snapshot.FlattenedFacts;
         var segments = new List<string>();
         if (unreconciled > 0)
         {
             segments.Add($"{unreconciled} project(s) unreconciled");
         }
 
-        segments.AddRange(CompilationHealthNotice.StatusSegments(facts.CompilationHealth, IndexedFiles(snapshot)));
+        segments.AddRange(CompilationHealthNotice.StatusSegments(snapshot.GetCompilationHealth(), IndexedFiles(snapshot)));
         if (Volatile.Read(ref _watcherOverflowed) != 0)
         {
             // Must be a segment rather than a one-off console line: otherwise an answer computed from a
@@ -965,7 +984,7 @@ internal sealed class WatchHost : IAsyncDisposable
     {
         if (_indexedFiles is null || !ReferenceEquals(_indexedFilesFor, snapshot))
         {
-            _indexedFiles = CompilationHealthNotice.IndexedFileSet(snapshot.FlattenedFacts);
+            _indexedFiles = CompilationHealthNotice.IndexedFileSet(snapshot);
             _indexedFilesFor = snapshot;
         }
 
@@ -973,8 +992,7 @@ internal sealed class WatchHost : IAsyncDisposable
     }
 
     // The compile-health footer note for the CURRENT generation, or an empty list when the tree
-    // compiled. Gated like every other read accessor — it reads _index.CurrentFacts, which the worker
-    // mutates.
+    // compiled. Gated like every other read accessor so it captures one coherent snapshot.
     public async Task<IReadOnlyList<string>> GetCompilationHealthNoteAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
@@ -991,8 +1009,7 @@ internal sealed class WatchHost : IAsyncDisposable
     // Caller must hold `_gate`.
     private IReadOnlyList<string> ComposeCompilationHealthNote(FactSnapshot snapshot)
     {
-        var facts = snapshot.FlattenedFacts;
-        return CompilationHealthNotice.Note(facts.CompilationHealth, IndexedFiles(snapshot));
+        return CompilationHealthNotice.Note(snapshot.GetCompilationHealth(), IndexedFiles(snapshot));
     }
 
     // Emit the footer note on STDERR. Called wherever an answer or a status line is served, because the

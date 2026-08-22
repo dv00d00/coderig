@@ -16,4 +16,21 @@ public sealed record AnalysisResult(
     // them can disclose that they may be missing or wrong; the resident overlay merges it per file
     // exactly as it merges the facts themselves (see ResidentIndex.MergeFacts).
     CompilationHealth? CompilationHealth = null
-);
+) : IFactSnapshotView
+{
+    public IEnumerable<SourceFileInfo> EnumerateSourceFiles() => SourceFiles;
+
+    public IEnumerable<DiRegistrationInfo> EnumerateDiRegistrations() => DiRegistrations;
+
+    public IEnumerable<SymbolFact> EnumerateSymbols() => Symbols ?? [];
+
+    public IEnumerable<ReferenceFact> EnumerateReferences() => References ?? [];
+
+    public IEnumerable<TypeRelationFact> EnumerateTypeRelations() => TypeRelations ?? [];
+
+    public IEnumerable<DispatchFact> EnumerateDispatchFacts() => DispatchFacts ?? [];
+
+    public IEnumerable<AllocationFact> EnumerateAllocationFacts() => AllocationFacts ?? [];
+
+    public CompilationHealth? GetCompilationHealth() => CompilationHealth;
+}

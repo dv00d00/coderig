@@ -35,10 +35,10 @@ public static class LiveReads
     // the `id -> Signature` map over every METHOD and TYPE symbol, the type-param-name source ShapeGraph's
     // `monomorphizeSignatures` mines. First-wins on SymbolId (TryAdd), mirroring the method dedupe in
     // LoadFactGraphAsync. Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static IReadOnlyDictionary<string, string> MonomorphizationSignatures(AnalysisResult result)
+    public static IReadOnlyDictionary<string, string> MonomorphizationSignatures(IFactSnapshotView result)
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var s in result.Symbols ?? [])
+        foreach (var s in result.EnumerateSymbols())
         {
             if (s.Kind != SymbolKinds.Method && s.Kind != SymbolKinds.Type)
             {
@@ -54,9 +54,12 @@ public static class LiveReads
     // Mirrors Reads.EventSubscriptionSitesAsync: call SITES containing an EVENT read (a `read` ref whose
     // target is an event DocID). Intersected with method-group edges by MarkEventSubscriptionHandoffs.
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static ISet<EventSubscriptionSite> EventSubscriptionSites(AnalysisResult result) =>
-        (result.References ?? [])
-            .Where(r => r.EnclosingSymbolId != null && r.RefKind == RefKinds.Read && r.TargetSymbolId.StartsWith("E:", StringComparison.Ordinal))
+    public static ISet<EventSubscriptionSite> EventSubscriptionSites(IFactSnapshotView result) =>
+        result
+            .EnumerateReferences()
+            .Where(r =>
+                r.EnclosingSymbolId != null && r.RefKind == RefKinds.Read && r.TargetSymbolId.StartsWith("E:", StringComparison.Ordinal)
+            )
             .Select(r => new EventSubscriptionSite(Caller: r.EnclosingSymbolId!, FilePath: r.FilePath, Line: r.Line))
             .ToHashSet();
 
@@ -64,9 +67,9 @@ public static class LiveReads
     // raw rows (here off the in-memory reference facts, there by two SQL scans) and hand them to the one
     // DeliverySiteProjection.Project. The row filters below are that loader's two WHERE clauses verbatim.
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static IReadOnlyList<DeliverySite> DeliverySites(AnalysisResult result, IReadOnlyList<DeliveryRule> deliveryRules)
+    public static IReadOnlyList<DeliverySite> DeliverySites(IFactSnapshotView result, IReadOnlyList<DeliveryRule> deliveryRules)
     {
-        var references = result.References ?? [];
+        var references = result.EnumerateReferences();
 
         var eventReads =
             DeliverySiteProjection.EventRules(deliveryRules).Count > 0
@@ -109,11 +112,11 @@ public static class LiveReads
     // `Modifiers.Split(' ').Contains("abstract")` that gives TypeSymbol its IsAbstract — String.Split has no
     // SQL translation, so it runs in memory on BOTH sides, now through one function).
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static FactEntryPointDeriver.FactEntryPointData FactEntryPointData(AnalysisResult result)
+    public static FactEntryPointDeriver.FactEntryPointData FactEntryPointData(IFactSnapshotView result)
     {
-        var typeRelations = result.TypeRelations ?? [];
-        var symbols = result.Symbols ?? [];
-        var references = result.References ?? [];
+        var typeRelations = result.EnumerateTypeRelations();
+        var symbols = result.EnumerateSymbols();
+        var references = result.EnumerateReferences();
 
         var baseEdges = typeRelations
             .Where(t => t.RelationKind == RelationKinds.Base)
@@ -162,14 +165,15 @@ public static class LiveReads
     // effect deriver keys a BCL call to its first-party ENCLOSING method, so filtering here would lose effects.
     // Kept in lockstep with Reads by LiveFactSourceParityTests — and now by CONSTRUCTION as well: the
     // projection itself is FactInvocationProjection.Project, the same function both store loaders map through.
-    public static IReadOnlyList<FactInvocation> InvocationRefs(AnalysisResult result) =>
-        (result.References ?? []).Where(r => r.RefKind == RefKinds.Invocation).Select(FactInvocationProjection.Project).ToList();
+    public static IReadOnlyList<FactInvocation> InvocationRefs(IFactSnapshotView result) =>
+        result.EnumerateReferences().Where(r => r.RefKind == RefKinds.Invocation).Select(FactInvocationProjection.Project).ToList();
 
     // Mirrors Reads.LoadThrowRefsAsync: `throw` reference facts (Target is the thrown exception type DocID),
     // deduped by (FilePath, Line, Target) exactly as the loader does.
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static IReadOnlyList<SymbolRef> ThrowRefs(AnalysisResult result) =>
-        (result.References ?? [])
+    public static IReadOnlyList<SymbolRef> ThrowRefs(IFactSnapshotView result) =>
+        result
+            .EnumerateReferences()
             .Where(r => r.RefKind == RefKinds.Throw && r.EnclosingSymbolId != null)
             .Select(r => new SymbolRef(
                 Target: r.TargetSymbolId,
@@ -189,10 +193,11 @@ public static class LiveReads
     // insertion order the store's rowid scan returns for a single-run store.
     // Kept in lockstep with Reads by LiveTreeTests (byte-equal `--view full` renderings) and its direct twin
     // assertion there.
-    public static IReadOnlyList<SymbolRef> LibraryCallSites(AnalysisResult result, IReadOnlyCollection<string> enclosingIds)
+    public static IReadOnlyList<SymbolRef> LibraryCallSites(IFactSnapshotView result, IReadOnlyCollection<string> enclosingIds)
     {
         var wanted = enclosingIds.ToHashSet(StringComparer.Ordinal);
-        return (result.References ?? [])
+        return result
+            .EnumerateReferences()
             .Where(r =>
                 r.RefKind == RefKinds.Invocation && !r.TargetInSource && r.EnclosingSymbolId != null && wanted.Contains(r.EnclosingSymbolId)
             )
@@ -211,8 +216,9 @@ public static class LiveReads
     // `static` token test as VolatileFieldIds (Modifiers is Roslyn-generated and always lower-case, so the
     // store's case-insensitive `LIKE '%static%'` and this ordinal Contains cannot diverge).
     // Kept in lockstep with Reads by LiveTreeTests.
-    public static IReadOnlySet<string> StaticFieldIds(AnalysisResult result) =>
-        (result.Symbols ?? [])
+    public static IReadOnlySet<string> StaticFieldIds(IFactSnapshotView result) =>
+        result
+            .EnumerateSymbols()
             .Where(s => s.Kind == SymbolKinds.Field && s.Modifiers.Contains("static", StringComparison.Ordinal))
             .Select(s => s.SymbolId)
             .ToHashSet(StringComparer.Ordinal);
@@ -226,11 +232,14 @@ public static class LiveReads
     // row fans out exactly as the SQL inner join does before the dedup collapses it. The row->record mapping
     // is the SHARED FactFieldAccessProjection, the same one both store loaders map through.
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static (IReadOnlyList<FactFieldAccess> Writes, IReadOnlyList<FactFieldAccess> Reads) StaticFieldAccessRefsByKind(AnalysisResult result)
+    public static (IReadOnlyList<FactFieldAccess> Writes, IReadOnlyList<FactFieldAccess> Reads) StaticFieldAccessRefsByKind(
+        IFactSnapshotView result
+    )
     {
-        var staticSymbols = (result.Symbols ?? []).Where(s => s.Modifiers.Contains("static", StringComparison.Ordinal));
+        var staticSymbols = result.EnumerateSymbols().Where(s => s.Modifiers.Contains("static", StringComparison.Ordinal));
 
-        var rows = (result.References ?? [])
+        var rows = result
+            .EnumerateReferences()
             .Where(r => (r.RefKind == RefKinds.Write || r.RefKind == RefKinds.Read) && r.TargetInSource && r.EnclosingSymbolId != null)
             .Join(
                 staticSymbols,
@@ -258,10 +267,11 @@ public static class LiveReads
     // found the same way — an attribute application IS a ctor reference whose ENCLOSING is the decorated
     // field's DocID and whose TARGET is the attribute's ctor. Same exact ctor DocID match, same Distinct.
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static IReadOnlySet<string> ThreadStaticFieldIds(AnalysisResult result)
+    public static IReadOnlySet<string> ThreadStaticFieldIds(IFactSnapshotView result)
     {
         const string threadStaticCtor = "M:System.ThreadStaticAttribute.#ctor";
-        return (result.References ?? [])
+        return result
+            .EnumerateReferences()
             .Where(r =>
                 r.RefKind == RefKinds.Ctor
                 && string.Equals(r.TargetSymbolId, threadStaticCtor, StringComparison.Ordinal)
@@ -274,8 +284,9 @@ public static class LiveReads
     // Mirrors Reads.LoadVolatileFieldIdsAsync: field symbols whose Modifiers carry `volatile` — one of the two
     // signals hard-suppressing a lock-enclosed lazy-init as a safe DCL.
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static IReadOnlySet<string> VolatileFieldIds(AnalysisResult result) =>
-        (result.Symbols ?? [])
+    public static IReadOnlySet<string> VolatileFieldIds(IFactSnapshotView result) =>
+        result
+            .EnumerateSymbols()
             .Where(s => s.Kind == SymbolKinds.Field && s.Modifiers.Contains("volatile", StringComparison.Ordinal))
             .Select(s => s.SymbolId)
             .ToHashSet(StringComparer.Ordinal);
@@ -284,8 +295,9 @@ public static class LiveReads
     // finder applies its own), deduped by SymbolId, with the same generated-file heuristic. (Also the `async` modifier source the sync_over_async
     // hazard feed filters on.)
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static IReadOnlyList<DeadCodeFinder.MethodMeta> DeadCodeMethods(AnalysisResult result) =>
-        (result.Symbols ?? [])
+    public static IReadOnlyList<DeadCodeFinder.MethodMeta> DeadCodeMethods(IFactSnapshotView result) =>
+        result
+            .EnumerateSymbols()
             .Where(s => s.Kind == SymbolKinds.Method)
             .GroupBy(s => s.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
@@ -303,9 +315,9 @@ public static class LiveReads
     // reclassifies exactly those subscription edges to `handoff` — run it AFTER, or AddDeliveryEdges finds zero
     // handlers and event delivery (event_raise) edges vanish (event_cycle drops to 0).
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
-    public static FactGraphData ShapedGraph(AnalysisResult result, RuleSet rules)
+    public static FactGraphData ShapedGraph(IFactSnapshotView result, RuleSet rules)
     {
-        var graph = FactGraphProjection.FromAnalysis(result, handoffRules: rules.Handoff, redirectRules: rules.Redirect);
+        var graph = FactGraphProjection.FromView(result, handoffRules: rules.Handoff, redirectRules: rules.Redirect);
         graph = FactPathFinder.ShapeGraph(
             graph: graph,
             factoryRules: rules.Factory,

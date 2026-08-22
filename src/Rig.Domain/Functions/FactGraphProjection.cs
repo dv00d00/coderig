@@ -21,6 +21,12 @@ public static class FactGraphProjection
         AnalysisResult result,
         IReadOnlyList<FactHandoffRule>? handoffRules = null,
         IReadOnlyList<FactRedirectRule>? redirectRules = null
+    ) => FromView(result, handoffRules, redirectRules);
+
+    public static FactGraphData FromView(
+        IFactSnapshotView result,
+        IReadOnlyList<FactHandoffRule>? handoffRules = null,
+        IReadOnlyList<FactRedirectRule>? redirectRules = null
     )
     {
         // First-party callees only (TargetInSource): BCL/runtime targets are leaves that add width, not
@@ -28,7 +34,8 @@ public static class FactGraphProjection
         // matched by a redirect rule (external convenience overload → virtual hatch) is KEPT despite being
         // out-of-source and its callee rewritten to the hatch — the external-virtual-override-orphan fix
         // (docs/backlog.md); receiver-narrowed dispatch then resolves the kept hatch to the first-party override.
-        var callEdges = (result.References ?? [])
+        var callEdges = result
+            .EnumerateReferences()
             .Where(r =>
                 r.EnclosingSymbolId != null
                 && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
@@ -42,19 +49,22 @@ public static class FactGraphProjection
             .ToList();
         var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
 
-        var implEdges = (result.TypeRelations ?? [])
+        var implEdges = result
+            .EnumerateTypeRelations()
             .Where(t => t.RelationKind == RelationKinds.Interface)
             .Select(t => new ImplementsEdge(ImplType: t.TypeSymbolId, InterfaceType: t.RelatedSymbolId))
             .Distinct()
             .ToList();
 
-        var baseEdges = (result.TypeRelations ?? [])
+        var baseEdges = result
+            .EnumerateTypeRelations()
             .Where(t => t.RelationKind == RelationKinds.Base)
             .Select(t => new BaseEdge(SubType: t.TypeSymbolId, BaseType: t.RelatedSymbolId))
             .Distinct()
             .ToList();
 
-        var methods = (result.Symbols ?? [])
+        var methods = result
+            .EnumerateSymbols()
             .Where(s => s.Kind == SymbolKinds.Method)
             .Select(SymbolFactProjections.ToMethodRef)
             .GroupBy(m => m.SymbolId, StringComparer.Ordinal)
@@ -64,7 +74,7 @@ public static class FactGraphProjection
         // DispatchFact now carries its emitter path for live per-file replacement, but graph identity
         // remains the semantic (source,target,kind) triple: several files may legitimately emit the
         // same exact edge.
-        var minedDispatch = (result.DispatchFacts ?? []).Select(d => d with { FilePath = "" }).Distinct().ToList();
+        var minedDispatch = result.EnumerateDispatchFacts().Select(d => d with { FilePath = "" }).Distinct().ToList();
 
         // Applied here AND in LoadFactGraphAsync so the two projections match.
         return FactDelegateFieldJoin.Apply(new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch));

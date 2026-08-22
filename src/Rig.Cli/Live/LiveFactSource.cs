@@ -8,7 +8,7 @@ using Rig.Storage.Queries;
 namespace Rig.Cli.Live;
 
 // The query-ready bundle over ONE generation of live facts — the in-memory counterpart of what a query
-// command loads out of a .rig store before it can answer anything. Given the AnalysisResult a resident index
+// command loads out of a .rig store before it can answer anything. Given the segmented fact view a resident index
 // (`rig watch` / ResidentIndex) currently holds plus the effective RuleSet, it exposes the three expensive
 // derived artifacts every query path needs: the fully shaped call graph, the entry-point fact bundle, and the
 // whole-store hazard-augmented effect set.
@@ -34,12 +34,13 @@ internal sealed class LiveFactSource
     private readonly Lazy<FactEntryPointDeriver.FactEntryPointData> _epData;
     private readonly Lazy<IReadOnlyList<FactInvocation>> _invocations;
     private readonly Lazy<IReadOnlyList<SymbolRef>> _throwRefs;
+    private readonly Lazy<IReadOnlyList<AllocationFact>> _allocationFacts;
     private readonly Lazy<ISet<EventSubscriptionSite>> _eventSubscriptionSites;
     private readonly Lazy<IReadOnlyList<DerivedEffect>> _effects;
     private readonly Lazy<IReadOnlyList<DerivedEffect>> _hazardEffects;
     private readonly Lazy<Task<IReadOnlyList<Commands.DeriveCommand.HazardFinding>>> _graphHazardFindings;
 
-    public LiveFactSource(AnalysisResult facts, RuleSet rules)
+    public LiveFactSource(IFactSnapshotView facts, RuleSet rules)
     {
         Facts = facts;
         Rules = rules;
@@ -48,9 +49,12 @@ internal sealed class LiveFactSource
         _epData = Memo("epData", () => LiveReads.FactEntryPointData(facts));
         _invocations = Memo("invocations", () => LiveReads.InvocationRefs(facts));
         _throwRefs = Memo("throwRefs", () => LiveReads.ThrowRefs(facts));
+        // The store loader returns a list and downstream derivation consumes it more than once. Keep one
+        // undeduplicated materialization per generation without adding a new rendered cost label.
+        _allocationFacts = new Lazy<IReadOnlyList<AllocationFact>>(() => facts.EnumerateAllocationFacts().ToArray());
         _eventSubscriptionSites = Memo("eventSites", () => LiveReads.EventSubscriptionSites(facts));
         _effects = Memo("effects", () => QueryEffectDerivation.ForReach(rules, ReachInputs, TraversalGraph));
-        _hazardEffects = Memo("hazardEffects", () => DeriveHazardEffects(facts, rules, EpData, gate: true));
+        _hazardEffects = Memo("hazardEffects", () => DeriveHazardEffects(facts, rules, EpData, AllocationFacts, gate: true));
         _graphHazardFindings = MemoAsync(
             "graphHazardFindings",
             () =>
@@ -67,7 +71,7 @@ internal sealed class LiveFactSource
     }
 
     // The fact generation this source serves. Immutable — a rebuild produces a new LiveFactSource.
-    public AnalysisResult Facts { get; }
+    public IFactSnapshotView Facts { get; }
 
     public RuleSet Rules { get; }
 
@@ -113,7 +117,7 @@ internal sealed class LiveFactSource
             ThrowRefs: ThrowRefs,
             // AllocationFacts needs no LiveReads twin: Reads.LoadAllocationFactsAsync (whole-store) applies no
             // filter and no dedup, so the extracted list already IS its return value.
-            AllocationFacts: Facts.AllocationFacts ?? [],
+            AllocationFacts: AllocationFacts,
             EpData: EpData
         );
 
@@ -135,7 +139,8 @@ internal sealed class LiveFactSource
     // separate cache slots for exactly this reason, and silently returning gated counts for an ungated question
     // is the failure a fact tool cannot have. Unreachable from today's live surface (no --no-gate there), and
     // implemented honestly anyway — a member that lies when a flag is added is worse than one that is slow.
-    public IReadOnlyList<DerivedEffect> HazardEffectsFor(bool gate) => gate ? HazardEffects : DeriveHazardEffects(Facts, Rules, EpData, gate: false);
+    public IReadOnlyList<DerivedEffect> HazardEffectsFor(bool gate) =>
+        gate ? HazardEffects : DeriveHazardEffects(Facts, Rules, EpData, AllocationFacts, gate: false);
 
     // Mirrors EffectDerivation.DeriveGraphHazardFindingsAsync — the whole-store GRAPH-TIER findings
     // (event_cycle / cache_coherence / static_init_capture), through the SAME
@@ -172,7 +177,10 @@ internal sealed class LiveFactSource
     // instrument whose resolution hides the thing it measures is not an instrument.
     // Empty when nothing was built this generation (every artifact already memoized).
     public string BuildTimeLine() =>
-        string.Join(" | ", BuildTimes.Select(t => $"{t.Artifact} {t.Elapsed.TotalMilliseconds.ToString("F1", CultureInfo.InvariantCulture)}ms"));
+        string.Join(
+            " | ",
+            BuildTimes.Select(t => $"{t.Artifact} {t.Elapsed.TotalMilliseconds.ToString("F1", CultureInfo.InvariantCulture)}ms")
+        );
 
     // Force the artifacts a QUERY needs, so the first query of a generation does not pay for them. Called by
     // WatchHost on a background task right after an eager apply; see the note there for the scheduling rules.
@@ -224,9 +232,9 @@ internal sealed class LiveFactSource
     // this generation's memo does not cover) can build one without disturbing the memo. Mirrors
     // LoadEffectReachInputsAsync's shaping pass — LoadFactGraphAsync's twin (FactGraphProjection.FromAnalysis)
     // followed by the SINGLE FactPathFinder.ShapeGraph call, with the same monomorphization signatures.
-    public static FactGraphData TraversalGraphOf(AnalysisResult facts, RuleSet rules) =>
+    public static FactGraphData TraversalGraphOf(IFactSnapshotView facts, RuleSet rules) =>
         FactPathFinder.ShapeGraph(
-            graph: FactGraphProjection.FromAnalysis(facts, handoffRules: rules.Handoff, redirectRules: rules.Redirect),
+            graph: FactGraphProjection.FromView(facts, handoffRules: rules.Handoff, redirectRules: rules.Redirect),
             factoryRules: rules.Factory,
             cutRules: rules.Cut,
             contextRules: rules.Context,
@@ -285,9 +293,10 @@ internal sealed class LiveFactSource
     // FR-1 read-arm write-pairing gate, threaded through exactly as the store path threads `--no-gate`; the
     // memoized artifact is the gated (default) one and HazardEffectsFor is what routes the other.
     private static IReadOnlyList<DerivedEffect> DeriveHazardEffects(
-        AnalysisResult facts,
+        IFactSnapshotView facts,
         RuleSet rules,
         FactEntryPointDeriver.FactEntryPointData epData,
+        IReadOnlyList<AllocationFact> allocationFacts,
         bool gate
     )
     {
@@ -313,7 +322,9 @@ internal sealed class LiveFactSource
             gate: gate,
             // AllocationFacts needs no LiveReads twin: Reads.LoadAllocationFactsAsync (whole-store) applies no
             // filter and no dedup, so the extracted list already IS its return value.
-            allocationFacts: facts.AllocationFacts ?? []
+            allocationFacts: allocationFacts
         );
     }
+
+    private IReadOnlyList<AllocationFact> AllocationFacts => _allocationFacts.Value;
 }

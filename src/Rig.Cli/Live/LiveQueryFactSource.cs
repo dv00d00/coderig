@@ -11,8 +11,8 @@ namespace Rig.Cli.Live;
 
 // IQueryFactSource over the RESIDENT in-memory facts — the point of the whole live-background-index program.
 // A query answered through this instance touches no SQLite: the graph, the effect inputs and the entry-point
-// facts are projected off the AnalysisResult `rig watch` keeps ~0.75s current, through LiveReads (the parity-
-// gated twin of the store-side `Reads`).
+// facts are projected off the immutable segmented view `rig watch` keeps current, through LiveReads (the
+// parity-gated twin of the store-side `Reads`).
 //
 // It is a THIN adapter over one LiveFactSource generation and owns nothing: DisposeAsync is a no-op, because
 // the facts belong to the host and outlive any single query. A new fact generation means a new LiveFactSource
@@ -72,7 +72,9 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
     // WHOLE shaped graph — a superset of both the Forward and the Reverse closure. FactPathFinder narrows it
     // per direction at traversal time on both paths, which is what makes a REVERSE (`callers`) answer agree.
     public Task<FactGraphData> LoadShapedTraversalGraphAsync(string pattern, SqlReachability.Direction direction, RuleSet shapedRules) =>
-        Task.FromResult(SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules));
+        Task.FromResult(
+            SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules)
+        );
 
     // Does `shapedRules` shape the graph the same way the memo was shaped? The memo was built with the rules
     // the FACTS were extracted under, and a caller shaping differently must not be silently served the wrong
@@ -142,9 +144,11 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
     // here: both paths call the one SeedResolutionNotice formatter, so the disclosure text cannot drift.
     public Task ReportNoNodeMatchAsync(TextWriter output, string pattern)
     {
-        var hits = (Source.Facts.Symbols ?? [])
+        var hits = Source
+            .Facts.EnumerateSymbols()
             .Where(s =>
-                s.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase) || s.SymbolId.Contains(pattern, StringComparison.OrdinalIgnoreCase)
+                s.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase)
+                || s.SymbolId.Contains(pattern, StringComparison.OrdinalIgnoreCase)
             )
             .OrderBy(s => s.SymbolId, StringComparer.Ordinal)
             .GroupBy(s => s.SymbolId, StringComparer.Ordinal)
@@ -166,9 +170,12 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
     // and the live index has no materialized graph at all.
     public Task<bool> SymbolExistsAnywhereAsync(string pattern) =>
         Task.FromResult(
-            (Source.Facts.Symbols ?? []).Any(s =>
-                s.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase) || s.SymbolId.Contains(pattern, StringComparison.OrdinalIgnoreCase)
-            )
+            Source
+                .Facts.EnumerateSymbols()
+                .Any(s =>
+                    s.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase)
+                    || s.SymbolId.Contains(pattern, StringComparison.OrdinalIgnoreCase)
+                )
         );
 
     public Task<FactEntryPointDeriver.FactEntryPointData> LoadEntryPointDataAsync() => Task.FromResult(Source.EpData);
@@ -177,7 +184,8 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
         IReadOnlyList<DerivedEntryPoint> Derived,
         IReadOnlyList<HandoffEntryPoint> ClassifiedHandoffs,
         IReadOnlyList<DerivedEntryPoint> PromotedOrigins
-    )> DeriveEntryPointsAsync(FactEntryPointDeriver.FactEntryPointData epData, RuleSet rules) => Task.FromResult(EntryPointSets(rules, epData));
+    )> DeriveEntryPointsAsync(FactEntryPointDeriver.FactEntryPointData epData, RuleSet rules) =>
+        Task.FromResult(EntryPointSets(rules, epData));
 
     // ---- `tree` only, below. ----
 
@@ -240,8 +248,11 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
             }
 
             var derived = FactEntryPointDeriver.Derive(epData ?? Source.EpData, rules.EntryPoints, rules.ClassInheritance);
-            var edges = FactGraphProjection.FromAnalysis(Source.Facts, handoffRules: rules.Handoff, redirectRules: rules.Redirect).CallEdges;
-            var classifiedHandoffs = HandoffClassifier.HandoffEntryPoints(edges, rules.Handoff).Where(h => h.Dispatcher is not null).ToList();
+            var edges = FactGraphProjection.FromView(Source.Facts, handoffRules: rules.Handoff, redirectRules: rules.Redirect).CallEdges;
+            var classifiedHandoffs = HandoffClassifier
+                .HandoffEntryPoints(edges, rules.Handoff)
+                .Where(h => h.Dispatcher is not null)
+                .ToList();
             var promoted = EntryPointContext.PromoteHandoffOrigins(classifiedHandoffs, derived);
             var sets = (
                 (IReadOnlyList<DerivedEntryPoint>)derived,
