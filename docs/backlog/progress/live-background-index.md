@@ -71,8 +71,9 @@ keyed graph view in traversal, then add demand-driven refinement.
   replaced emitter paths (including empty and generated-retirement tombstones). Immutable diagnostics prove
   keyed lookup locality, one-emitter update scope, and structural sharing without mutable snapshot counters.
   Raw multiplicity remains intact while raw row order is explicitly non-semantic; Slice 6B must project
-  duplicate method facts deterministically before consuming the view. Four tests bring exact discovery to
-  **1,103 tests**. No semantic projection or query-locality claim is made in this substrate.
+  duplicate method facts deterministically before consuming the view. The first 6B gate makes both raw views
+  use stable emitter order and pins the projected first method independent of replacement chronology. Five
+  tests bring exact discovery to **1,104 tests**. No semantic projection or query-locality claim is made yet.
 - **Next:** Slice 6B, consume `IFactGraphView` from traversal with forward/reverse and one-hop dispatch parity;
   then add demand-driven exact refinement.
 

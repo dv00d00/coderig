@@ -189,7 +189,10 @@ internal sealed class FactSnapshot : IIndexedFactSnapshotView
             }
         }
 
-        foreach (var slice in overlay.Values)
+        // ImmutableDictionary iteration order is an implementation detail. Emitter order is the stable
+        // raw-row tie-break shared with SegmentedFactGraphView, so duplicate semantic rows project the
+        // same first value regardless of edit chronology.
+        foreach (var (_, slice) in overlay.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
         {
             foreach (var row in sliceRows(slice))
             {

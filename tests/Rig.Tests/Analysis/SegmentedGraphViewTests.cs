@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Rig.Analysis.Inventory;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 using Shouldly;
 
 namespace Rig.Tests.Analysis;
@@ -308,6 +309,44 @@ public sealed class SegmentedGraphViewTests
                 NodeKeysExamined: 1
             )
         );
+    }
+
+    [Test]
+    public void Duplicate_method_projection_is_stable_by_emitter_not_replacement_chronology()
+    {
+        const string emitterA = "/repo/A.cs";
+        const string emitterB = "/repo/B.cs";
+        const string methodId = "M:App.Shared";
+        var baseFacts = Result();
+        var baseLayer = SegmentedFactGraphBase.Build(baseFacts);
+        var firstA = Method(methodId, "T:App.A", emitterA, 1);
+        var methodB = Method(methodId, "T:App.B", emitterB, 2);
+        var replacementA = Method(methodId, "T:App.A2", emitterA, 3);
+        var entries = ImmutableDictionary
+            .Create<string, FileFacts>(StringComparer.OrdinalIgnoreCase)
+            .Add(emitterA, Slice(symbols: [firstA]))
+            .Add(emitterB, Slice(symbols: [methodB]));
+        var graphOverlay = SegmentedFactGraphOverlay
+            .Empty.Replace(new Dictionary<string, FileFacts> { [emitterA] = entries[emitterA] })
+            .Replace(new Dictionary<string, FileFacts> { [emitterB] = entries[emitterB] })
+            .Replace(new Dictionary<string, FileFacts> { [emitterA] = Slice(symbols: [replacementA]) });
+        entries = entries.SetItem(emitterA, Slice(symbols: [replacementA]));
+        using var workspace = new AdhocWorkspace();
+        var snapshot = new FactSnapshot(
+            new FactRevision(1),
+            workspace.CurrentSolution,
+            baseFacts,
+            entries,
+            DirtySet.Empty,
+            SnapshotDelta.Empty,
+            graphBase: baseLayer,
+            graphOverlay: graphOverlay
+        );
+        var graphRows = ((IIndexedFactSnapshotView)snapshot).GraphView.MethodsById(methodId);
+        var compositeRows = snapshot.EnumerateSymbols().Where(s => s.SymbolId == methodId).ToArray();
+
+        graphRows.ShouldBe(compositeRows);
+        graphRows.Select(SymbolFactProjections.ToMethodRef).First().ShouldBe(SymbolFactProjections.ToMethodRef(replacementA));
     }
 
     private static FactSnapshot Snapshot(Solution solution, AnalysisResult baseFacts, params (string Path, FileFacts Slice)[] overlay)

@@ -468,17 +468,12 @@ internal sealed class OverlayEmitterKeyIndex<T>
 
 internal sealed class KeyPartition<T>
 {
-    private readonly ImmutableDictionary<string, ImmutableArray<OrderedFact<T>>> _rowsByEmitter;
-    private readonly long _nextOrder;
+    private readonly ImmutableDictionary<string, ImmutableArray<T>> _rowsByEmitter;
 
-    private KeyPartition(ImmutableDictionary<string, ImmutableArray<OrderedFact<T>>> rowsByEmitter, long nextOrder)
-    {
-        _rowsByEmitter = rowsByEmitter;
-        _nextOrder = nextOrder;
-    }
+    private KeyPartition(ImmutableDictionary<string, ImmutableArray<T>> rowsByEmitter) => _rowsByEmitter = rowsByEmitter;
 
     internal static KeyPartition<T> Empty { get; } =
-        new(ImmutableDictionary.Create<string, ImmutableArray<OrderedFact<T>>>(StringComparer.OrdinalIgnoreCase), 0);
+        new(ImmutableDictionary.Create<string, ImmutableArray<T>>(StringComparer.OrdinalIgnoreCase));
     internal bool IsEmpty => _rowsByEmitter.IsEmpty;
 
     internal KeyPartition<T> WithoutEmitter(string emitter)
@@ -487,15 +482,10 @@ internal sealed class KeyPartition<T>
         {
             return this;
         }
-        return new KeyPartition<T>(_rowsByEmitter.Remove(emitter), _nextOrder);
+        return new KeyPartition<T>(_rowsByEmitter.Remove(emitter));
     }
 
-    internal KeyPartition<T> Append(string emitter, IEnumerable<T> rows)
-    {
-        var order = _nextOrder;
-        var added = rows.Select(row => new OrderedFact<T>(order++, row)).ToImmutableArray();
-        return new KeyPartition<T>(_rowsByEmitter.SetItem(emitter, added), order);
-    }
+    internal KeyPartition<T> Append(string emitter, IEnumerable<T> rows) => new(_rowsByEmitter.SetItem(emitter, rows.ToImmutableArray()));
 
     internal bool HasActiveRows(ImmutableHashSet<string> replacedEmitters) =>
         _rowsByEmitter.Any(p => !replacedEmitters.Contains(p.Key) && !p.Value.IsEmpty);
@@ -504,10 +494,10 @@ internal sealed class KeyPartition<T>
 
     internal GraphLookupResult<T> Lookup(ImmutableHashSet<string>? replacedEmitters)
     {
-        var rows = new List<OrderedFact<T>>();
+        var rows = new List<T>();
         var shardsExamined = 0;
         var rowsExamined = 0;
-        foreach (var (emitter, emitterRows) in _rowsByEmitter)
+        foreach (var (emitter, emitterRows) in _rowsByEmitter.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
         {
             if (replacedEmitters?.Contains(emitter) == true)
             {
@@ -517,11 +507,6 @@ internal sealed class KeyPartition<T>
             rowsExamined += emitterRows.Length;
             rows.AddRange(emitterRows);
         }
-        return new GraphLookupResult<T>(
-            rows.OrderBy(r => r.Order).Select(r => r.Row).ToImmutableArray(),
-            new GraphLookupDiagnostics(1, shardsExamined, rowsExamined)
-        );
+        return new GraphLookupResult<T>(rows.ToImmutableArray(), new GraphLookupDiagnostics(1, shardsExamined, rowsExamined));
     }
 }
-
-internal readonly record struct OrderedFact<T>(long Order, T Row);
