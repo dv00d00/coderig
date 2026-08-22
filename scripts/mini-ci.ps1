@@ -49,7 +49,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE) - not testing/packing." }
 
     if (-not $SkipTests) {
-        dotnet test $solution -c $Configuration --no-build --no-restore
+        $testArguments = @("test", $solution, "-c", $Configuration, "--no-build", "--no-restore")
+        if ($HostRid.StartsWith("osx-")) {
+            # Several tests invoke Buildalyzer/MSBuild, which already parallelizes projects internally.
+            # More than two outer TUnit workers can multiply that fan-out into multi-minute stalls on macOS.
+            $testArguments += @("--", "--maximum-parallel-tests", "2")
+        }
+
+        dotnet @testArguments
         if ($LASTEXITCODE -ne 0) { throw "Tests failed (exit $LASTEXITCODE) - not packing/installing." }
     }
     

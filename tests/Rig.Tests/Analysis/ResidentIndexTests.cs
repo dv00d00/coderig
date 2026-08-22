@@ -16,6 +16,7 @@ namespace Rig.Tests.Analysis;
 // references, the two fields a duplicate-assembly-identity regression moves while every DocID stays
 // identical. The ghost-fact test pins the replace-not-append property: a call REMOVED by an edit must
 // leave no stale reference row behind.
+[NotInParallel(TestResourceKeys.ResidentIndexWorkspace)]
 public sealed class ResidentIndexTests
 {
     private const string GetByIdTarget = "M:Contracts.IPatientRepository.GetById(System.Int32)";
@@ -28,7 +29,7 @@ public sealed class ResidentIndexTests
         var rules = RuleSetLoader.Load(playground.WorkingDirectory);
 
         // ---- 1. Cold analyze retaining the workspace -> build the ResidentIndex ----
-        var (f0, workspace) = await SolutionAnalyzer.AnalyzeRetainingWorkspaceAsync(playground.SolutionPath, rules);
+        var (f0, workspace) = await SolutionAnalyzer.AnalyzeRetainingWorkspaceAsync(playground.SolutionPath, rules, parallelism: 1);
         using var index = new ResidentIndex(workspace, f0, playground.SolutionPath, rules);
 
         // Baseline sanity: the key cross-project binding resolves in the cold load, or every later
@@ -72,7 +73,7 @@ public sealed class ResidentIndexTests
 
         // ---- 3. Oracle: the same edit written to disk, cold full analyze from scratch ----
         await File.WriteAllTextAsync(editedFilePath, editedText);
-        var oracle = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath, rules);
+        var oracle = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath, rules, parallelism: 1);
         (oracle.References ?? []).ShouldContain(r =>
             r.RefKind == "invocation" && r.TargetSymbolId == "M:Foundation.Db.Query(System.String)" && r.EnclosingSymbolId == BookEnclosing
         );
@@ -91,10 +92,13 @@ public sealed class ResidentIndexTests
         using var playground = await DeepChainPlayground.CreateAsync();
         var rules = RuleSetLoader.Load(playground.WorkingDirectory);
 
-        var (f0, workspace) = await SolutionAnalyzer.AnalyzeRetainingWorkspaceAsync(playground.SolutionPath, rules);
+        var (f0, workspace) = await SolutionAnalyzer.AnalyzeRetainingWorkspaceAsync(playground.SolutionPath, rules, parallelism: 1);
         using var index = new ResidentIndex(workspace, f0, playground.SolutionPath, rules);
 
-        // Anti-vacuity: the reference we will remove exists in the base.
+        // Anti-vacuity: the project and reference we will edit both exist in the base. The symbol check
+        // makes a transient project-load omission fail at cold boot instead of masquerading as an overlay
+        // reconciliation delta against the later oracle.
+        (f0.Symbols ?? []).ShouldContain(s => s.SymbolId == "M:DataAccess.PatientRepository.GetById(System.Int32)");
         (f0.References ?? []).ShouldContain(r =>
             r.RefKind == "invocation" && r.TargetSymbolId == GetByIdTarget && r.EnclosingSymbolId == BookEnclosing
         );
@@ -122,7 +126,7 @@ public sealed class ResidentIndexTests
 
         // And the full equivalence gate on the same tree state, so ANY stale/lost fact fails the test.
         await File.WriteAllTextAsync(editedFilePath, editedText);
-        var oracle = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath, rules);
+        var oracle = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath, rules, parallelism: 1);
         (oracle.References ?? []).ShouldNotContain(r => r.TargetSymbolId == GetByIdTarget && r.EnclosingSymbolId == BookEnclosing);
 
         AssertFactSetsEqual(index.CurrentFacts, oracle, playground.RootDirectory);

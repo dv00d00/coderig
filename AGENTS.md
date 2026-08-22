@@ -132,6 +132,9 @@ The rules that make this produce mergeable code, not plausible diffs:
   filter after the `--` separator; `dotnet test --filter` does NOT work (prints help, "Zero tests ran"):
   `dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"`
   (path is `/Assembly/Namespace/Class/Test`; `*` wildcards each segment). `dotnet test` with no filter is fine.
+  On macOS, cap the full suite at two outer workers (`-- --maximum-parallel-tests 2`): Buildalyzer/MSBuild
+  already parallelizes projects internally, and four or more outer workers can turn that nested fan-out into
+  multi-minute stalls. `mini-ci.ps1` applies this macOS ceiling automatically.
   Do not put MSBuild switches such as `-m:1` or `--no-incremental` on `dotnet test`: MTP forwards unknown
   switches to TUnit, which rejects them. When those switches are needed, run `dotnet build ... -m:1
   --no-incremental` first, then `dotnet test ... --no-build --no-restore`.

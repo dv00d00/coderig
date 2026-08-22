@@ -33,7 +33,7 @@ public sealed class TempPlayground : IDisposable
     {
         var repositoryRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
         var sourceDirectory = Path.Combine(repositoryRoot, "playgrounds", playgroundName);
-        var rootDirectory = Directory.CreateTempSubdirectory(tempPrefix).FullName;
+        var rootDirectory = CreateTempDirectory(tempPrefix);
         var targetDirectory = Path.Combine(rootDirectory, playgroundName);
 
         CopyDirectory(sourceDirectory, targetDirectory);
@@ -42,6 +42,19 @@ public sealed class TempPlayground : IDisposable
         await RunDotnetAsync(["restore", solutionPath], targetDirectory);
 
         return new TempPlayground(rootDirectory, solutionPath, targetDirectory);
+    }
+
+    private static string CreateTempDirectory(string prefix)
+    {
+        var tempDirectory = Path.GetFullPath(Path.GetTempPath());
+        if (OperatingSystem.IsMacOS() && tempDirectory.StartsWith("/var/", StringComparison.Ordinal))
+        {
+            // /var is a symlink to /private/var on macOS. NuGet can otherwise discover a referenced
+            // project through both spellings and race itself writing the same project.assets files.
+            tempDirectory = "/private" + tempDirectory;
+        }
+
+        return Directory.CreateDirectory(Path.Combine(tempDirectory, $"{prefix}{Guid.NewGuid():N}")).FullName;
     }
 
     public void Dispose()
