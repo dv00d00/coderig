@@ -1,5 +1,6 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
+using Rig.Analysis.Extraction;
 using Rig.Domain.Data;
 using RuleSet = Rig.Domain.Data.RuleSet;
 
@@ -37,6 +38,14 @@ internal sealed class ResidentIndex : IDisposable
     private readonly IDirtySetPolicy _eagerPolicy;
     private readonly IDirtySetPolicy _cascadePolicy;
 
+    // Host-lifetime string interner shared by every re-extraction: a re-extracted generation's retained
+    // strings alias the previous generation's instead of duplicating the whole string set per edit (the
+    // measured duplication is ~0.9 GB per full-cascade generation on MedDBase). Pass the SAME instance
+    // the cold boot used (WatchCommand does) so overlay strings also alias the BASE facts'. The table
+    // only grows — bounded by the union of values ever seen — which is the deliberate trade: dropping it
+    // per generation would forfeit exactly the cross-generation sharing it exists for.
+    private readonly StringInterner? _interner;
+
     // FilePath -> that file's latest re-extracted facts. OrdinalIgnoreCase: Windows paths, and the
     // loader itself sorts sources OrdinalIgnoreCase.
     private readonly Dictionary<string, FileFacts> _overlay = new(StringComparer.OrdinalIgnoreCase);
@@ -54,7 +63,8 @@ internal sealed class ResidentIndex : IDisposable
         string solutionPath,
         RuleSet rules,
         IDirtySetPolicy? eagerPolicy = null,
-        IDirtySetPolicy? cascadePolicy = null
+        IDirtySetPolicy? cascadePolicy = null,
+        StringInterner? interner = null
     )
     {
         _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
@@ -63,6 +73,7 @@ internal sealed class ResidentIndex : IDisposable
         _rules = rules ?? throw new ArgumentNullException(nameof(rules));
         _eagerPolicy = eagerPolicy ?? new ChangedFilesOnlyPolicy();
         _cascadePolicy = cascadePolicy ?? new ProjectCascadePolicy();
+        _interner = interner ?? StringInterner.CreateDefault();
     }
 
     public Solution CurrentSolution => _workspace.CurrentSolution;
@@ -167,7 +178,8 @@ internal sealed class ResidentIndex : IDisposable
             documents: documents,
             solutionPath: _solutionPath,
             rules: _rules,
-            cancellationToken: cancellationToken
+            cancellationToken: cancellationToken,
+            interner: _interner
         );
 
         foreach (var (filePath, facts) in slices)

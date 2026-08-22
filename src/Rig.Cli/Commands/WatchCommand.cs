@@ -413,6 +413,10 @@ internal sealed class WatchHost : IAsyncDisposable
         CancellationToken cancellationToken = default
     )
     {
+        // ONE host-lifetime interner shared by the cold boot AND every ResidentIndex re-extraction, so a
+        // reconcile generation's retained strings alias the base facts' instead of duplicating the whole
+        // string set per edit (see StringInterner).
+        var interner = Rig.Analysis.Extraction.StringInterner.CreateDefault();
         var (baseFacts, workspace) = await SolutionAnalyzer.AnalyzeRetainingWorkspaceAsync(
             solutionPath: solutionPath,
             rules: rules,
@@ -420,9 +424,10 @@ internal sealed class WatchHost : IAsyncDisposable
             // Match `rig index` defaults: tests excluded, dtb cache on (the caller passes the dir).
             excludeTests: true,
             buildCacheDir: buildCacheDir,
-            restore: restore
+            restore: restore,
+            interner: interner
         );
-        var index = new ResidentIndex(workspace, baseFacts, solutionPath, rules);
+        var index = new ResidentIndex(workspace, baseFacts, solutionPath, rules, interner: interner);
         return new WatchHost(
             index,
             solutionPath,

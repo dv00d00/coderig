@@ -100,8 +100,8 @@ internal static class FactExtractor
 
             if (symbol is INamedTypeSymbol typeSymbol)
             {
-                AddTypeRelations(relations, typeSymbol, docId);
-                AddInterfaceDispatchFacts(dispatch, dispatchSeen, typeSymbol);
+                AddTypeRelations(relations, typeSymbol, docId, symbolCache);
+                AddInterfaceDispatchFacts(dispatch, dispatchSeen, typeSymbol, symbolCache);
             }
 
             // Property/indexer accessors with a real body are first-class callable methods: emit them
@@ -121,7 +121,7 @@ internal static class FactExtractor
                     AddSymbol(symbols, accessor, tree, fileText, AccessorNode(accessor) ?? decl, symbolCache);
                     if (accessor.OverriddenMethod is { } overriddenAccessor)
                     {
-                        AddDispatchFact(dispatch, dispatchSeen, source: overriddenAccessor, target: accessor, kind: DispatchKinds.Override);
+                        AddDispatchFact(dispatch, dispatchSeen, source: overriddenAccessor, target: accessor, kind: DispatchKinds.Override, symbolCache: symbolCache);
                     }
                 }
             }
@@ -131,7 +131,7 @@ internal static class FactExtractor
             // query time, so only the immediate hop is stored.
             if (symbol is IMethodSymbol { OverriddenMethod: { } overridden } overrideMethod)
             {
-                AddDispatchFact(dispatch, dispatchSeen, source: overridden, target: overrideMethod, kind: DispatchKinds.Override);
+                AddDispatchFact(dispatch, dispatchSeen, source: overridden, target: overrideMethod, kind: DispatchKinds.Override, symbolCache: symbolCache);
             }
         }
 
@@ -223,7 +223,7 @@ internal static class FactExtractor
                 references,
                 target,
                 refKind: refKind,
-                enclosingId: EnclosingSymbolId(name, model, lambdaIds, enclosingCache),
+                enclosingId: EnclosingSymbolId(name, model, lambdaIds, enclosingCache, symbolCache),
                 tree: tree,
                 node: name,
                 receiverType: receiverType,
@@ -285,7 +285,7 @@ internal static class FactExtractor
                     references,
                     ctor,
                     refKind: RefKinds.Ctor,
-                    enclosingId: EnclosingSymbolId(creation, model, lambdaIds, enclosingCache),
+                    enclosingId: EnclosingSymbolId(creation, model, lambdaIds, enclosingCache, symbolCache),
                     tree: tree,
                     node: creation,
                     symbolCache: symbolCache
@@ -417,7 +417,7 @@ internal static class FactExtractor
             }
 
             var typeName = resourceOverride ?? symbolCache.TypeDisplay(allocatedType);
-            var enclosing = enclosingOverride ?? EnclosingSymbolId(site, model, lambdaIds, enclosingCache);
+            var enclosing = enclosingOverride ?? EnclosingSymbolId(site, model, lambdaIds, enclosingCache, symbolCache);
             // Effects must be owned by a call-graph node. Field/auto-property initializers currently resolve
             // to F:/P: owners, so omit them until initializer-to-ctor ownership is implemented.
             if (
@@ -437,13 +437,13 @@ internal static class FactExtractor
             allocations.Add(
                 new AllocationFact(
                     Operation: operation,
-                    ResourceType: typeName,
+                    ResourceType: symbolCache.Intern(typeName)!,
                     EnclosingSymbolId: enclosing,
                     FilePath: tree.FilePath,
                     Line: tree.GetLineSpan(site.Span).StartLinePosition.Line + 1,
                     EnclosingLoopKind: structural.LoopKind,
                     EnclosingLoopDetail: structural.LoopDetail,
-                    EnclosingGuards: EncodedGuardsFor(site, model, cfgGuardCache),
+                    EnclosingGuards: symbolCache.Intern(EncodedGuardsFor(site, model, cfgGuardCache)),
                     Mechanism: mechanism,
                     Cardinality: cardinality,
                     ShallowSizeBytes: size.Bytes,
@@ -518,7 +518,7 @@ internal static class FactExtractor
                 return;
             }
 
-            var owner = EnclosingSymbolId(expression.Parent ?? expression, model, lambdaIds, enclosingCache);
+            var owner = EnclosingSymbolId(expression.Parent ?? expression, model, lambdaIds, enclosingCache, symbolCache);
             if (owner is null)
             {
                 return;
@@ -725,7 +725,7 @@ internal static class FactExtractor
                     references,
                     chained,
                     refKind: RefKinds.Ctor,
-                    enclosingId: EnclosingSymbolId(initializer, model, lambdaIds, enclosingCache),
+                    enclosingId: EnclosingSymbolId(initializer, model, lambdaIds, enclosingCache, symbolCache),
                     tree: tree,
                     node: initializer,
                     symbolCache: symbolCache
@@ -747,12 +747,12 @@ internal static class FactExtractor
             }
 
             var slotSymbol = model.GetSymbolInfo(invocation.Expression).Symbol;
-            if (DelegateSlotDocId(slotSymbol) is not { } slot)
+            if (symbolCache.Intern(DelegateSlotDocId(slotSymbol)) is not { } slot)
             {
                 return;
             }
 
-            var invokerId = EnclosingSymbolId(invocation, model, lambdaIds, enclosingCache);
+            var invokerId = EnclosingSymbolId(invocation, model, lambdaIds, enclosingCache, symbolCache);
             references.Add(
                 new ReferenceFact(
                     TargetSymbolId: slot,
@@ -797,7 +797,7 @@ internal static class FactExtractor
                 references,
                 type,
                 refKind: RefKinds.Throw,
-                enclosingId: EnclosingSymbolId(thrown, model, lambdaIds, enclosingCache),
+                enclosingId: EnclosingSymbolId(thrown, model, lambdaIds, enclosingCache, symbolCache),
                 tree: tree,
                 node: thrown,
                 structural: StructuralContextOf(thrown, model, symbolCache),
@@ -932,7 +932,7 @@ internal static class FactExtractor
 
         foreach (var lockStmt in locks)
         {
-            var enclosing = EnclosingSymbolId(lockStmt, model, lambdaIds, enclosingCache);
+            var enclosing = EnclosingSymbolId(lockStmt, model, lambdaIds, enclosingCache, symbolCache);
             var structural = StructuralContextOf(lockStmt, model, symbolCache);
 
             // acquire: at the `lock` keyword / locked expression. allowRuntime keeps the BCL ref.
@@ -976,7 +976,8 @@ internal static class FactExtractor
     private static void AddInterfaceDispatchFacts(
         List<DispatchFact> dispatch,
         HashSet<(string, string, string)> seen,
-        INamedTypeSymbol type
+        INamedTypeSymbol type,
+        SymbolStringCache symbolCache
     )
     {
         if (type.TypeKind is not (TypeKind.Class or TypeKind.Struct))
@@ -992,7 +993,7 @@ internal static class FactExtractor
                 case IMethodSymbol { MethodKind: MethodKind.Ordinary } interfaceMethod:
                     if (type.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol impl)
                     {
-                        AddDispatchFact(dispatch, seen, source: interfaceMethod, target: impl, kind: DispatchKinds.Impl);
+                        AddDispatchFact(dispatch, seen, source: interfaceMethod, target: impl, kind: DispatchKinds.Impl, symbolCache: symbolCache);
                     }
 
                     break;
@@ -1008,13 +1009,15 @@ internal static class FactExtractor
                         dispatch,
                         seen,
                         interfaceAccessor: interfaceProperty.GetMethod,
-                        implAccessor: implProperty.GetMethod
+                        implAccessor: implProperty.GetMethod,
+                        symbolCache: symbolCache
                     );
                     AddAccessorImplDispatch(
                         dispatch,
                         seen,
                         interfaceAccessor: interfaceProperty.SetMethod,
-                        implAccessor: implProperty.SetMethod
+                        implAccessor: implProperty.SetMethod,
+                        symbolCache: symbolCache
                     );
                     break;
             }
@@ -1025,12 +1028,13 @@ internal static class FactExtractor
         List<DispatchFact> dispatch,
         HashSet<(string, string, string)> seen,
         IMethodSymbol? interfaceAccessor,
-        IMethodSymbol? implAccessor
+        IMethodSymbol? implAccessor,
+        SymbolStringCache symbolCache
     )
     {
         if (interfaceAccessor is not null && implAccessor is not null && HasAccessorBody(implAccessor))
         {
-            AddDispatchFact(dispatch, seen, source: interfaceAccessor, target: implAccessor, kind: DispatchKinds.Impl);
+            AddDispatchFact(dispatch, seen, source: interfaceAccessor, target: implAccessor, kind: DispatchKinds.Impl, symbolCache: symbolCache);
         }
     }
 
@@ -1042,7 +1046,8 @@ internal static class FactExtractor
         HashSet<(string, string, string)> seen,
         IMethodSymbol source,
         IMethodSymbol target,
-        string kind
+        string kind,
+        SymbolStringCache symbolCache
     )
     {
         var resolvedTarget = target.OriginalDefinition;
@@ -1052,8 +1057,8 @@ internal static class FactExtractor
             return;
         }
 
-        var sourceId = source.OriginalDefinition.GetDocumentationCommentId();
-        var targetId = resolvedTarget.GetDocumentationCommentId();
+        var sourceId = symbolCache.DocId(source.OriginalDefinition);
+        var targetId = symbolCache.DocId(resolvedTarget);
         if (sourceId is null || targetId is null || sourceId == targetId)
         {
             return;
@@ -1108,12 +1113,14 @@ internal static class FactExtractor
             new SymbolFact(
                 SymbolId: docId,
                 Kind: KindOf(symbol),
-                Name: symbol.Name,
+                Name: symbolCache.Intern(symbol.Name)!,
                 Namespace: symbolCache.NamespaceDisplay(symbol.ContainingNamespace),
                 ContainingSymbolId: symbolCache.DocId(symbol.ContainingSymbol),
                 Modifiers: ModifiersOf(symbol, symbolCache),
                 TypeKind: typeKind,
-                Signature: symbol.ToDisplayString(),
+                // ToDisplayString allocates a fresh string per call; interning shares the retained
+                // instance across generations in the resident host (values are near-unique WITHIN a run).
+                Signature: symbolCache.Intern(symbol.ToDisplayString())!,
                 FilePath: tree.FilePath,
                 Line: lineSpan.StartLinePosition.Line + 1,
                 EndLine: lineSpan.EndLinePosition.Line + 1,
@@ -1121,7 +1128,7 @@ internal static class FactExtractor
                 IsOverride: symbol.IsOverride,
                 // The declaration's normalized text — so `rig impact` detects an IN-PLACE body edit (a changed
                 // constant/literal that leaves call structure, and thus the reachable-set diff, untouched).
-                BodyHash: BodyHashOf(fileText, node)
+                BodyHash: symbolCache.Intern(BodyHashOf(fileText, node))!
             )
         );
     }
@@ -1152,16 +1159,16 @@ internal static class FactExtractor
         return Convert.ToHexStringLower(hash);
     }
 
-    private static void AddTypeRelations(List<TypeRelationFact> relations, INamedTypeSymbol type, string typeDocId)
+    private static void AddTypeRelations(List<TypeRelationFact> relations, INamedTypeSymbol type, string typeDocId, SymbolStringCache symbolCache)
     {
-        if (type.BaseType is { SpecialType: SpecialType.None } baseType && baseType.GetDocumentationCommentId() is { } baseDocId)
+        if (type.BaseType is { SpecialType: SpecialType.None } baseType && symbolCache.DocId(baseType) is { } baseDocId)
         {
             relations.Add(new TypeRelationFact(TypeSymbolId: typeDocId, RelatedSymbolId: baseDocId, RelationKind: "base"));
         }
 
         foreach (var iface in type.Interfaces)
         {
-            if (iface.GetDocumentationCommentId() is { } ifaceDocId)
+            if (symbolCache.DocId(iface) is { } ifaceDocId)
             {
                 relations.Add(new TypeRelationFact(TypeSymbolId: typeDocId, RelatedSymbolId: ifaceDocId, RelationKind: "interface"));
             }
@@ -1190,10 +1197,17 @@ internal static class FactExtractor
         string? enclosingGuards = null
     )
     {
+        // Canonicalize the freshly-BUILT retained strings (joins, JSON, encoded chains) through the
+        // run/host-scoped interner — identity only, value untouched. Receiver/first-arg TYPES and the
+        // structural Loop*Type fields already arrive interned via symbolCache.TypeDisplay; the structural
+        // encoded strings via StructuralContextOf. Null symbolCache (not used by any production path)
+        // passes values through unchanged.
+        string? Interned(string? value) => symbolCache is null ? value : symbolCache.Intern(value);
+
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
         // OriginalDefinition strips them below (e.g. `ask<PaymentGatewayResponse<T>>` → that type).
         var typeArguments = target is IMethodSymbol { TypeArguments.Length: > 0 } generic
-            ? string.Join(',', generic.TypeArguments.Select(t => t.ToDisplayString()))
+            ? Interned(string.Join(',', generic.TypeArguments.Select(t => t.ToDisplayString())))
             : null;
 
         // For constructors, point the reference at the constructor's containing type's ctor DocID;
@@ -1226,8 +1240,8 @@ internal static class FactExtractor
             var declaringContainer = constructed is not null
                 ? (constructed.ReducedFrom ?? constructed).ContainingType
                 : target.ContainingType;
-            declaringTypeArgBinding = GenericArgBinding(declaringContainer?.TypeArguments);
-            methodTypeArgBinding = GenericArgBinding(constructed?.TypeArguments);
+            declaringTypeArgBinding = Interned(GenericArgBinding(declaringContainer?.TypeArguments));
+            methodTypeArgBinding = Interned(GenericArgBinding(constructed?.TypeArguments));
         }
 
         // Keep ALL method-call facts (invocation/ctor) regardless of assembly — they are the complete
@@ -1254,18 +1268,18 @@ internal static class FactExtractor
                 FilePath: tree.FilePath,
                 Line: lineOverride ?? tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
                 ReceiverType: receiverType,
-                FirstArgumentTemplate: firstArgumentTemplate,
+                FirstArgumentTemplate: Interned(firstArgumentTemplate),
                 FirstArgumentType: firstArgumentType,
                 EnclosingLoopKind: structural.LoopKind,
                 EnclosingLoopDetail: structural.LoopDetail,
                 EnclosingInvocations: structural.EnclosingInvocations,
                 EnclosingCatchTypes: structural.CatchTypes,
                 TypeArguments: typeArguments,
-                FirstArgumentName: firstArgumentName,
-                DelegateConsumer: delegateConsumer,
+                FirstArgumentName: Interned(firstArgumentName),
+                DelegateConsumer: Interned(delegateConsumer),
                 EnclosingScopes: structural.EnclosingScopes,
-                ArgumentTemplates: argumentTemplates,
-                ArgumentNames: argumentNames,
+                ArgumentTemplates: Interned(argumentTemplates),
+                ArgumentNames: Interned(argumentNames),
                 // Already null for non-first-party targets (computed only when inSource above) — only
                 // first-party nodes render, so a BCL callee's binding would be dead storage.
                 DeclaringTypeArgBinding: declaringTypeArgBinding,
@@ -1275,7 +1289,7 @@ internal static class FactExtractor
                 // the override-dispatch fan. False for every ordinary call. (Detected by the caller.)
                 NonVirtual: nonVirtual,
                 // CFG-derived control-dependence guard set of this call-site within its method (null = must-run).
-                EnclosingGuards: enclosingGuards,
+                EnclosingGuards: Interned(enclosingGuards),
                 EnclosingLoopElementType: structural.LoopElementType,
                 EnclosingLoopBindType: structural.LoopBindType,
                 InExpressionTree: structural.InExpressionTree
@@ -1747,15 +1761,19 @@ internal static class FactExtractor
             }
         }
 
+        // The four freshly-BUILT strings are interned (identity only, value untouched): they are retained
+        // per call site and hugely repetitive — EnclosingInvocations alone measured ~302M chars total vs
+        // ~58M distinct on the MedDBase store (585k sites, 106k distinct values). LoopKind is a literal;
+        // LoopElementType/LoopBindType come from symbolCache.TypeDisplay, which already interns.
         return new StructuralContext(
             LoopKind: loopKind,
-            LoopDetail: loopDetail,
+            LoopDetail: symbolCache.Intern(loopDetail),
             LoopElementType: loopElementType,
             LoopBindType: loopBindType,
             InExpressionTree: inExpressionTree,
-            EnclosingInvocations: enclosing is null ? null : FactStructuralContext.EncodeInvocations(enclosing),
-            CatchTypes: catchTypes is null ? null : FactStructuralContext.EncodeList(catchTypes),
-            EnclosingScopes: scopes is null ? null : FactStructuralContext.EncodeScopes(scopes)
+            EnclosingInvocations: enclosing is null ? null : symbolCache.Intern(FactStructuralContext.EncodeInvocations(enclosing)),
+            CatchTypes: catchTypes is null ? null : symbolCache.Intern(FactStructuralContext.EncodeList(catchTypes)),
+            EnclosingScopes: scopes is null ? null : symbolCache.Intern(FactStructuralContext.EncodeScopes(scopes))
         );
     }
 
@@ -2470,7 +2488,7 @@ internal static class FactExtractor
             return;
         }
 
-        var enclosing = EnclosingSymbolId(name, model, lambdaIds, enclosingCache);
+        var enclosing = EnclosingSymbolId(name, model, lambdaIds, enclosingCache, symbolCache);
         var receiver = ReceiverTypeOf(name, model, symbolCache);
         var structural = StructuralContextOf(name, model, symbolCache);
         if (getter is not null)
@@ -2579,7 +2597,8 @@ internal static class FactExtractor
         SyntaxNode node,
         SemanticModel model,
         IReadOnlyDictionary<SyntaxNode, string> lambdaIds,
-        Dictionary<SyntaxNode, string?> cache
+        Dictionary<SyntaxNode, string?> cache,
+        SymbolStringCache symbolCache
     )
     {
         for (var cur = node; cur is not null; cur = cur.Parent)
@@ -2596,7 +2615,11 @@ internal static class FactExtractor
                     return cached;
                 }
 
-                var id = ComputeEnclosingId(cur, model);
+                // Interned at memoization (once per member), not per reference site: this string is
+                // retained on every fact the member encloses, and — the per-file cache being per
+                // GENERATION in the resident host — interning is what lets a re-extracted generation's
+                // enclosing ids alias the base generation's.
+                var id = symbolCache.Intern(ComputeEnclosingId(cur, model));
                 cache[cur] = id;
                 return id;
             }
@@ -2687,7 +2710,9 @@ internal static class FactExtractor
 
         var ordinal = ordinalByMember.TryGetValue(memberId, out var n) ? n : 0;
         ordinalByMember[memberId] = ordinal + 1;
-        var id = $"{memberId}~λ{ordinal}"; // λ marker: clearly synthetic, never collides with a real DocID
+        // λ marker: clearly synthetic, never collides with a real DocID. Interned so a resident
+        // re-extraction's synthetic ids alias the base generation's.
+        var id = symbolCache.Intern($"{memberId}~λ{ordinal}")!;
         lambdaIds[lambda] = id;
 
         var lineSpan = tree.GetLineSpan(lambda.Span);
@@ -2696,7 +2721,7 @@ internal static class FactExtractor
             new SymbolFact(
                 SymbolId: id,
                 Kind: "lambda",
-                Name: $"λ{ordinal}",
+                Name: symbolCache.Intern($"λ{ordinal}")!,
                 Namespace: symbolCache.NamespaceDisplay(memberSymbol?.ContainingNamespace),
                 ContainingSymbolId: memberId,
                 Modifiers: "",
@@ -2707,19 +2732,19 @@ internal static class FactExtractor
                 EndLine: lineSpan.EndLinePosition.Line + 1,
                 DefiningAssembly: assembly,
                 IsOverride: false,
-                BodyHash: BodyHashOf(fileText, lambda)
+                BodyHash: symbolCache.Intern(BodyHashOf(fileText, lambda))!
             )
         );
         references.Add(
             new ReferenceFact(
                 TargetSymbolId: id,
                 RefKind: RefKinds.MethodGroup,
-                EnclosingSymbolId: EnclosingSymbolId(lambda.Parent ?? lambda, model, lambdaIds, enclosingCache),
+                EnclosingSymbolId: EnclosingSymbolId(lambda.Parent ?? lambda, model, lambdaIds, enclosingCache, symbolCache),
                 TargetAssembly: assembly,
                 TargetInSource: true,
                 FilePath: tree.FilePath,
                 Line: line,
-                DelegateConsumer: consumer,
+                DelegateConsumer: symbolCache.Intern(consumer),
                 // The guard set of the lambda's CREATION SITE. This edge IS a call-graph edge, so if the
                 // `() => …` literal sits inside an `if`, everything the lambda body reaches is conditional —
                 // omitting this made every effect under an argument-lambda read as MUST-RUN (0 of 65,450
@@ -2727,7 +2752,7 @@ internal static class FactExtractor
                 // Resolved in the CFG that CONTAINS the literal: for a lambda nested in another lambda that
                 // is the outer lambda's sub-CFG, so the inner one is correctly unguarded relative to its own
                 // body. BuildGuardGraphs collects pre-order, so the enclosing CFG always matches first.
-                EnclosingGuards: EncodedGuardsFor(lambda, model, cfgGuardCache)
+                EnclosingGuards: symbolCache.Intern(EncodedGuardsFor(lambda, model, cfgGuardCache))
             )
         );
 

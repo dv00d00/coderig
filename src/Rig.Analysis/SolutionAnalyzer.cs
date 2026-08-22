@@ -44,11 +44,16 @@ public static class SolutionAnalyzer
         // DI pass can syntactically reject non-registration invocations before paying a semantic bind.
         var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
 
+        // RUN-scoped (string-keyed, so unlike SymbolStringCache it pins no compilations): the per-project
+        // extraction batches share one instance per distinct retained string. Dies with this call — the
+        // canonical strings live on in the returned facts, the table does not.
+        var interner = StringInterner.CreateDefault();
+
         progress?.Invoke("Loading solution");
         var sourceSet = await SolutionSourceLoader.LoadAsync(
             solutionPath: solutionFullPath,
             rules: rules,
-            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism),
+            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism, interner),
             cancellationToken: cancellationToken,
             progress: progress,
             scopeProjectPaths: scopeProjectPaths,
@@ -92,16 +97,21 @@ public static class SolutionAnalyzer
         PhaseTimings? timings = null,
         string? buildCacheDir = null,
         string? framework = null,
-        bool restore = false
+        bool restore = false,
+        // The resident host passes ITS interner so the base generation's strings are canonical in the
+        // same table every later re-extraction uses (cross-generation aliasing — the point of the
+        // resident interner). Null = a run-scoped one, exactly like AnalyzeAsync.
+        StringInterner? interner = null
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
         RigWorkspace? retained = null;
         var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
+        interner ??= StringInterner.CreateDefault();
         var sourceSet = await SolutionSourceLoader.LoadAsync(
             solutionPath: solutionFullPath,
             rules: rules,
-            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism),
+            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism, interner),
             cancellationToken: cancellationToken,
             progress: progress,
             parallelism: parallelism,
@@ -138,11 +148,12 @@ public static class SolutionAnalyzer
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
         var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
+        var interner = StringInterner.CreateDefault();
         var sourceSet = await SolutionSourceLoader.ReadSolutionSourcesAsync(
             solution: solution,
             solutionPath: solutionFullPath,
             rules: rules,
-            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism: null),
+            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism: null, interner),
             cancellationToken: cancellationToken,
             progress: progress
         );
@@ -176,7 +187,8 @@ public static class SolutionAnalyzer
         string solutionPath,
         RuleSet rules,
         CancellationToken cancellationToken = default,
-        Action<string>? progress = null
+        Action<string>? progress = null,
+        StringInterner? interner = null
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
@@ -185,7 +197,8 @@ public static class SolutionAnalyzer
             documents: documents,
             solutionFullPath: solutionFullPath,
             rules: rules,
-            cancellationToken: cancellationToken
+            cancellationToken: cancellationToken,
+            interner: interner ?? StringInterner.CreateDefault()
         );
 
         var extractedSources = new List<ExtractedSource>(orderedSources.Count);
@@ -232,7 +245,10 @@ public static class SolutionAnalyzer
         IReadOnlyCollection<DocumentId> documents,
         string solutionPath,
         RuleSet rules,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        // The resident overlay's interner (host-lifetime): a re-extracted generation's strings alias the
+        // base generation's instead of duplicating the retained string set per edit.
+        StringInterner? interner = null
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
@@ -241,7 +257,8 @@ public static class SolutionAnalyzer
             documents: documents,
             solutionFullPath: solutionFullPath,
             rules: rules,
-            cancellationToken: cancellationToken
+            cancellationToken: cancellationToken,
+            interner: interner ?? StringInterner.CreateDefault()
         );
 
         // Seed an (empty) builder for every input document's path, then fill from the per-source
@@ -332,7 +349,8 @@ public static class SolutionAnalyzer
         IReadOnlyCollection<DocumentId> documents,
         string solutionFullPath,
         RuleSet rules,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        StringInterner? interner
     )
     {
         var sources = new List<SourceModel>();
@@ -436,7 +454,7 @@ public static class SolutionAnalyzer
         // downstream may retain a SemanticModel or red root).
         var orderedSources = sources.OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
         var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
-        var extractionResults = ExtractProject(orderedSources, rules, diMethodNames, parallelism: null);
+        var extractionResults = ExtractProject(orderedSources, rules, diMethodNames, parallelism: null, interner);
         return (sourceFiles, orderedSources, extractionResults, health.Build());
     }
 
@@ -454,14 +472,16 @@ public static class SolutionAnalyzer
         IReadOnlyList<SourceModel> models,
         RuleSet rules,
         IReadOnlySet<string> diMethodNames,
-        int? parallelism
+        int? parallelism,
+        StringInterner? interner
     )
     {
         // PER PROJECT, not per run: the cache keys are strong ISymbol references, and a source symbol
         // reaches its owning CSharpCompilation — so a run-global instance pins every compilation in the
         // solution for the whole run. Every memo is a pure function of its key, so a per-project instance
-        // emits byte-identical strings; it becomes unreachable when this returns.
-        var symbolCache = new SymbolStringCache();
+        // emits byte-identical strings; it becomes unreachable when this returns. Run-wide string sharing
+        // is the interner's job (string-keyed — pins nothing), which the cache routes its values through.
+        var symbolCache = new SymbolStringCache(interner);
         var results = new SourceExtractionResult[models.Count];
         Parallel.For(
             fromInclusive: 0,

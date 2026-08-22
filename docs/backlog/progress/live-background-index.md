@@ -1177,3 +1177,78 @@ exit 2
 refusal). `--once` never publishes an endpoint, so it never clashes. The probe is repeated just before binding,
 which narrows the two-hosts-booting-simultaneously race from the width of a cold boot to the width of one probe —
 it cannot close it, and the loser declines to serve rather than binding alongside.
+
+## MEASUREMENT LESSON 5 (2026-08-22) — interleaving does not protect you from YOUR OWN load
+
+The string-interning A/B was run properly: one binary with a `RIG_NO_INTERN=1` kill switch (so no build drift),
+a discarded warmup, then arms interleaved base/interned/base/interned. Then I read the results and concluded the
+interner cost **+9% to +32% of boot time with suspicious variance**, and hypothesised
+`ConcurrentDictionary.GetOrAdd` contention across parallel extraction as the mechanism.
+
+Both the number and the mechanism were wrong, and the cause was me. While those arms ran I was, on the same box:
+
+- running two full-table `SELECT DISTINCT` scans over 2.4M `reference_facts` rows for a Phase-1 estimate,
+- running `dotnet build`,
+- running the full 1060-test suite.
+
+Interned boot times in order: 190.8s (warmup, cold dtb cache), 123.9, 151.4, **117.0**. The first three overlapped
+that work; `interned-3` at 117.0s is the first interned arm measured on a quiet machine. Comparing it against the
+LOADED base arms (114.0/114.6s) gave "+2.4s (+2%)" — which was the same error inverted, a quiet arm against
+contaminated controls. The adjacent quiet PAIR (base-3 109.9s vs interned-3 117.0s) is the honest number:
+**+7.1s (+6.5%)**, not +20% and not +2%.
+
+**Interleaving cancels DRIFT — a trend that moves monotonically through the run. It does not cancel load applied
+ACROSS the arms.** Alternating A/B/A/B while a heavy job runs over the middle of the sequence contaminates both
+arms unequally and leaves the design looking sound. The fix is not more interleaving; it is not doing anything
+else on the box, and treating a between-arm variance that exceeds the within-arm variance as a signal to
+re-measure rather than a signal to explain.
+
+Note the failure shape, because it is the recurring one in this program: an instrument artefact was handed a
+plausible mechanism (lock contention on a hot dictionary — entirely believable, and the sort of thing that IS
+true elsewhere) and the story made the bad number feel explained. Four of the five lessons in this document have
+that shape. The tell here was available and ignored: base variance was 0.6s while interned variance was 27s, and
+nothing about interning should make a run's cost less predictable by 45x.
+
+## STRING INTERNING — measured 2026-08-22 (verdict pending the paired quiet-machine arm)
+
+| | base (RIG_NO_INTERN=1) | interned | delta |
+|---|---|---|---|
+| managed live set | 4.25, 4.25, 4.25 GB | 3.64, 3.64, 3.63 GB | **-0.62 GB (-14.6%)** |
+| working set | 8.36, 8.68, 8.25 GB | 7.61, 7.72, 7.51 GB | **-0.74 GB (-9.0%)** |
+| cold boot, LOADED machine (discard) | 114.0, 114.6s | 123.9, 151.4s | contaminated - see lesson 5 |
+| cold boot, adjacent QUIET pair | 109.9s | 117.0s | **+7.1s (+6.5%)** |
+| distinct strings retained | - | 1,671,075 | the interner table is host-lifetime by design |
+
+Facts identical in every arm (445,235 sym / 2,437,358 ref).
+
+**Working set MOVED, which no previous change in this program managed.** Releasing the `SemanticModel`s cut the
+live set by 1.26 GB and left working set flat, because ServerGC/DATAS does not return segments. Interning cuts
+what is ALLOCATED rather than what is retained-then-freed, so the OS-level footprint follows. That distinction is
+the useful generalisation: against a working-set problem, not allocating beats freeing.
+
+### Why the store-based estimate overshot by 5x
+
+A total-vs-distinct string-bytes analysis over the store's fact tables predicted **3.27 GB**. Realised: 0.61 GB.
+**The store's column inventory is not the in-memory object graph:**
+
+- `RunId` — 195 MB of the estimate — is added at WRITE time and does not exist in the in-memory facts at all.
+- `RefKind` (8 distinct) and `EnclosingLoopKind` (5 distinct) are string LITERALS, which the CLR interns
+  automatically; ~77 MB of the estimate was already realised before this change.
+- `FilePath` (11,620 distinct, a 211x repetition ratio, 607 MB of the estimate) arrives as the shared
+  `SyntaxTree.FilePath` instance, so most of its duplication is a storage artefact, not a heap one.
+
+Same defect family as the ratio whose halves came from different populations: **an estimate is only as good as the
+population it is taken over**, and a fact store is a different population from a live heap.
+
+### Still open
+
+The many-edits growth curve. A host-lifetime interner's real job is that a re-extracted generation's strings ALIAS
+the base generation's rather than duplicating them — a brake on GROWTH, which is what actually threatens a long
+session (10.8 GB at boot becoming ~19 GB after edit+reconcile). One edit cannot see it: both arms move +0.06-0.07 GB.
+A 10-edit series on both arms would quantify it. This no longer decides whether to keep interning — +6.5% on a
+once-per-session cold boot, against -14.6% of a continuously-paid live set, already justifies it — only how much
+MORE it is worth over a session.
+
+**VERDICT: keep.** Memory is paid for the life of the process; boot is paid once. The memory numbers are identical
+to two decimals across three arms each, which is the strongest signal in this measurement; the boot delta needed
+three attempts to measure honestly and is the weaker one.
