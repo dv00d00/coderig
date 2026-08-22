@@ -1,9 +1,10 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–5C completed locally 2026-08-22: deterministic scale/trial baselines,
+**Status:** PROGRESS — Slices 0–6A completed locally 2026-08-22: deterministic scale/trial baselines,
 emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
 watcher batches, the v7 surface-fact substrate, per-origin lazy surface refinement, and independent cascade
-verification with coarse fallback. Next: the delta-aware graph view and demand-driven refinement.
+verification with coarse fallback, plus an emitter-aware immutable graph-fact substrate. Next: consume the
+keyed graph view in traversal, then add demand-driven refinement.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -60,8 +61,20 @@ verification with coarse fallback. Next: the delta-aware graph view and demand-d
   process, and discloses the active coarse fallback on every status/query line. Disabled projects still refresh
   generator/meta inputs before every forced coarse reconcile. Three deterministic match, real-reference
   mismatch/fallback, and cancelled/stale-publication tests bring exact discovery to **1,098 tests**.
-- **Next:** Slice 6, partition base/overlay adjacency behind a delta-aware `GraphView` so localized traversal
-  avoids whole-snapshot graph materialization while preserving forward/reverse and one-hop dispatch parity.
+- **Slice 6A:** a Roslyn/storage-free `IIndexedFactSnapshotView` capability exposes `IFactGraphView` over
+  emitter-aware immutable raw-fact indices without burdening cold `AnalysisResult` values. It keys
+  references in both directions, methods by stable id/containing type plus indexed method-node keys, type
+  relations in both directions, and mined dispatch in both directions. `ResidentIndex` constructs the cold
+  base layer once using compact ordered fact arrays whose rows retain emitter ownership; each generation
+  shares it and publishes only
+  a persistent nested overlay root updated for the
+  replaced emitter paths (including empty and generated-retirement tombstones). Immutable diagnostics prove
+  keyed lookup locality, one-emitter update scope, and structural sharing without mutable snapshot counters.
+  Raw multiplicity remains intact while raw row order is explicitly non-semantic; Slice 6B must project
+  duplicate method facts deterministically before consuming the view. Four tests bring exact discovery to
+  **1,103 tests**. No semantic projection or query-locality claim is made in this substrate.
+- **Next:** Slice 6B, consume `IFactGraphView` from traversal with forward/reverse and one-hop dispatch parity;
+  then add demand-driven exact refinement.
 
 ## Why — the workflow that makes this the target
 

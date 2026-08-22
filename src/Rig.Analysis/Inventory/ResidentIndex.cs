@@ -37,6 +37,7 @@ internal sealed class ResidentIndex : IDisposable
     private readonly ResidentSurfaceRefresher _refreshSurface;
     private readonly bool _verifyCascadeGate;
     private readonly ImmutableDictionary<string, ImmutableArray<DocumentId>> _documentsByPath;
+    private readonly SegmentedFactGraphBase _graphBase;
 
     // Host-lifetime string interner shared by every re-extraction: a re-extracted generation's retained
     // strings alias the previous generation's instead of duplicating the whole string set per edit (the
@@ -71,6 +72,7 @@ internal sealed class ResidentIndex : IDisposable
         _extractFiles = extractFiles ?? SolutionAnalyzer.ExtractFromDocumentsByFileAsync;
         _refreshSurface = refreshSurface ?? SolutionAnalyzer.RefreshProjectSurfaceAsync;
         _verifyCascadeGate = verifyCascadeGate;
+        _graphBase = SegmentedFactGraphBase.Build(_baseResult);
         var documentsByPath = ImmutableDictionary.CreateBuilder<string, ImmutableArray<DocumentId>>(StringComparer.OrdinalIgnoreCase);
         foreach (var document in workspace.CurrentSolution.Projects.SelectMany(project => project.Documents))
         {
@@ -91,7 +93,9 @@ internal sealed class ResidentIndex : IDisposable
             ImmutableDictionary.Create<string, FileFacts>(StringComparer.OrdinalIgnoreCase),
             DirtySet.Empty,
             SnapshotDelta.Empty,
-            ProjectSurfaceCatalog.Seed(workspace.CurrentSolution, baseResult.ProjectSurfaces)
+            ProjectSurfaceCatalog.Seed(workspace.CurrentSolution, baseResult.ProjectSurfaces),
+            _graphBase,
+            SegmentedFactGraphOverlay.Empty
         );
     }
 
@@ -191,6 +195,7 @@ internal sealed class ResidentIndex : IDisposable
         }
         var slices = await ExtractAsync(solution, eager, cancellationToken);
         var overlay = basis.Overlay.SetItems(slices);
+        var graphOverlay = basis.GraphOverlay.Replace(slices);
 
         // The cascade the eager arm did NOT cover is owed; the eagerly covered documents are current
         // against the newest snapshot, so they also settle any PREVIOUS batch's cascade debt.
@@ -243,7 +248,9 @@ internal sealed class ResidentIndex : IDisposable
                 ImmutableHashSet<string>.Empty,
                 surfaceStates.ToImmutable()
             ),
-            surfaces
+            surfaces,
+            _graphBase,
+            graphOverlay
         );
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -278,6 +285,7 @@ internal sealed class ResidentIndex : IDisposable
 
         var catalog = basis.Surfaces;
         var overlay = basis.Overlay;
+        var graphOverlay = basis.GraphOverlay;
         var states = basis.Delta.SurfaceStates.ToBuilder();
         var debt = basis.Dirty.PendingByOrigin.ToBuilder();
         var wouldBeBodyOnly = new List<ProjectId>();
@@ -300,9 +308,13 @@ internal sealed class ResidentIndex : IDisposable
                     if (!generated.ContainsKey(retiredPath))
                     {
                         overlay = overlay.SetItem(retiredPath, EmptyFileFacts());
+                        graphOverlay = graphOverlay.Replace(
+                            new Dictionary<string, FileFacts>(StringComparer.OrdinalIgnoreCase) { [retiredPath] = EmptyFileFacts() }
+                        );
                     }
                 }
                 overlay = overlay.SetItems(generated);
+                graphOverlay = graphOverlay.Replace(generated);
             }
             catalog = refreshedCatalog;
             states[projectId] = state;
@@ -376,6 +388,7 @@ internal sealed class ResidentIndex : IDisposable
                 // path slices is safe; ownership remains per-origin, so unrelated Unknown/Changed debt
                 // is retained even when it overlaps a freshly paid path.
                 overlay = overlay.SetItems(verifierSlices);
+                graphOverlay = graphOverlay.Replace(verifierSlices);
                 catalog = catalog
                     .ReplaceEmitters(
                         basis.Solution,
@@ -404,7 +417,9 @@ internal sealed class ResidentIndex : IDisposable
             {
                 SurfaceStates = states.ToImmutable(),
             },
-            catalog
+            catalog,
+            _graphBase,
+            graphOverlay
         );
         cancellationToken.ThrowIfCancellationRequested();
         return ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, candidate, basis), basis);
@@ -438,6 +453,7 @@ internal sealed class ResidentIndex : IDisposable
 
         var pending = payableOrigins.SelectMany(projectId => basis.Dirty.PendingByOrigin[projectId]).ToImmutableHashSet();
         var slices = await ExtractAsync(basis.Solution, pending, cancellationToken);
+        var graphOverlay = basis.GraphOverlay.Replace(slices);
         var surfaces = basis
             .Surfaces.ReplaceEmitters(basis.Solution, slices.Values.SelectMany(s => s.ProjectSurfaces.IsDefault ? [] : s.ProjectSurfaces))
             .MarkReconciled(payableOrigins);
@@ -455,7 +471,9 @@ internal sealed class ResidentIndex : IDisposable
                 ImmutableHashSet<string>.Empty,
                 remainingStates
             ),
-            surfaces
+            surfaces,
+            _graphBase,
+            graphOverlay
         );
 
         cancellationToken.ThrowIfCancellationRequested();

@@ -71,7 +71,7 @@ internal sealed record SnapshotDelta(
 // has no predecessor link: readers pin the exact generation they captured, while generations with no
 // readers become collectible. Live consumers stream this segmented view; the legacy flattened
 // AnalysisResult remains lazy as an explicit compatibility/oracle boundary.
-internal sealed class FactSnapshot : IFactSnapshotView
+internal sealed class FactSnapshot : IIndexedFactSnapshotView
 {
     private readonly Lazy<AnalysisResult> _flattenedFacts;
     private readonly Lazy<CompilationHealth?> _compilationHealth;
@@ -83,7 +83,9 @@ internal sealed class FactSnapshot : IFactSnapshotView
         ImmutableDictionary<string, FileFacts> overlay,
         DirtySet dirty,
         SnapshotDelta delta,
-        ProjectSurfaceCatalog? surfaces = null
+        ProjectSurfaceCatalog? surfaces = null,
+        SegmentedFactGraphBase? graphBase = null,
+        SegmentedFactGraphOverlay? graphOverlay = null
     )
     {
         Revision = revision;
@@ -93,6 +95,9 @@ internal sealed class FactSnapshot : IFactSnapshotView
         Dirty = dirty ?? throw new ArgumentNullException(nameof(dirty));
         Delta = delta ?? throw new ArgumentNullException(nameof(delta));
         Surfaces = surfaces ?? ProjectSurfaceCatalog.Empty;
+        graphBase ??= SegmentedFactGraphBase.Build(BaseFacts);
+        graphOverlay ??= SegmentedFactGraphOverlay.Empty.Replace(Overlay);
+        GraphView = new SegmentedFactGraphView(graphBase, graphOverlay);
         _compilationHealth = new Lazy<CompilationHealth?>(
             () => MergeCompilationHealth(BaseFacts, Overlay),
             LazyThreadSafetyMode.ExecutionAndPublication
@@ -110,6 +115,9 @@ internal sealed class FactSnapshot : IFactSnapshotView
     internal DirtySet Dirty { get; }
     internal SnapshotDelta Delta { get; }
     internal ProjectSurfaceCatalog Surfaces { get; }
+    public IFactGraphView GraphView { get; }
+
+    internal SegmentedFactGraphOverlay GraphOverlay => ((SegmentedFactGraphView)GraphView).Overlay;
 
     public string SolutionPath => BaseFacts.SolutionPath;
 
