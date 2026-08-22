@@ -23,14 +23,17 @@ namespace Rig.Domain.Functions;
 // The precedent is FactInvocationProjection / DeliverySiteProjection: the pure projection core in the domain,
 // the row SUPPLY left to each caller (EF projection / raw-ADO reader / in-memory AnalysisResult) — see
 // SymbolFactRows for the store-side halves. Each mapping reads only the fields listed with it, so a loader
-// that supplies placeholders for the rest of the (14-field) SymbolFact is still correct; that is what keeps
+// that supplies placeholders for the rest of the SymbolFact is still correct; that is what keeps
 // the whole-store scans as narrow as they were before this was single-sourced.
 //
-// The dedups are deliberately NOT here: they differ per caller (by SymbolId for MethodRef/TypeSymbol/
-// MethodMeta, by (FilePath, Line) for MethodSymbol) and are the caller's business. Kept honest by
-// LiveFactSourceParityTests, FactGraphProjectionParityTests and ReachInputProjectionTests.
+// Most dedups remain the caller's business because their identities differ (by SymbolId for TypeSymbol/
+// MethodMeta, by (FilePath, Line) for MethodSymbol). The demand-shaped graph's canonical MethodRef
+// selection lives here because resident enumeration order is deliberately not semantic. It remains dormant
+// until that view is wired; the existing full/store projections retain their current first-row parity.
 public static class SymbolFactProjections
 {
+    private static readonly IComparer<SymbolFact> CanonicalMethodComparer = new CanonicalMethodFactComparer();
+
     // The symbol_facts column set MethodRef is a function of, in SELECT order. Declaration order is
     // load-bearing (it is the ADO ordinal set on the bounded path) — APPEND new members, never insert or
     // reorder. Member names are simultaneously the SymbolFact property names, the symbol_facts column names,
@@ -59,6 +62,30 @@ public static class SymbolFactProjections
             FilePath: s.FilePath,
             Line: s.Line
         );
+
+    // Selects one deterministic declaration row per method id, then returns those rows in the same
+    // deterministic order. Duplicate symbol facts can legitimately come from several emitters; neither
+    // extraction arrival order nor live overlay replacement chronology is a semantic tie-break.
+    public static IReadOnlyList<SymbolFact> SelectCanonicalMethodFacts(IEnumerable<SymbolFact> symbols)
+    {
+        ArgumentNullException.ThrowIfNull(symbols);
+
+        var selected = new Dictionary<string, SymbolFact>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != SymbolKinds.Method)
+            {
+                continue;
+            }
+
+            if (!selected.TryGetValue(symbol.SymbolId, out var current) || CanonicalMethodComparer.Compare(symbol, current) < 0)
+            {
+                selected[symbol.SymbolId] = symbol;
+            }
+        }
+
+        return selected.Values.Order(CanonicalMethodComparer).ToArray();
+    }
 
     // symbol_facts (Kind="method") -> the entry-point deriver's method record. Same source as ToMethodRef
     // plus Signature (parameter-type matching); distinct record because the two derivations need different
@@ -118,5 +145,98 @@ public static class SymbolFactProjections
             || p.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase)
             || p.EndsWith(".designer.cs", StringComparison.OrdinalIgnoreCase)
             || p.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class CanonicalMethodFactComparer : IComparer<SymbolFact>
+    {
+        public int Compare(SymbolFact? x, SymbolFact? y)
+        {
+            if (ReferenceEquals(x, y))
+            {
+                return 0;
+            }
+            if (x is null)
+            {
+                return -1;
+            }
+            if (y is null)
+            {
+                return 1;
+            }
+
+            var comparison = StringComparer.Ordinal.Compare(x.FilePath, y.FilePath);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = x.Line.CompareTo(y.Line);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = x.EndLine.CompareTo(y.EndLine);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.DefiningAssembly, y.DefiningAssembly);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.ContainingSymbolId, y.ContainingSymbolId);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.Name, y.Name);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.Signature, y.Signature);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = StringComparer.Ordinal.Compare(x.SymbolId, y.SymbolId);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.Kind, y.Kind);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.Namespace, y.Namespace);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.Modifiers, y.Modifiers);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.TypeKind, y.TypeKind);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = x.IsOverride.CompareTo(y.IsOverride);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.BodyHash, y.BodyHash);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = StringComparer.Ordinal.Compare(x.SurfaceHash, y.SurfaceHash);
+            return comparison != 0 ? comparison : x.IsIterator.CompareTo(y.IsIterator);
+        }
     }
 }

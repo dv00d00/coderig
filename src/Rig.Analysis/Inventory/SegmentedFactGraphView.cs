@@ -29,9 +29,9 @@ internal sealed class SegmentedFactGraphBase
             collectEmitters: true
         );
         ReferencesByTarget = BaseEmitterKeyIndex<ReferenceFact>.Build(facts.References ?? [], r => r.TargetSymbolId, r => r.FilePath);
-        var methods = (facts.Symbols ?? []).Where(s => s.Kind == SymbolKinds.Method).ToArray();
-        MethodsById = BaseEmitterKeyIndex<SymbolFact>.Build(methods, s => s.SymbolId, s => s.FilePath, collectEmitters: true);
-        MethodsByContaining = BaseEmitterKeyIndex<SymbolFact>.Build(methods, s => s.ContainingSymbolId, s => s.FilePath);
+        var symbols = (facts.Symbols ?? []).ToArray();
+        SymbolsById = BaseEmitterKeyIndex<SymbolFact>.Build(symbols, s => s.SymbolId, s => s.FilePath, collectEmitters: true);
+        SymbolsByContaining = BaseEmitterKeyIndex<SymbolFact>.Build(symbols, s => s.ContainingSymbolId, s => s.FilePath);
         TypeRelationsByType = BaseEmitterKeyIndex<TypeRelationFact>.Build(
             facts.TypeRelations ?? [],
             r => r.TypeSymbolId,
@@ -52,14 +52,14 @@ internal sealed class SegmentedFactGraphBase
         DispatchByTarget = BaseEmitterKeyIndex<DispatchFact>.Build(facts.DispatchFacts ?? [], d => d.TargetMember, d => d.FilePath);
 
         var emitters = ReferencesByEnclosing
-            .Emitters.Concat(MethodsById.Emitters)
+            .Emitters.Concat(SymbolsById.Emitters)
             .Concat(TypeRelationsByType.Emitters)
             .Concat(DispatchBySource.Emitters)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         Diagnostics = new GraphPartitionBuildDiagnostics(
             ConstructionCount: 1,
             EmitterCount: emitters.Count,
-            RowCount: methods.Length
+            RowCount: symbols.Length
                 + (facts.References?.Count ?? 0)
                 + (facts.TypeRelations?.Count ?? 0)
                 + (facts.DispatchFacts?.Count ?? 0)
@@ -68,8 +68,8 @@ internal sealed class SegmentedFactGraphBase
 
     internal BaseEmitterKeyIndex<ReferenceFact> ReferencesByEnclosing { get; }
     internal BaseEmitterKeyIndex<ReferenceFact> ReferencesByTarget { get; }
-    internal BaseEmitterKeyIndex<SymbolFact> MethodsById { get; }
-    internal BaseEmitterKeyIndex<SymbolFact> MethodsByContaining { get; }
+    internal BaseEmitterKeyIndex<SymbolFact> SymbolsById { get; }
+    internal BaseEmitterKeyIndex<SymbolFact> SymbolsByContaining { get; }
     internal BaseEmitterKeyIndex<TypeRelationFact> TypeRelationsByType { get; }
     internal BaseEmitterKeyIndex<TypeRelationFact> TypeRelationsByRelated { get; }
     internal BaseEmitterKeyIndex<DispatchFact> DispatchBySource { get; }
@@ -87,8 +87,8 @@ internal sealed class SegmentedFactGraphOverlay
         ImmutableHashSet<string> replacedEmitters,
         OverlayEmitterKeyIndex<ReferenceFact> referencesByEnclosing,
         OverlayEmitterKeyIndex<ReferenceFact> referencesByTarget,
-        OverlayEmitterKeyIndex<SymbolFact> methodsById,
-        OverlayEmitterKeyIndex<SymbolFact> methodsByContaining,
+        OverlayEmitterKeyIndex<SymbolFact> symbolsById,
+        OverlayEmitterKeyIndex<SymbolFact> symbolsByContaining,
         OverlayEmitterKeyIndex<TypeRelationFact> typeRelationsByType,
         OverlayEmitterKeyIndex<TypeRelationFact> typeRelationsByRelated,
         OverlayEmitterKeyIndex<DispatchFact> dispatchBySource,
@@ -99,8 +99,8 @@ internal sealed class SegmentedFactGraphOverlay
         ReplacedEmitters = replacedEmitters;
         ReferencesByEnclosing = referencesByEnclosing;
         ReferencesByTarget = referencesByTarget;
-        MethodsById = methodsById;
-        MethodsByContaining = methodsByContaining;
+        SymbolsById = symbolsById;
+        SymbolsByContaining = symbolsByContaining;
         TypeRelationsByType = typeRelationsByType;
         TypeRelationsByRelated = typeRelationsByRelated;
         DispatchBySource = dispatchBySource;
@@ -125,8 +125,8 @@ internal sealed class SegmentedFactGraphOverlay
     internal ImmutableHashSet<string> ReplacedEmitters { get; }
     internal OverlayEmitterKeyIndex<ReferenceFact> ReferencesByEnclosing { get; }
     internal OverlayEmitterKeyIndex<ReferenceFact> ReferencesByTarget { get; }
-    internal OverlayEmitterKeyIndex<SymbolFact> MethodsById { get; }
-    internal OverlayEmitterKeyIndex<SymbolFact> MethodsByContaining { get; }
+    internal OverlayEmitterKeyIndex<SymbolFact> SymbolsById { get; }
+    internal OverlayEmitterKeyIndex<SymbolFact> SymbolsByContaining { get; }
     internal OverlayEmitterKeyIndex<TypeRelationFact> TypeRelationsByType { get; }
     internal OverlayEmitterKeyIndex<TypeRelationFact> TypeRelationsByRelated { get; }
     internal OverlayEmitterKeyIndex<DispatchFact> DispatchBySource { get; }
@@ -138,8 +138,8 @@ internal sealed class SegmentedFactGraphOverlay
         var replaced = ReplacedEmitters;
         var referencesByEnclosing = ReferencesByEnclosing;
         var referencesByTarget = ReferencesByTarget;
-        var methodsById = MethodsById;
-        var methodsByContaining = MethodsByContaining;
+        var symbolsById = SymbolsById;
+        var symbolsByContaining = SymbolsByContaining;
         var typeRelationsByType = TypeRelationsByType;
         var typeRelationsByRelated = TypeRelationsByRelated;
         var dispatchBySource = DispatchBySource;
@@ -152,30 +152,29 @@ internal sealed class SegmentedFactGraphOverlay
             replaced = replaced.Add(emitter);
             priorShardsRemoved += referencesByEnclosing.OwnedShardCount(emitter);
             priorShardsRemoved += referencesByTarget.OwnedShardCount(emitter);
-            priorShardsRemoved += methodsById.OwnedShardCount(emitter);
-            priorShardsRemoved += methodsByContaining.OwnedShardCount(emitter);
+            priorShardsRemoved += symbolsById.OwnedShardCount(emitter);
+            priorShardsRemoved += symbolsByContaining.OwnedShardCount(emitter);
             priorShardsRemoved += typeRelationsByType.OwnedShardCount(emitter);
             priorShardsRemoved += typeRelationsByRelated.OwnedShardCount(emitter);
             priorShardsRemoved += dispatchBySource.OwnedShardCount(emitter);
             priorShardsRemoved += dispatchByTarget.OwnedShardCount(emitter);
             referencesByEnclosing = referencesByEnclosing.ReplaceEmitter(emitter, slice.References, r => r.EnclosingSymbolId);
             referencesByTarget = referencesByTarget.ReplaceEmitter(emitter, slice.References, r => r.TargetSymbolId);
-            var methods = slice.Symbols.Where(s => s.Kind == SymbolKinds.Method).ToArray();
-            methodsById = methodsById.ReplaceEmitter(emitter, methods, s => s.SymbolId);
-            methodsByContaining = methodsByContaining.ReplaceEmitter(emitter, methods, s => s.ContainingSymbolId);
+            symbolsById = symbolsById.ReplaceEmitter(emitter, slice.Symbols, s => s.SymbolId);
+            symbolsByContaining = symbolsByContaining.ReplaceEmitter(emitter, slice.Symbols, s => s.ContainingSymbolId);
             typeRelationsByType = typeRelationsByType.ReplaceEmitter(emitter, slice.TypeRelations, r => r.TypeSymbolId);
             typeRelationsByRelated = typeRelationsByRelated.ReplaceEmitter(emitter, slice.TypeRelations, r => r.RelatedSymbolId);
             dispatchBySource = dispatchBySource.ReplaceEmitter(emitter, slice.Dispatch, d => d.SourceMember);
             dispatchByTarget = dispatchByTarget.ReplaceEmitter(emitter, slice.Dispatch, d => d.TargetMember);
-            rowCount += methods.Length + slice.References.Length + slice.TypeRelations.Length + slice.Dispatch.Length;
+            rowCount += slice.Symbols.Length + slice.References.Length + slice.TypeRelations.Length + slice.Dispatch.Length;
         }
 
         return new SegmentedFactGraphOverlay(
             replaced,
             referencesByEnclosing,
             referencesByTarget,
-            methodsById,
-            methodsByContaining,
+            symbolsById,
+            symbolsByContaining,
             typeRelationsByType,
             typeRelationsByRelated,
             dispatchBySource,
@@ -191,12 +190,17 @@ internal sealed class SegmentedFactGraphView(SegmentedFactGraphBase baseLayer, S
 
     public IReadOnlyList<ReferenceFact> ReferencesTo(string targetSymbolId) => LookupReferencesTo(targetSymbolId).Rows;
 
+    public IReadOnlyList<SymbolFact> SymbolsById(string symbolId) => Lookup(baseLayer.SymbolsById, overlay.SymbolsById, symbolId).Rows;
+
+    public IReadOnlyList<SymbolFact> SymbolsByContainingSymbol(string containingSymbolId) =>
+        Lookup(baseLayer.SymbolsByContaining, overlay.SymbolsByContaining, containingSymbolId).Rows;
+
     public IReadOnlyCollection<string> MethodSymbolIds => LookupMethodSymbolIds().Rows;
 
-    public IReadOnlyList<SymbolFact> MethodsById(string symbolId) => Lookup(baseLayer.MethodsById, overlay.MethodsById, symbolId).Rows;
+    public IReadOnlyList<SymbolFact> MethodsById(string symbolId) => SymbolsById(symbolId).Where(IsMethod).ToImmutableArray();
 
     public IReadOnlyList<SymbolFact> MethodsByContainingSymbol(string containingSymbolId) =>
-        Lookup(baseLayer.MethodsByContaining, overlay.MethodsByContaining, containingSymbolId).Rows;
+        SymbolsByContainingSymbol(containingSymbolId).Where(IsMethod).ToImmutableArray();
 
     public IReadOnlyList<TypeRelationFact> TypeRelationsFrom(string typeSymbolId) =>
         Lookup(baseLayer.TypeRelationsByType, overlay.TypeRelationsByType, typeSymbolId).Rows;
@@ -227,10 +231,10 @@ internal sealed class SegmentedFactGraphView(SegmentedFactGraphBase baseLayer, S
         var keyPartitionsExamined = 0;
         var emitterShardsExamined = 0;
         var rowsExamined = 0;
-        foreach (var key in baseLayer.MethodsById.Keys)
+        foreach (var key in baseLayer.SymbolsById.Keys)
         {
             keysExamined++;
-            var probe = baseLayer.MethodsById.ProbeActiveRows(key, overlay.ReplacedEmitters);
+            var probe = baseLayer.SymbolsById.ProbeActiveRows(key, overlay.ReplacedEmitters, IsMethod);
             keyPartitionsExamined++;
             emitterShardsExamined += probe.EmitterShardsExamined;
             rowsExamined += probe.RowsExamined;
@@ -239,10 +243,14 @@ internal sealed class SegmentedFactGraphView(SegmentedFactGraphBase baseLayer, S
                 rows.Add(key);
             }
         }
-        foreach (var key in overlay.MethodsById.Keys)
+        foreach (var key in overlay.SymbolsById.Keys)
         {
             keysExamined++;
-            if (overlay.MethodsById.HasRows(key) && seen.Add(key))
+            var probe = overlay.SymbolsById.ProbeRows(key, IsMethod);
+            keyPartitionsExamined++;
+            emitterShardsExamined += probe.EmitterShardsExamined;
+            rowsExamined += probe.RowsExamined;
+            if (probe.HasActiveRows && seen.Add(key))
             {
                 rows.Add(key);
             }
@@ -255,6 +263,8 @@ internal sealed class SegmentedFactGraphView(SegmentedFactGraphBase baseLayer, S
     }
 
     internal object? ReferenceForwardPartitionIdentity(string key) => overlay.ReferencesByEnclosing.PartitionIdentity(key);
+
+    private static bool IsMethod(SymbolFact symbol) => symbol.Kind == SymbolKinds.Method;
 
     private GraphLookupResult<T> Lookup<T>(BaseEmitterKeyIndex<T> baseIndex, OverlayEmitterKeyIndex<T> overlayIndex, string key)
     {
@@ -351,7 +361,7 @@ internal sealed class BaseEmitterKeyIndex<T>
         return new GraphLookupResult<T>(rows.ToImmutable(), new GraphLookupDiagnostics(1, examinedEmitters.Count, partition.Length));
     }
 
-    internal ActiveRowProbe ProbeActiveRows(string key, ImmutableHashSet<string> replacedEmitters)
+    internal ActiveRowProbe ProbeActiveRows(string key, ImmutableHashSet<string> replacedEmitters, Func<T, bool> predicate)
     {
         if (!_byKey.TryGetValue(key, out var partition))
         {
@@ -365,7 +375,7 @@ internal sealed class BaseEmitterKeyIndex<T>
             rowsExamined++;
             var emitter = _emitterSelector(row);
             examinedEmitters.Add(emitter);
-            if (!replacedEmitters.Contains(emitter))
+            if (!replacedEmitters.Contains(emitter) && predicate(row))
             {
                 return new ActiveRowProbe(true, examinedEmitters.Count, rowsExamined);
             }
@@ -443,7 +453,8 @@ internal sealed class OverlayEmitterKeyIndex<T>
         return partition.Lookup(replacedEmitters);
     }
 
-    internal bool HasRows(string key) => _byKey.TryGetValue(key, out var partition) && !partition.IsEmpty;
+    internal ActiveRowProbe ProbeRows(string key, Func<T, bool> predicate) =>
+        _byKey.TryGetValue(key, out var partition) ? partition.Probe(predicate) : default;
 
     internal bool HasActiveRows(string key, ImmutableHashSet<string> replacedEmitters) =>
         _byKey.TryGetValue(key, out var partition) && partition.HasActiveRows(replacedEmitters);
@@ -491,6 +502,25 @@ internal sealed class KeyPartition<T>
         _rowsByEmitter.Any(p => !replacedEmitters.Contains(p.Key) && !p.Value.IsEmpty);
 
     internal int OwnedShardCount(string emitter) => _rowsByEmitter.ContainsKey(emitter) ? 1 : 0;
+
+    internal ActiveRowProbe Probe(Func<T, bool> predicate)
+    {
+        var shardsExamined = 0;
+        var rowsExamined = 0;
+        foreach (var (_, rows) in _rowsByEmitter.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            shardsExamined++;
+            foreach (var row in rows)
+            {
+                rowsExamined++;
+                if (predicate(row))
+                {
+                    return new ActiveRowProbe(true, shardsExamined, rowsExamined);
+                }
+            }
+        }
+        return new ActiveRowProbe(false, shardsExamined, rowsExamined);
+    }
 
     internal GraphLookupResult<T> Lookup(ImmutableHashSet<string>? replacedEmitters)
     {

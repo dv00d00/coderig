@@ -27,6 +27,7 @@ namespace Rig.Tests.Analysis;
 // Harness note (spec §5.0(1)): every broken fixture is written by the TEST into the TEMP copy.
 // DeepChainPlayground copies playgrounds/DeepChain to a temp dir and restores it there; a non-compiling
 // file must never be checked in, because the playground fixtures are shared per session.
+[NotInParallel]
 public sealed class FailedCompilationDisclosureTests
 {
     // A body-local reference to an undefined name: CS0103, located in Db.cs itself, with the PUBLIC
@@ -183,7 +184,9 @@ public sealed class FailedCompilationDisclosureTests
 
         segments.ShouldContain("1 project(s) produced NO facts");
         segments.ShouldNotContain("all projects reconciled");
-        note.ShouldContain(line => line.Contains("1 project(s) produced NO facts at all (Contracts: no_compilation)", StringComparison.Ordinal));
+        note.ShouldContain(line =>
+            line.Contains("1 project(s) produced NO facts at all (Contracts: no_compilation)", StringComparison.Ordinal)
+        );
         note.ShouldContain(line =>
             line.Contains("\"no callers\" / \"unreachable\" is NOT evidence for those symbols", StringComparison.Ordinal)
         );

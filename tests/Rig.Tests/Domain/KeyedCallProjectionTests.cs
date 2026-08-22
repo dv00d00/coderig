@@ -122,6 +122,10 @@ public sealed class KeyedCallProjectionTests
 
         public IReadOnlyList<ReferenceFact> ReferencesTo(string targetSymbolId) => throw Unexpected();
 
+        public IReadOnlyList<SymbolFact> SymbolsById(string symbolId) => throw Unexpected();
+
+        public IReadOnlyList<SymbolFact> SymbolsByContainingSymbol(string containingSymbolId) => throw Unexpected();
+
         public IReadOnlyCollection<string> MethodSymbolIds => throw Unexpected();
 
         public IReadOnlyList<SymbolFact> MethodsById(string symbolId) => throw Unexpected();

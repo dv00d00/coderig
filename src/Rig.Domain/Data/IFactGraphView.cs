@@ -15,6 +15,10 @@ public interface IFactGraphView
     IReadOnlyList<ReferenceFact> ReferencesFrom(string enclosingSymbolId);
     IReadOnlyList<ReferenceFact> ReferencesTo(string targetSymbolId);
 
+    // Raw symbol-fact catalogs preserve every emitted row and cover every symbol kind.
+    IReadOnlyList<SymbolFact> SymbolsById(string symbolId);
+    IReadOnlyList<SymbolFact> SymbolsByContainingSymbol(string containingSymbolId);
+
     IReadOnlyCollection<string> MethodSymbolIds { get; }
     IReadOnlyList<SymbolFact> MethodsById(string symbolId);
 

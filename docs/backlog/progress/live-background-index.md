@@ -1,10 +1,11 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–6A completed locally 2026-08-22: deterministic scale/trial baselines,
+**Status:** PROGRESS — Slices 0–6A and the first 6B substrate gates completed locally 2026-08-22: deterministic scale/trial baselines,
 emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
 watcher batches, the v7 surface-fact substrate, per-origin lazy surface refinement, and independent cascade
-verification with coarse fallback, plus an emitter-aware immutable graph-fact substrate. Next: consume the
-keyed graph view in traversal, then add demand-driven refinement.
+verification with coarse fallback, plus an emitter-aware immutable graph-fact substrate and canonical keyed
+symbol catalog. Next: build demand-shaped forward adjacency over that view, wire live `path`, then add
+demand-driven refinement.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -76,9 +77,15 @@ keyed graph view in traversal, then add demand-driven refinement.
   tests bring exact discovery to **1,104 tests**. A following caller-local seam now shares the full projection's
   reference filtering, redirects, semantic dedupe, dispatcher handoffs, and delegate-field joins while reading
   only one reference key and the delegate slots that caller invokes. One parity/locality test brings exact
-  discovery to **1,105 tests**. No command-level query-locality claim is made yet.
-- **Next:** Slice 6B, consume `IFactGraphView` from traversal with forward/reverse and one-hop dispatch parity;
-  then add demand-driven exact refinement.
+  discovery to **1,105 tests**. The next 6B1 gate widens the emitter-aware catalog from methods to every
+  `SymbolFact` kind, while retaining method-only node membership, raw duplicate rows, replacement/tombstone
+  semantics, truthful scan diagnostics, and a dormant canonical method selector independent of base/overlay
+  chronology. Seven tests bring exact discovery to **1,112 tests**. Existing full/store projections deliberately
+  retain their first-row behavior until all twins can move together, so no cache/schema bump or output change is
+  claimed. No command-level query-locality claim is made yet.
+- **Next:** Slice 6B2, build demand-shaped forward adjacency over `IFactGraphView`, preserving one-hop dispatch
+  and moving the total generic-expansion budget to the query rather than the global corpus; then wire live
+  `path` with locality counters before demand-driven exact refinement.
 
 ## Why — the workflow that makes this the target
 
