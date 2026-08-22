@@ -227,9 +227,10 @@ public static class SolutionAnalyzer
 
     // BATCHED per-file extraction (live-background-index integration slice): one call covers the whole
     // pending set, and the result comes back PARTITIONED BY FILE PATH — the resident overlay's
-    // replacement grain. The partition is EXACT for every fact kind, including TypeRelation/Dispatch
-    // (which carry no FilePath): facts are grouped from the per-SourceModel extraction results BEFORE
-    // any flattening, so each file's lists are exactly its own emissions — the same property the
+    // replacement grain. The partition is EXACT for every fact kind, including TypeRelation/Dispatch:
+    // facts are grouped from the per-SourceModel extraction results BEFORE any flattening, and those
+    // edge facts carry that same SourceModel FilePath as emitter provenance. Each file's lists are
+    // exactly its own emissions — the same property the
     // one-call-per-path loop bought, without the per-call bill. Batching is what makes ReconcileAsync
     // affordable: the per-call setup the single-file path re-paid per file (the DI method-name set, and
     // ExtractFromSourceSet's XmlDiMiner.Mine over the rules' XML files) is paid at most once per batch

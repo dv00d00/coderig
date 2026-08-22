@@ -116,6 +116,7 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
         {
             entity.ToTable("type_relation_facts");
             entity.HasKey(t => new { t.RunId, t.TypeRelationFactIndex });
+            entity.Property(t => t.FilePath).IsRequired();
             entity.HasIndex(t => t.TypeSymbolId);
             entity.HasIndex(t => t.RelatedSymbolId);
         });
@@ -124,6 +125,7 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
         {
             entity.ToTable("dispatch_facts");
             entity.HasKey(d => new { d.RunId, d.DispatchFactIndex });
+            entity.Property(d => d.FilePath).IsRequired();
             entity.HasIndex(d => d.SourceMember);
         });
 

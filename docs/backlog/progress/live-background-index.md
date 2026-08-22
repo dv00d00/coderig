@@ -1,9 +1,26 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — spike pool dispatched 2026-08-20. The architecture fork is RESOLVED (below); the
-remaining gate is whether rig's own extraction is fact-identical over an incrementally-updated compilation.
+**Status:** PROGRESS — architecture resolved; deterministic scale/trial baselines and emitter provenance
+completed locally 2026-08-22. Next: immutable snapshot generations with private construction and atomic
+publication.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
+
+## Implementation ledger — 2026-08-22
+
+- **Slice 0A:** deterministic `smoke`/`scale`/`stress` corpus generator and edit trace, with reproducible
+  manifest/source hashes and anti-vacuous semantic counts.
+- **Slice 0B:** opt-in legacy JSONL/Markdown trial harness with durable publication/query/reconciliation
+  milestones, semantic-set hashes, engine-only measurement boundaries, and cold/warm reproduction.
+- **Slice 1:** `TypeRelationFact` and `DispatchFact` now carry their exact `SourceModel.FilePath` emitter
+  identity through extraction and SQLite. `ResidentIndex` replaces all rows owned by an overlaid file while
+  retaining duplicate semantic emissions from distinct files; graph projections alone collapse them.
+  Deletion, generated-tree fallback, duplicate-emitter, storage, and cold-oracle regressions cover the seam.
+  `SchemaVersion.Index` is **v6**: every existing `.rig` store must be re-indexed; there is deliberately no
+  in-place migration for disposable derived stores.
+- **Next:** follow the rust-glancer-derived publication pattern without copying its whole-project clone:
+  build a private immutable candidate, validate its source revision at publication, then atomically swap one
+  generation while readers keep their captured predecessor.
 
 ## Why — the workflow that makes this the target
 

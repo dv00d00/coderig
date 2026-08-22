@@ -744,11 +744,11 @@ public sealed class LiveSnapshotScaleTrial
         }
         foreach (var fact in facts.TypeRelations ?? [])
         {
-            yield return "relation|" + JsonSerializer.Serialize(fact);
+            yield return "relation|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) });
         }
         foreach (var fact in facts.DispatchFacts ?? [])
         {
-            yield return "dispatch|" + JsonSerializer.Serialize(fact);
+            yield return "dispatch|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) });
         }
         foreach (var fact in facts.AllocationFacts ?? [])
         {
@@ -791,7 +791,16 @@ public sealed class LiveSnapshotScaleTrial
         }
         foreach (var edge in graph.MinedDispatch ?? [])
         {
-            yield return "dispatch|" + JsonSerializer.Serialize(edge);
+            // Emitter provenance belongs to the fact layer; graph identity remains source/target/kind.
+            yield return "dispatch|"
+                + JsonSerializer.Serialize(
+                    new
+                    {
+                        edge.SourceMember,
+                        edge.TargetMember,
+                        edge.Kind,
+                    }
+                );
         }
     }
 

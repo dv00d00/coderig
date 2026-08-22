@@ -184,8 +184,9 @@ public sealed class IncrementalExtractionSpikeTests
         return lines;
     }
 
-    // Files whose canonical fact set differs between two runs (path-carrying fact kinds only —
-    // type-relation and dispatch facts carry no FilePath, so they are compared globally above).
+    // Files whose canonical fact set differs between two runs. This older spike deliberately keeps
+    // relation/dispatch identity semantic and compares those globally above; emitter-path fidelity has
+    // its own focused extraction/storage and resident-replacement gates.
     private static string[] ChangedFiles(IReadOnlySet<string> before, IReadOnlySet<string> after)
     {
         static Dictionary<string, HashSet<string>> ByFile(IEnumerable<string> lines)
@@ -195,7 +196,7 @@ public sealed class IncrementalExtractionSpikeTests
             {
                 if (line.StartsWith("rel", StringComparison.Ordinal) || line.StartsWith("disp", StringComparison.Ordinal))
                 {
-                    continue; // no FilePath on these fact kinds
+                    continue; // semantic edge rows are intentionally handled only by the global comparison
                 }
 
                 var segments = line.Split('|').Select(s => s.Trim()).ToArray();

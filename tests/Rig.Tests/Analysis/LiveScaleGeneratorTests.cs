@@ -429,8 +429,16 @@ public sealed class LiveScaleGeneratorTests
                 "reference|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })
             )
         );
-        rows.AddRange((facts.TypeRelations ?? []).Select(fact => "relation|" + JsonSerializer.Serialize(fact)));
-        rows.AddRange((facts.DispatchFacts ?? []).Select(fact => "dispatch|" + JsonSerializer.Serialize(fact)));
+        rows.AddRange(
+            (facts.TypeRelations ?? []).Select(fact =>
+                "relation|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })
+            )
+        );
+        rows.AddRange(
+            (facts.DispatchFacts ?? []).Select(fact =>
+                "dispatch|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })
+            )
+        );
         rows.AddRange(
             (facts.AllocationFacts ?? []).Select(fact =>
                 "allocation|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })

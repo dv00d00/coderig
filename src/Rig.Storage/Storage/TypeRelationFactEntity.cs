@@ -7,4 +7,5 @@ public sealed class TypeRelationFactEntity
     public string TypeSymbolId { get; set; } = "";
     public string RelatedSymbolId { get; set; } = "";
     public string RelationKind { get; set; } = "";
+    public string FilePath { get; set; } = "";
 }

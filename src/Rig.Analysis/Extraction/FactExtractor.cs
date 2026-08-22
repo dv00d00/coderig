@@ -22,6 +22,10 @@ internal static class FactExtractor
         var model = source.SemanticModel;
         var root = source.Root;
         var tree = source.Tree;
+        // SourceModel.FilePath is the loader's canonical emitter identity. It normally equals the
+        // syntax tree path, but generated trees may have an empty path and receive a stable synthetic
+        // fallback here; resident overlay keys use this exact value.
+        var emitterFilePath = source.FilePath;
 
         // The full source text, materialized ONCE per tree. BodyHashOf slices node spans out of this
         // (cheap substring) instead of calling node.ToString() per symbol (which re-walks the green
@@ -100,8 +104,8 @@ internal static class FactExtractor
 
             if (symbol is INamedTypeSymbol typeSymbol)
             {
-                AddTypeRelations(relations, typeSymbol, docId, symbolCache);
-                AddInterfaceDispatchFacts(dispatch, dispatchSeen, typeSymbol, symbolCache);
+                AddTypeRelations(relations, typeSymbol, docId, emitterFilePath, symbolCache);
+                AddInterfaceDispatchFacts(dispatch, dispatchSeen, typeSymbol, emitterFilePath, symbolCache);
             }
 
             // Property/indexer accessors with a real body are first-class callable methods: emit them
@@ -121,7 +125,15 @@ internal static class FactExtractor
                     AddSymbol(symbols, accessor, tree, fileText, AccessorNode(accessor) ?? decl, symbolCache);
                     if (accessor.OverriddenMethod is { } overriddenAccessor)
                     {
-                        AddDispatchFact(dispatch, dispatchSeen, source: overriddenAccessor, target: accessor, kind: DispatchKinds.Override, symbolCache: symbolCache);
+                        AddDispatchFact(
+                            dispatch,
+                            dispatchSeen,
+                            source: overriddenAccessor,
+                            target: accessor,
+                            kind: DispatchKinds.Override,
+                            filePath: emitterFilePath,
+                            symbolCache: symbolCache
+                        );
                     }
                 }
             }
@@ -131,7 +143,15 @@ internal static class FactExtractor
             // query time, so only the immediate hop is stored.
             if (symbol is IMethodSymbol { OverriddenMethod: { } overridden } overrideMethod)
             {
-                AddDispatchFact(dispatch, dispatchSeen, source: overridden, target: overrideMethod, kind: DispatchKinds.Override, symbolCache: symbolCache);
+                AddDispatchFact(
+                    dispatch,
+                    dispatchSeen,
+                    source: overridden,
+                    target: overrideMethod,
+                    kind: DispatchKinds.Override,
+                    filePath: emitterFilePath,
+                    symbolCache: symbolCache
+                );
             }
         }
 
@@ -251,13 +271,28 @@ internal static class FactExtractor
                 {
                     if (dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind)))
                     {
-                        dispatch.Add(new DispatchFact(SourceMember: slot, TargetMember: boundId, Kind: DispatchKinds.DelegateBind));
+                        dispatch.Add(
+                            new DispatchFact(
+                                SourceMember: slot,
+                                TargetMember: boundId,
+                                Kind: DispatchKinds.DelegateBind,
+                                FilePath: emitterFilePath
+                            )
+                        );
                     }
 
                     // Delegate-field join input (fields only, gated in EmitDelegateFieldBind).
                     if (DelegateFieldAssignmentTarget(name, model) is { } assignedField)
                     {
-                        EmitDelegateFieldBind(dispatch, dispatchSeen, field: assignedField, callableId: boundId, site: name, model: model);
+                        EmitDelegateFieldBind(
+                            dispatch,
+                            dispatchSeen,
+                            field: assignedField,
+                            callableId: boundId,
+                            site: name,
+                            model: model,
+                            filePath: emitterFilePath
+                        );
                     }
                 }
             }
@@ -775,7 +810,14 @@ internal static class FactExtractor
                 && dispatchSeen.Add((fieldId, invokerId, DispatchKinds.DelegateFieldInvoke))
             )
             {
-                dispatch.Add(new DispatchFact(SourceMember: fieldId, TargetMember: invokerId, Kind: DispatchKinds.DelegateFieldInvoke));
+                dispatch.Add(
+                    new DispatchFact(
+                        SourceMember: fieldId,
+                        TargetMember: invokerId,
+                        Kind: DispatchKinds.DelegateFieldInvoke,
+                        FilePath: emitterFilePath
+                    )
+                );
             }
         }
 
@@ -836,6 +878,7 @@ internal static class FactExtractor
                         assembly: assemblyName,
                         model: model,
                         tree: tree,
+                        emitterFilePath: emitterFilePath,
                         fileText: fileText,
                         enclosingCache: enclosingCache,
                         symbolCache: symbolCache,
@@ -977,6 +1020,7 @@ internal static class FactExtractor
         List<DispatchFact> dispatch,
         HashSet<(string, string, string)> seen,
         INamedTypeSymbol type,
+        string filePath,
         SymbolStringCache symbolCache
     )
     {
@@ -993,7 +1037,15 @@ internal static class FactExtractor
                 case IMethodSymbol { MethodKind: MethodKind.Ordinary } interfaceMethod:
                     if (type.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol impl)
                     {
-                        AddDispatchFact(dispatch, seen, source: interfaceMethod, target: impl, kind: DispatchKinds.Impl, symbolCache: symbolCache);
+                        AddDispatchFact(
+                            dispatch,
+                            seen,
+                            source: interfaceMethod,
+                            target: impl,
+                            kind: DispatchKinds.Impl,
+                            filePath: filePath,
+                            symbolCache: symbolCache
+                        );
                     }
 
                     break;
@@ -1010,6 +1062,7 @@ internal static class FactExtractor
                         seen,
                         interfaceAccessor: interfaceProperty.GetMethod,
                         implAccessor: implProperty.GetMethod,
+                        filePath: filePath,
                         symbolCache: symbolCache
                     );
                     AddAccessorImplDispatch(
@@ -1017,6 +1070,7 @@ internal static class FactExtractor
                         seen,
                         interfaceAccessor: interfaceProperty.SetMethod,
                         implAccessor: implProperty.SetMethod,
+                        filePath: filePath,
                         symbolCache: symbolCache
                     );
                     break;
@@ -1029,12 +1083,21 @@ internal static class FactExtractor
         HashSet<(string, string, string)> seen,
         IMethodSymbol? interfaceAccessor,
         IMethodSymbol? implAccessor,
+        string filePath,
         SymbolStringCache symbolCache
     )
     {
         if (interfaceAccessor is not null && implAccessor is not null && HasAccessorBody(implAccessor))
         {
-            AddDispatchFact(dispatch, seen, source: interfaceAccessor, target: implAccessor, kind: DispatchKinds.Impl, symbolCache: symbolCache);
+            AddDispatchFact(
+                dispatch,
+                seen,
+                source: interfaceAccessor,
+                target: implAccessor,
+                kind: DispatchKinds.Impl,
+                filePath: filePath,
+                symbolCache: symbolCache
+            );
         }
     }
 
@@ -1047,6 +1110,7 @@ internal static class FactExtractor
         IMethodSymbol source,
         IMethodSymbol target,
         string kind,
+        string filePath,
         SymbolStringCache symbolCache
     )
     {
@@ -1066,7 +1130,7 @@ internal static class FactExtractor
 
         if (seen.Add((sourceId, targetId, kind)))
         {
-            dispatch.Add(new DispatchFact(SourceMember: sourceId, TargetMember: targetId, Kind: kind));
+            dispatch.Add(new DispatchFact(SourceMember: sourceId, TargetMember: targetId, Kind: kind, FilePath: filePath));
         }
     }
 
@@ -1159,18 +1223,33 @@ internal static class FactExtractor
         return Convert.ToHexStringLower(hash);
     }
 
-    private static void AddTypeRelations(List<TypeRelationFact> relations, INamedTypeSymbol type, string typeDocId, SymbolStringCache symbolCache)
+    private static void AddTypeRelations(
+        List<TypeRelationFact> relations,
+        INamedTypeSymbol type,
+        string typeDocId,
+        string filePath,
+        SymbolStringCache symbolCache
+    )
     {
         if (type.BaseType is { SpecialType: SpecialType.None } baseType && symbolCache.DocId(baseType) is { } baseDocId)
         {
-            relations.Add(new TypeRelationFact(TypeSymbolId: typeDocId, RelatedSymbolId: baseDocId, RelationKind: "base"));
+            relations.Add(
+                new TypeRelationFact(TypeSymbolId: typeDocId, RelatedSymbolId: baseDocId, RelationKind: "base", FilePath: filePath)
+            );
         }
 
         foreach (var iface in type.Interfaces)
         {
             if (symbolCache.DocId(iface) is { } ifaceDocId)
             {
-                relations.Add(new TypeRelationFact(TypeSymbolId: typeDocId, RelatedSymbolId: ifaceDocId, RelationKind: "interface"));
+                relations.Add(
+                    new TypeRelationFact(
+                        TypeSymbolId: typeDocId,
+                        RelatedSymbolId: ifaceDocId,
+                        RelationKind: "interface",
+                        FilePath: filePath
+                    )
+                );
             }
         }
     }
@@ -2357,7 +2436,8 @@ internal static class FactExtractor
         IFieldSymbol field,
         string callableId,
         SyntaxNode site,
-        SemanticModel model
+        SemanticModel model,
+        string filePath
     )
     {
         if (field.GetDocumentationCommentId() is not { } fieldId)
@@ -2369,12 +2449,21 @@ internal static class FactExtractor
         {
             if (seen.Add((fieldId, callableId, DispatchKinds.DelegateFieldBind)))
             {
-                dispatch.Add(new DispatchFact(SourceMember: fieldId, TargetMember: callableId, Kind: DispatchKinds.DelegateFieldBind));
+                dispatch.Add(
+                    new DispatchFact(
+                        SourceMember: fieldId,
+                        TargetMember: callableId,
+                        Kind: DispatchKinds.DelegateFieldBind,
+                        FilePath: filePath
+                    )
+                );
             }
         }
         else if (seen.Add((fieldId, fieldId, DispatchKinds.DelegateFieldEscape)))
         {
-            dispatch.Add(new DispatchFact(SourceMember: fieldId, TargetMember: fieldId, Kind: DispatchKinds.DelegateFieldEscape));
+            dispatch.Add(
+                new DispatchFact(SourceMember: fieldId, TargetMember: fieldId, Kind: DispatchKinds.DelegateFieldEscape, FilePath: filePath)
+            );
         }
     }
 
@@ -2685,6 +2774,7 @@ internal static class FactExtractor
         string assembly,
         SemanticModel model,
         SyntaxTree tree,
+        string emitterFilePath,
         string fileText,
         Dictionary<SyntaxNode, string?> enclosingCache,
         SymbolStringCache symbolCache,
@@ -2758,7 +2848,15 @@ internal static class FactExtractor
 
         if (assignedField is not null)
         {
-            EmitDelegateFieldBind(dispatch, dispatchSeen, field: assignedField, callableId: id, site: lambda, model: model);
+            EmitDelegateFieldBind(
+                dispatch,
+                dispatchSeen,
+                field: assignedField,
+                callableId: id,
+                site: lambda,
+                model: model,
+                filePath: emitterFilePath
+            );
         }
     }
 

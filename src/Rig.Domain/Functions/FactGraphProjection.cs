@@ -61,7 +61,10 @@ public static class FactGraphProjection
             .Select(g => g.First())
             .ToList();
 
-        var minedDispatch = (result.DispatchFacts ?? []).Distinct().ToList();
+        // DispatchFact now carries its emitter path for live per-file replacement, but graph identity
+        // remains the semantic (source,target,kind) triple: several files may legitimately emit the
+        // same exact edge.
+        var minedDispatch = (result.DispatchFacts ?? []).Select(d => d with { FilePath = "" }).Distinct().ToList();
 
         // Applied here AND in LoadFactGraphAsync so the two projections match.
         return FactDelegateFieldJoin.Apply(new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch));

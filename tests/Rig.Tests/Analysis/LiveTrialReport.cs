@@ -76,7 +76,8 @@ internal sealed record LiveTrialRecord(
 internal sealed class LiveTrialReport
 {
     // v2->v3: publication milestones, semantic-set hashes, and engine-only measurement boundaries.
-    internal const int CurrentSchemaVersion = 3;
+    // v3->v4: canonical fact identity includes normalized relation/dispatch emitter provenance.
+    internal const int CurrentSchemaVersion = 4;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

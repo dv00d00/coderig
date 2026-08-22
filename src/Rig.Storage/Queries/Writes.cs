@@ -495,9 +495,9 @@ public static class Writes
             saved += InsertRows(
                 connection,
                 transaction,
-                "INSERT INTO type_relation_facts (RunId, TypeRelationFactIndex, TypeSymbolId, RelatedSymbolId, RelationKind) "
-                    + "VALUES ($run,$idx,$type,$related,$kind);",
-                ["$run", "$idx", "$type", "$related", "$kind"],
+                "INSERT INTO type_relation_facts (RunId, TypeRelationFactIndex, TypeSymbolId, RelatedSymbolId, RelationKind, FilePath) "
+                    + "VALUES ($run,$idx,$type,$related,$kind,$file);",
+                ["$run", "$idx", "$type", "$related", "$kind", "$file"],
                 relations,
                 (p, t, i) =>
                 {
@@ -506,6 +506,7 @@ public static class Writes
                     p[2].Value = t.TypeSymbolId;
                     p[3].Value = t.RelatedSymbolId;
                     p[4].Value = t.RelationKind;
+                    p[5].Value = t.FilePath;
                 },
                 alreadySaved: saved,
                 total: total,
@@ -516,9 +517,9 @@ public static class Writes
             saved += InsertRows(
                 connection,
                 transaction,
-                "INSERT INTO dispatch_facts (RunId, DispatchFactIndex, SourceMember, TargetMember, Kind) "
-                    + "VALUES ($run,$idx,$src,$tgt,$kind);",
-                ["$run", "$idx", "$src", "$tgt", "$kind"],
+                "INSERT INTO dispatch_facts (RunId, DispatchFactIndex, SourceMember, TargetMember, Kind, FilePath) "
+                    + "VALUES ($run,$idx,$src,$tgt,$kind,$file);",
+                ["$run", "$idx", "$src", "$tgt", "$kind", "$file"],
                 dispatch,
                 (p, d, i) =>
                 {
@@ -527,6 +528,7 @@ public static class Writes
                     p[2].Value = d.SourceMember;
                     p[3].Value = d.TargetMember;
                     p[4].Value = d.Kind;
+                    p[5].Value = d.FilePath;
                 },
                 alreadySaved: saved,
                 total: total,

@@ -10,4 +10,5 @@ public sealed class DispatchFactEntity
     public string SourceMember { get; set; } = "";
     public string TargetMember { get; set; } = "";
     public string Kind { get; set; } = "";
+    public string FilePath { get; set; } = "";
 }

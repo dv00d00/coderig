@@ -164,7 +164,8 @@ public sealed record ReferenceFact(
 public sealed record TypeRelationFact(
     string TypeSymbolId,
     string RelatedSymbolId,
-    string RelationKind // base|interface
+    string RelationKind, // base|interface
+    string FilePath = ""
 );
 
 /// <summary>
@@ -177,7 +178,7 @@ public sealed record TypeRelationFact(
 /// these FIRST (Basis="roslyn") and falls back to the name/arity CHA heuristic only where Roslyn
 /// couldn't bind (net48 error-typed `!:` interfaces / unmined members), marking those "heuristic".
 /// </summary>
-public sealed record DispatchFact(string SourceMember, string TargetMember, string Kind);
+public sealed record DispatchFact(string SourceMember, string TargetMember, string Kind, string FilePath = "");
 
 /// <summary>A compiler-proven managed allocation site.</summary>
 /// <remarks>

@@ -123,7 +123,7 @@ public static class FactProjection
             ))
             .ToArray();
 
-        var minedDispatch = result.DispatchFacts?.Distinct().ToArray();
+        var minedDispatch = result.DispatchFacts?.Select(d => d with { FilePath = "" }).Distinct().ToArray();
 
         return new FactGraphData(
             CallEdges: classifiedEdges,
