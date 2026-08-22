@@ -518,7 +518,7 @@ internal static class FactExtractor
             var target = (invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod).OriginalDefinition;
             if (!iteratorMethods.TryGetValue(target, out var isIterator))
             {
-                isIterator = !target.IsAsync && target.DeclaringSyntaxReferences.Any(reference => ContainsYield(reference.GetSyntax()));
+                isIterator = IsIterator(target);
                 iteratorMethods[target] = isIterator;
             }
             if (!isIterator)
@@ -1192,7 +1192,9 @@ internal static class FactExtractor
                 IsOverride: symbol.IsOverride,
                 // The declaration's normalized text — so `rig impact` detects an IN-PLACE body edit (a changed
                 // constant/literal that leaves call structure, and thus the reachable-set diff, untouched).
-                BodyHash: symbolCache.Intern(BodyHashOf(fileText, node))!
+                BodyHash: symbolCache.Intern(BodyHashOf(fileText, node))!,
+                SurfaceHash: symbolCache.Intern(SurfaceHashing.Declaration(symbol, node))!,
+                IsIterator: symbol is IMethodSymbol method && IsIterator(method)
             )
         );
     }
@@ -2822,7 +2824,9 @@ internal static class FactExtractor
                 EndLine: lineSpan.EndLinePosition.Line + 1,
                 DefiningAssembly: assembly,
                 IsOverride: false,
-                BodyHash: symbolCache.Intern(BodyHashOf(fileText, lambda))!
+                BodyHash: symbolCache.Intern(BodyHashOf(fileText, lambda))!,
+                SurfaceHash: "",
+                IsIterator: false
             )
         );
         references.Add(
@@ -3025,6 +3029,9 @@ internal static class FactExtractor
                 node == declaration || node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
             )
             .Any(node => node is YieldStatementSyntax);
+
+    private static bool IsIterator(IMethodSymbol method) =>
+        !method.IsAsync && method.DeclaringSyntaxReferences.Any(reference => ContainsYield(reference.GetSyntax()));
 }
 
 internal sealed record FactExtractionResult(

@@ -15,7 +15,10 @@ public sealed record AnalysisResult(
     // e.g. a hand-built AnalysisResult in a test). Travels WITH the facts so every surface that serves
     // them can disclose that they may be missing or wrong; the resident overlay merges it per file
     // exactly as it merges the facts themselves (see ResidentIndex.MergeFacts).
-    CompilationHealth? CompilationHealth = null
+    CompilationHealth? CompilationHealth = null,
+    // Per-project, per-emitter surface shards captured before the Roslyn compilations are released.
+    // Dormant substrate for the live cascade gate; ordinary query projections do not consume it.
+    IReadOnlyList<ProjectSurfaceSnapshot>? ProjectSurfaces = null
 ) : IFactSnapshotView
 {
     public IEnumerable<SourceFileInfo> EnumerateSourceFiles() => SourceFiles;

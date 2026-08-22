@@ -1,8 +1,8 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–4 completed locally 2026-08-22: deterministic scale/trial baselines,
-emitter provenance, immutable snapshot generations, a streaming composite fact view, and atomic dirty-only
-watcher batches without automatic reconciliation or derived warming. Next: lazy surface refinement.
+**Status:** PROGRESS — Slices 0–5A completed locally 2026-08-22: deterministic scale/trial baselines,
+emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
+watcher batches, and the dormant v7 surface-fact substrate. Next: per-origin lazy surface refinement.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -37,7 +37,14 @@ watcher batches without automatic reconciliation or derived warming. Next: lazy 
   the affected boundary is stale. `ReconcileAllAsync` remains an explicit scheduler/verification primitive.
   Three deterministic batch-publication tests bring exact discovery to **1,083 tests**, and the real watcher
   gate proves a two-file, two-project burst publishes as one revision.
-- **Next:** Slice 5, lazily classify an `Unknown` dirty partition with the designed surface-hash gate so a
+- **Slice 5A:** symbol facts now persist token-normalized declaration `SurfaceHash` plus the body-derived
+  `IsIterator` widening. Roslyn-free per-emitter project shards also fold relations, dispatch, using/extern
+  directives, generated-tree tokens, ordered assembly/module attributes, and compiler options; their
+  path-independent aggregate is persisted on the assembly registry. Same-assembly project collisions combine
+  rather than overwrite, while project-file identity remains available for per-origin live debt. The index
+  schema is **v7**, so existing stores fail fast and require re-indexing. The substrate is deliberately dormant:
+  no cascade is suppressed yet. Six deterministic tests bring exact discovery to **1,089 tests**.
+- **Next:** Slice 5B, lazily classify an `Unknown` dirty partition with the designed surface-hash gate so a
   body-only edit settles at the changed-file boundary while a public-surface change expands through dependents.
 
 ## Why — the workflow that makes this the target

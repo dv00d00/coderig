@@ -10,6 +10,10 @@ public sealed class AssemblyEntity
 
     public string ContentHash { get; set; } = "";
 
+    // Aggregate of the project's token-normalized declaration surface plus project-only compiler inputs.
+    // Empty means unavailable: the future live gate must classify it Unknown and retain the coarse cascade.
+    public string SurfaceHash { get; set; } = "";
+
     public string IndexedAtUtcText { get; set; } = "";
 
     public int SymbolCount { get; set; }

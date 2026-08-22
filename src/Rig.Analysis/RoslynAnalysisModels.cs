@@ -16,7 +16,8 @@ internal sealed record SolutionSourceSet(
     IReadOnlyList<ExtractedSource> ExtractedSources,
     // Where Roslyn's own error diagnostics landed during this read pass, and which projects produced
     // nothing at all. Carried out with the facts so the query side can disclose it.
-    CompilationHealth Health
+    CompilationHealth Health,
+    IReadOnlyList<ProjectSurfaceSnapshot> ProjectSurfaces
 );
 
 // One extracted file's facts, in the loader's global FilePath order (OrdinalIgnoreCase — the order the
@@ -36,4 +37,11 @@ internal sealed record SourceExtractionResult(
 // per-project extraction callback, and dropped the moment that callback returns. Must never be retained
 // past the callback — the SemanticModel here is the strong root of the compilation's bound-node caches,
 // and retaining it is exactly the whole-run pin slice 2 removed.
-internal sealed record SourceModel(string ProjectName, string FilePath, SyntaxTree Tree, SyntaxNode Root, SemanticModel SemanticModel);
+internal sealed record SourceModel(
+    string ProjectName,
+    string FilePath,
+    SyntaxTree Tree,
+    SyntaxNode Root,
+    SemanticModel SemanticModel,
+    bool IsGenerated = false
+);

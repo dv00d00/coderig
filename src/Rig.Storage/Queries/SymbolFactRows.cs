@@ -34,7 +34,9 @@ internal static class SymbolFactRows
         EndLine: 0,
         DefiningAssembly: "",
         IsOverride: s.IsOverride,
-        BodyHash: ""
+        BodyHash: "",
+        SurfaceHash: "",
+        IsIterator: false
     );
 
     // `s.SymbolId, s.Name, …` for the raw-SQL bounded scan of symbol_facts, in MethodRefColumn order — so
@@ -49,8 +51,7 @@ internal static class SymbolFactRows
     // unreachable in practice: symbol_facts.FilePath is written from a non-nullable record field.)
     internal static SymbolFact ReadMethodRefRow(DbDataReader reader)
     {
-        string? Text(SymbolFactProjections.MethodRefColumn column) =>
-            reader.IsDBNull((int)column) ? null : reader.GetString((int)column);
+        string? Text(SymbolFactProjections.MethodRefColumn column) => reader.IsDBNull((int)column) ? null : reader.GetString((int)column);
 
         return new SymbolFact(
             SymbolId: reader.GetString((int)SymbolFactProjections.MethodRefColumn.SymbolId),
@@ -69,7 +70,9 @@ internal static class SymbolFactRows
             DefiningAssembly: "",
             IsOverride: !reader.IsDBNull((int)SymbolFactProjections.MethodRefColumn.IsOverride)
                 && reader.GetInt32((int)SymbolFactProjections.MethodRefColumn.IsOverride) != 0,
-            BodyHash: ""
+            BodyHash: "",
+            SurfaceHash: "",
+            IsIterator: false
         );
     }
 
@@ -88,7 +91,9 @@ internal static class SymbolFactRows
         EndLine: 0,
         DefiningAssembly: "",
         IsOverride: s.IsOverride,
-        BodyHash: ""
+        BodyHash: "",
+        SurfaceHash: "",
+        IsIterator: false
     );
 
     // TypeSymbol's column set. Modifiers is the raw space-joined token string: IsAbstract is a String.Split
@@ -108,7 +113,9 @@ internal static class SymbolFactRows
         EndLine: 0,
         DefiningAssembly: "",
         IsOverride: false,
-        BodyHash: ""
+        BodyHash: "",
+        SurfaceHash: "",
+        IsIterator: false
     );
 
     // MethodMeta's column set (the dead-code finder's), for the EF whole-store load.
@@ -126,6 +133,8 @@ internal static class SymbolFactRows
         EndLine: 0,
         DefiningAssembly: "",
         IsOverride: s.IsOverride,
-        BodyHash: ""
+        BodyHash: "",
+        SurfaceHash: "",
+        IsIterator: false
     );
 }

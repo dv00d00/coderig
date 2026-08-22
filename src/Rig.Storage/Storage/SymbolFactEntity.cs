@@ -21,4 +21,8 @@ public sealed class SymbolFactEntity
     // Deterministic hash of the symbol's declaration text — see SymbolFact.BodyHash. "" when no body / on a
     // pre-fact store. Lets `rig impact` detect an in-place body edit that the reachable-set diff misses.
     public string BodyHash { get; set; } = "";
+
+    public string SurfaceHash { get; set; } = "";
+
+    public bool IsIterator { get; set; }
 }

@@ -20,7 +20,30 @@ public sealed record SymbolFact(
     int EndLine,
     string DefiningAssembly,
     bool IsOverride,
-    string BodyHash = ""
+    string BodyHash = "",
+    // Token-normalized declaration surface. Executable bodies/trivia are excluded; an empty value marks
+    // symbols that cannot participate in a project surface (namespaces and synthetic lambdas).
+    string SurfaceHash = "",
+    // Body-derived widening required by extraction: a caller's allocation facts depend on whether its
+    // callee contains yield, so this bit is part of the cross-project surface even though the body is not.
+    bool IsIterator = false
+);
+
+/// <summary>One immutable, replaceable emitter contribution to a project's aggregate surface.</summary>
+public sealed record ProjectSurfaceShard(string EmitterFilePath, bool IsGenerated, string SurfaceHash);
+
+/// <summary>
+/// Roslyn-free project surface captured while its compilation is alive. Shards preserve emitter ownership
+/// for resident replacement; SurfaceHash is the order-independent aggregate persisted with the assembly.
+/// </summary>
+public sealed record ProjectSurfaceSnapshot(
+    string ProjectName,
+    // Stable Roslyn-project identity for the later per-origin resident gate. Deliberately excluded from
+    // SurfaceHash so checkout relocation cannot manufacture a surface change.
+    string ProjectFilePath,
+    string AssemblyName,
+    IReadOnlyList<ProjectSurfaceShard> Shards,
+    string SurfaceHash
 );
 
 /// <summary>A resolved reference to a symbol at a usage site.</summary>
@@ -789,7 +812,12 @@ public sealed record FactContextDispatchRule(string Interface, string BindingBas
 //                 comprehension over a single-value monad binds ≤1 time and is not iteration). Null = no query
 //                 context or unresolved, in which case the gate fails OPEN.
 // All null = the call site is not in any iteration context.
-public readonly record struct FactLoopContext(string? Kind = null, string? Detail = null, string? ElementType = null, string? BindType = null);
+public readonly record struct FactLoopContext(
+    string? Kind = null,
+    string? Detail = null,
+    string? ElementType = null,
+    string? BindType = null
+);
 
 // What lexically/structurally ENCLOSES a call site — the ancestor walks stage 1 froze at the call site, which
 // stage 2 turns into observations. Named for the NESTING (not "enclosing"): FactInvocation.Enclosing already
@@ -801,7 +829,12 @@ public readonly record struct FactLoopContext(string? Kind = null, string? Detai
 //   Guards      — the CFG control-dependence guard set of the call site WITHIN its own method. Null/empty ==
 //                 MUST-RUN (unconditional in the method). Intra-method only.
 // See the like-named ReferenceFact.Enclosing* columns for the encodings.
-public readonly record struct FactCallSiteNesting(string? Invocations = null, string? CatchTypes = null, string? Scopes = null, string? Guards = null);
+public readonly record struct FactCallSiteNesting(
+    string? Invocations = null,
+    string? CatchTypes = null,
+    string? Scopes = null,
+    string? Guards = null
+);
 
 // The call site's RECEIVER and ARGUMENT surface — everything the effect-resource strategies resolve a resource
 // FROM (P2a), and the surface the iteration-fanout key discriminator scans. Receiver rides here because it is

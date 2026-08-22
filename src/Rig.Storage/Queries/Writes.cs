@@ -3,6 +3,7 @@ using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Rig.Domain;
 using Rig.Domain.Data;
 using Rig.Storage.Storage;
 
@@ -119,11 +120,6 @@ public static class Writes
     )
     {
         var symbols = result.Symbols ?? [];
-        if (symbols.Count == 0)
-        {
-            return;
-        }
-
         var references = result.References ?? [];
         var solutionPath = Path.GetFullPath(result.SolutionPath);
         var indexedAt = DateTimeOffset.UtcNow.ToString("O");
@@ -178,6 +174,15 @@ public static class Writes
             a.References++;
         }
 
+        foreach (var surface in result.ProjectSurfaces ?? [])
+        {
+            if (string.IsNullOrEmpty(surface.AssemblyName))
+            {
+                continue;
+            }
+            For(surface.AssemblyName).AddSurfaceHash(surface.SurfaceHash);
+        }
+
         // Re-enable change detection for this small upsert (the fact write left it off + tracker cleared).
         context.ChangeTracker.AutoDetectChangesEnabled = true;
         var existing = await context.Assemblies.ToDictionaryAsync(a => a.AssemblyName, cancellationToken);
@@ -192,9 +197,10 @@ public static class Writes
         foreach (var (assembly, a) in acc)
         {
             var hash = a.ContentHash();
+            var surfaceHash = a.SurfaceHash();
             if (existing.TryGetValue(assembly, out var row))
             {
-                if (row.ContentHash != hash)
+                if (row.ContentHash != hash || row.SurfaceHash != surfaceHash)
                 {
                     // Same name, divergent content. Expected for a re-mine of the same solution; a
                     // genuine cross-solution collision (a fork) would carry a different source solution.
@@ -206,6 +212,7 @@ public static class Writes
                     }
 
                     row.ContentHash = hash;
+                    row.SurfaceHash = surfaceHash;
                     row.SymbolCount = a.Symbols;
                     row.ReferenceCount = a.References;
                     row.IndexedAtUtcText = indexedAt;
@@ -218,6 +225,7 @@ public static class Writes
                     {
                         AssemblyName = assembly,
                         ContentHash = hash,
+                        SurfaceHash = surfaceHash,
                         IndexedAtUtcText = indexedAt,
                         SymbolCount = a.Symbols,
                         ReferenceCount = a.References,
@@ -248,6 +256,21 @@ public static class Writes
 
         public int Symbols;
         public int References;
+        private List<string>? surfaceHashes;
+
+        public void AddSurfaceHash(string hash)
+        {
+            surfaceHashes ??= [];
+            surfaceHashes.Add(hash);
+        }
+
+        public string SurfaceHash() =>
+            surfaceHashes?.Count switch
+            {
+                null or 0 => "",
+                1 => surfaceHashes[0],
+                _ => ProjectContentHash.Compute(surfaceHashes),
+            };
 
         public void Fold(string item)
         {
@@ -318,8 +341,8 @@ public static class Writes
                 connection,
                 transaction,
                 "INSERT INTO symbol_facts (RunId, SymbolFactIndex, SymbolId, Kind, Name, Namespace, ContainingSymbolId, "
-                    + "Modifiers, TypeKind, Signature, FilePath, Line, EndLine, DefiningAssembly, IsOverride, BodyHash) "
-                    + "VALUES ($run,$idx,$sid,$kind,$name,$ns,$containing,$mods,$tk,$sig,$file,$line,$endline,$asm,$ovr,$bh);",
+                    + "Modifiers, TypeKind, Signature, FilePath, Line, EndLine, DefiningAssembly, IsOverride, BodyHash, SurfaceHash, IsIterator) "
+                    + "VALUES ($run,$idx,$sid,$kind,$name,$ns,$containing,$mods,$tk,$sig,$file,$line,$endline,$asm,$ovr,$bh,$sh,$iterator);",
                 [
                     "$run",
                     "$idx",
@@ -337,6 +360,8 @@ public static class Writes
                     "$asm",
                     "$ovr",
                     "$bh",
+                    "$sh",
+                    "$iterator",
                 ],
                 symbols,
                 (p, s, i) =>
@@ -357,6 +382,8 @@ public static class Writes
                     p[13].Value = s.DefiningAssembly;
                     p[14].Value = s.IsOverride ? 1 : 0;
                     p[15].Value = s.BodyHash;
+                    p[16].Value = s.SurfaceHash;
+                    p[17].Value = s.IsIterator ? 1 : 0;
                 },
                 alreadySaved: saved,
                 total: total,

@@ -257,7 +257,10 @@ internal static class SolutionSourceLoader
 
             if (errorCount > MaxSummarisedErrors)
             {
-                ReportProgress(progress, $"  ... and {errorCount - MaxSummarisedErrors} more (full per-file breakdown is recorded on the analysis)");
+                ReportProgress(
+                    progress,
+                    $"  ... and {errorCount - MaxSummarisedErrors} more (full per-file breakdown is recorded on the analysis)"
+                );
             }
         }
 
@@ -267,7 +270,8 @@ internal static class SolutionSourceLoader
         return new SolutionSourceSet(
             projectResults.SelectMany(r => r.SourceFiles).OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
             projectResults.SelectMany(r => r.Extracted).OrderBy(e => e.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            collector.Build()
+            collector.Build(),
+            projectResults.Select(r => r.Surface).OrderBy(s => s.ProjectName, StringComparer.Ordinal).ToList()
         );
 
         async ValueTask ProcessProject(Project project, CancellationToken ct)
@@ -1462,7 +1466,15 @@ internal static class SolutionSourceLoader
             extracted[i] = new ExtractedSource(sources[i].ProjectName, sources[i].FilePath, extractionResults[i]);
         }
 
-        return new ProjectSourceLoadResult(sourceFiles, extracted, extractSeconds);
+        var surface = ProjectSurfaceBuilder.Build(
+            project.Name,
+            project.FilePath ?? "",
+            project.ParseOptions as CSharpParseOptions,
+            compilation,
+            sources,
+            extractionResults
+        );
+        return new ProjectSourceLoadResult(sourceFiles, extracted, extractSeconds, surface);
     }
 
     // Wires source-generator ProjectReferences (OutputItemType="Analyzer") onto each referencing
@@ -1641,7 +1653,8 @@ internal static class SolutionSourceLoader
                         FilePath: generatedPath,
                         Tree: tree,
                         Root: root,
-                        SemanticModel: semanticModel
+                        SemanticModel: semanticModel,
+                        IsGenerated: true
                     )
                 );
             }
@@ -1766,7 +1779,8 @@ internal static class SolutionSourceLoader
     private sealed record ProjectSourceLoadResult(
         IReadOnlyList<SourceFileInfo> SourceFiles,
         IReadOnlyList<ExtractedSource> Extracted,
-        double ExtractSeconds
+        double ExtractSeconds,
+        ProjectSurfaceSnapshot Surface
     );
 
     // Loads source-generator/analyzer DLLs and — crucially — REDIRECTS their Microsoft.CodeAnalysis*

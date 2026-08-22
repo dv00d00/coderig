@@ -20,7 +20,8 @@ public static class SchemaVersion
     //         IQueryable clause — which never executes as C# and must derive no effect / anchor no iteration).
     // v5->v6: persist the exact emitter FilePath on type_relation_facts and dispatch_facts, making resident
     //         overlays replace these emissions per file instead of retaining deleted edges as ghosts.
-    public const int Index = 6;
+    // v6->v7: persist symbol SurfaceHash/IsIterator and the project aggregate assemblies.SurfaceHash.
+    public const int Index = 7;
 
     // Bump when the GRAPH shape changes (call_edges / dispatch_edges / nodes / the symbol_fts /
     // ref_target_fts virtual tables — all built by GraphMaterializer).

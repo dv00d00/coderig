@@ -211,7 +211,8 @@ public static class SolutionAnalyzer
         var sourceSet = new SolutionSourceSet(
             sourceFiles.OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
             extractedSources,
-            health
+            health,
+            []
         );
 
         return ExtractFromSourceSet(
@@ -619,7 +620,8 @@ public static class SolutionAnalyzer
             TypeRelations: typeRelationFacts,
             DispatchFacts: dispatchFacts,
             AllocationFacts: allocationFacts,
-            CompilationHealth: sourceSet.Health
+            CompilationHealth: sourceSet.Health,
+            ProjectSurfaces: sourceSet.ProjectSurfaces
         );
     }
 
