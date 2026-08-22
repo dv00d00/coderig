@@ -32,7 +32,7 @@ namespace Rig.Domain.Functions;
 // until that view is wired; the existing full/store projections retain their current first-row parity.
 public static class SymbolFactProjections
 {
-    private static readonly IComparer<SymbolFact> CanonicalMethodComparer = new CanonicalMethodFactComparer();
+    private static readonly IComparer<SymbolFact> CanonicalSymbolComparer = new CanonicalSymbolFactComparer();
 
     // The symbol_facts column set MethodRef is a function of, in SELECT order. Declaration order is
     // load-bearing (it is the ADO ordinal set on the bounded path) — APPEND new members, never insert or
@@ -66,25 +66,29 @@ public static class SymbolFactProjections
     // Selects one deterministic declaration row per method id, then returns those rows in the same
     // deterministic order. Duplicate symbol facts can legitimately come from several emitters; neither
     // extraction arrival order nor live overlay replacement chronology is a semantic tie-break.
-    public static IReadOnlyList<SymbolFact> SelectCanonicalMethodFacts(IEnumerable<SymbolFact> symbols)
+    public static IReadOnlyList<SymbolFact> SelectCanonicalMethodFacts(IEnumerable<SymbolFact> symbols) =>
+        SelectCanonicalFacts(symbols, SymbolKinds.Method);
+
+    // Deterministic raw-catalog selector used by demand-shaped lookup paths for method and type symbols.
+    public static IReadOnlyList<SymbolFact> SelectCanonicalFacts(IEnumerable<SymbolFact> symbols, string? kind = null)
     {
         ArgumentNullException.ThrowIfNull(symbols);
 
         var selected = new Dictionary<string, SymbolFact>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != SymbolKinds.Method)
+            if (kind is not null && symbol.Kind != kind)
             {
                 continue;
             }
 
-            if (!selected.TryGetValue(symbol.SymbolId, out var current) || CanonicalMethodComparer.Compare(symbol, current) < 0)
+            if (!selected.TryGetValue(symbol.SymbolId, out var current) || CanonicalSymbolComparer.Compare(symbol, current) < 0)
             {
                 selected[symbol.SymbolId] = symbol;
             }
         }
 
-        return selected.Values.Order(CanonicalMethodComparer).ToArray();
+        return selected.Values.Order(CanonicalSymbolComparer).ToArray();
     }
 
     // symbol_facts (Kind="method") -> the entry-point deriver's method record. Same source as ToMethodRef
@@ -147,7 +151,7 @@ public static class SymbolFactProjections
             || p.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase);
     }
 
-    private sealed class CanonicalMethodFactComparer : IComparer<SymbolFact>
+    private sealed class CanonicalSymbolFactComparer : IComparer<SymbolFact>
     {
         public int Compare(SymbolFact? x, SymbolFact? y)
         {

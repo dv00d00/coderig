@@ -37,5 +37,57 @@ public static class MonomorphizedNodeId
         return marker < 0 ? id : id.Substring(startIndex: 0, length: marker);
     }
 
+    public readonly record struct Parsed(string BaseMethodId, IReadOnlyList<string> DeclaringBinding, IReadOnlyList<string> MethodBinding);
+
+    // Parses the synthetic id back into the binding context needed by demand-shaped adjacency. Malformed
+    // ids are ordinary graph ids from the caller's perspective and therefore fail without throwing.
+    public static bool TryParse(string id, out Parsed parsed)
+    {
+        parsed = default;
+        var marker = id.IndexOf(Marker, StringComparison.Ordinal);
+        if (marker <= 0)
+        {
+            return false;
+        }
+
+        var payloadStart = marker + Marker.Length;
+        if (payloadStart >= id.Length || id[payloadStart] != '⟨' || id[^1] != '⟩')
+        {
+            return false;
+        }
+
+        var payload = id.Substring(payloadStart + 1, id.Length - payloadStart - 2);
+        var split = payload.IndexOf(';');
+        if (split < 0 || payload.IndexOf(';', split + 1) >= 0)
+        {
+            return false;
+        }
+
+        if (!TrySplit(payload[..split], out var declaring) || !TrySplit(payload[(split + 1)..], out var method))
+        {
+            return false;
+        }
+        if (declaring.Count == 0 && method.Count == 0)
+        {
+            return false;
+        }
+
+        parsed = new Parsed(BaseMethodId: id[..marker], DeclaringBinding: declaring, MethodBinding: method);
+        return true;
+    }
+
     private static string Join(IReadOnlyList<string> binding) => string.Join(ElementSeparator.ToString(), binding);
+
+    private static bool TrySplit(string binding, out IReadOnlyList<string> elements)
+    {
+        if (binding.Length == 0)
+        {
+            elements = Array.Empty<string>();
+            return true;
+        }
+
+        var split = binding.Split(ElementSeparator, StringSplitOptions.None);
+        elements = split;
+        return split.All(element => element.Length > 0);
+    }
 }

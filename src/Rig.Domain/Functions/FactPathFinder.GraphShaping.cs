@@ -1,3 +1,4 @@
+using System.Text;
 using Rig.Domain.Data;
 using static System.Globalization.CultureInfo;
 
@@ -251,7 +252,8 @@ public static partial class FactPathFinder
             return graph;
         }
 
-        // (stripped construct type DocID, method name) -> overloads, for resolving X.Target.
+        // (open construct type DocID, method name) -> overloads, for resolving X.Target. Keeping generic
+        // arity is load-bearing for the keyed demand twin (`Widget<T>` lives under `T:Widget`1`).
         var methodsByTypeAndName = new Dictionary<(string Type, string Name), List<MethodRef>>();
         foreach (var m in graph.Methods)
         {
@@ -260,7 +262,7 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            var key = (TypeClosure.StripGeneric(m.ContainingTypeId), m.Name);
+            var key = (m.ContainingTypeId, m.Name);
             if (!methodsByTypeAndName.TryGetValue(key, out var list))
             {
                 methodsByTypeAndName[key] = list = new List<MethodRef>();
@@ -279,7 +281,14 @@ public static partial class FactPathFinder
         var changed = false;
         foreach (var edge in graph.CallEdges)
         {
-            var resolved = ResolveFactoryEdge(edge, ruleByMethod, methodsByTypeAndName);
+            var resolved = ResolveFactoryEdge(
+                edge,
+                ruleByMethod,
+                (construct, name) =>
+                    FactoryConstructTypeId(construct) is { } type && methodsByTypeAndName.TryGetValue((type, name), out var candidates)
+                        ? candidates
+                        : []
+            );
             if (resolved is null)
             {
                 rewritten.Add(edge);
@@ -299,7 +308,7 @@ public static partial class FactPathFinder
     private static List<CallEdge>? ResolveFactoryEdge(
         CallEdge edge,
         Dictionary<string, FactGenericFactoryRule> ruleByMethod,
-        Dictionary<(string Type, string Name), List<MethodRef>> methodsByTypeAndName
+        Func<string, string, IReadOnlyList<MethodRef>> methodsByTypeAndName
     )
     {
         // Cheap guard FIRST: a concrete generic-factory call must carry type arguments (the construct
@@ -341,17 +350,13 @@ public static partial class FactPathFinder
             return null;
         }
 
-        var constructType = "T:" + TypeClosure.StripGeneric(construct);
-        if (!methodsByTypeAndName.TryGetValue((constructType, rule.TargetMethod), out var candidates))
-        {
-            return null;
-        }
+        var candidates = methodsByTypeAndName(construct, rule.TargetMethod);
 
         var arity = ParamArity(edge.Callee);
         var matched = candidates.Where(c => ParamArity(c.SymbolId) == arity).ToList();
         if (matched.Count == 0)
         {
-            matched = candidates; // no arity match — take all overloads; still bypasses the plumbing
+            matched = candidates.ToList(); // no arity match — take all overloads; still bypasses the plumbing
         }
 
         if (matched.Count == 0)
@@ -379,6 +384,209 @@ public static partial class FactPathFinder
             }
         }
         return matched.Select(m => edge with { Callee = m.SymbolId, TypeArguments = null }).ToList();
+    }
+
+    // Caller-local twin of RewriteGenericFactories. The candidate supplier is keyed by the concrete
+    // containing type and method name, which lets a resident graph read exactly one symbol partition.
+    // Returning the original edge is the recall-safe fallback for non-factories and unresolved factories.
+    public static IReadOnlyList<CallEdge> RewriteGenericFactoryEdge(
+        CallEdge edge,
+        IReadOnlyList<FactGenericFactoryRule> rules,
+        Func<string, string, IReadOnlyList<MethodRef>> methodsByTypeAndName
+    )
+    {
+        if (rules.Count == 0)
+        {
+            return [edge];
+        }
+
+        var ruleByMethod = new Dictionary<string, FactGenericFactoryRule>(StringComparer.Ordinal);
+        foreach (var rule in rules)
+        {
+            ruleByMethod[rule.Method] = rule;
+        }
+        return ResolveFactoryEdge(edge, ruleByMethod, methodsByTypeAndName) ?? [edge];
+    }
+
+    // The open declaring-type DocID corresponding to a concrete Roslyn display type from TypeArguments.
+    // Generic arity belongs to EACH containing-type segment: `N.Outer<A>.Inner<B>` becomes
+    // `T:N.Outer`1.Inner`1`. Null is the fail-closed result for malformed delimiter/arity input.
+    public static string? FactoryConstructTypeId(string constructType)
+    {
+        if (string.IsNullOrWhiteSpace(constructType))
+        {
+            return null;
+        }
+
+        var input = constructType.StartsWith("T:", StringComparison.Ordinal) ? constructType[2..] : constructType;
+        var openType = new StringBuilder(input.Length);
+        for (var i = 0; i < input.Length; i++)
+        {
+            var ch = input[i];
+            if (ch is '<' or '{')
+            {
+                if (!TryReadTypeArgumentGroup(input, i, out var close, out var arity) || !AppendArity(openType, arity))
+                {
+                    return null;
+                }
+
+                i = close;
+                continue;
+            }
+
+            if (ch is '>' or '}' or '(' or ')')
+            {
+                return null;
+            }
+
+            // Array suffixes are valid display-type content and do not affect the declaring type's arity.
+            if (ch == '[')
+            {
+                var close = input.IndexOf(']', i + 1);
+                if (close < 0 || input.Substring(i + 1, close - i - 1).Any(c => c != ','))
+                {
+                    return null;
+                }
+
+                openType.Append(input, i, close - i + 1);
+                i = close;
+                continue;
+            }
+            if (ch == ']')
+            {
+                return null;
+            }
+
+            openType.Append(ch);
+        }
+
+        return openType.Length == 0 ? null : "T:" + openType;
+    }
+
+    private static bool AppendArity(StringBuilder openType, int arity)
+    {
+        if (openType.Length == 0)
+        {
+            return false;
+        }
+
+        var segmentStart = 0;
+        for (var i = openType.Length - 1; i >= 0; i--)
+        {
+            if (openType[i] is '.' or '+')
+            {
+                segmentStart = i + 1;
+                break;
+            }
+        }
+
+        var tick = -1;
+        for (var i = segmentStart; i < openType.Length; i++)
+        {
+            if (openType[i] == '`')
+            {
+                tick = i;
+                break;
+            }
+        }
+
+        if (tick >= 0)
+        {
+            return int.TryParse(openType.ToString(tick + 1, openType.Length - tick - 1), out var existing) && existing == arity;
+        }
+
+        openType.Append('`').Append(arity);
+        return true;
+    }
+
+    private static bool TryReadTypeArgumentGroup(string input, int open, out int close, out int arity)
+    {
+        close = -1;
+        arity = 1;
+        var outer = input[open];
+        var angle = 0;
+        var brace = 0;
+        var paren = 0;
+        var bracket = 0;
+        var argumentHasContent = false;
+        for (var i = open + 1; i < input.Length; i++)
+        {
+            var ch = input[i];
+            switch (ch)
+            {
+                case '<':
+                    angle++;
+                    argumentHasContent = true;
+                    break;
+                case '>':
+                    if (angle > 0)
+                    {
+                        angle--;
+                    }
+                    else if (outer == '<' && brace == 0 && paren == 0 && bracket == 0)
+                    {
+                        close = i;
+                        return argumentHasContent;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                    break;
+                case '{':
+                    brace++;
+                    argumentHasContent = true;
+                    break;
+                case '}':
+                    if (brace > 0)
+                    {
+                        brace--;
+                    }
+                    else if (outer == '{' && angle == 0 && paren == 0 && bracket == 0)
+                    {
+                        close = i;
+                        return argumentHasContent;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                    break;
+                case '(':
+                    paren++;
+                    argumentHasContent = true;
+                    break;
+                case ')':
+                    if (paren-- <= 0)
+                    {
+                        return false;
+                    }
+                    break;
+                case '[':
+                    bracket++;
+                    argumentHasContent = true;
+                    break;
+                case ']':
+                    if (bracket-- <= 0)
+                    {
+                        return false;
+                    }
+                    break;
+                case ',' when angle == 0 && brace == 0 && paren == 0 && bracket == 0:
+                    if (!argumentHasContent)
+                    {
+                        return false;
+                    }
+                    arity++;
+                    argumentHasContent = false;
+                    break;
+                default:
+                    argumentHasContent |= !char.IsWhiteSpace(ch);
+                    break;
+            }
+        }
+
+        return false;
     }
 
     // C# keyword aliases -> BCL simple name, so a pk type arg rendered as a keyword (`int`) compares
@@ -487,11 +695,11 @@ public static partial class FactPathFinder
         for (var i = 0; i < typeArguments.Length; i++)
         {
             var c = typeArguments[i];
-            if (c is '<' or '(' or '[')
+            if (c is '<' or '{' or '(' or '[')
             {
                 depth++;
             }
-            else if (c is '>' or ')' or ']')
+            else if (c is '>' or '}' or ')' or ']')
             {
                 depth--;
             }

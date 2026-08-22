@@ -1,10 +1,10 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–6A and the first 6B substrate gates completed locally 2026-08-22: deterministic scale/trial baselines,
+**Status:** PROGRESS — Slices 0–6B2 completed locally 2026-08-22: deterministic scale/trial baselines,
 emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
 watcher batches, the v7 surface-fact substrate, per-origin lazy surface refinement, and independent cascade
 verification with coarse fallback, plus an emitter-aware immutable graph-fact substrate and canonical keyed
-symbol catalog. Next: build demand-shaped forward adjacency over that view, wire live `path`, then add
+symbol catalog and demand-shaped generic adjacency. Next: wire live `path` over the demand source, then add
 demand-driven refinement.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
@@ -83,9 +83,22 @@ demand-driven refinement.
   chronology. Seven tests bring exact discovery to **1,112 tests**. Existing full/store projections deliberately
   retain their first-row behavior until all twins can move together, so no cache/schema bump or output change is
   claimed. No command-level query-locality claim is made yet.
-- **Next:** Slice 6B2, build demand-shaped forward adjacency over `IFactGraphView`, preserving one-hop dispatch
-  and moving the total generic-expansion budget to the query rather than the global corpus; then wire live
-  `path` with locality counters before demand-driven exact refinement.
+- **Slice 6B2:** query-owned `IForwardCallSource` and `DemandMonomorphizedCallSource` now build only requested
+  forward adjacency over `IFactGraphView`. They reuse the caller-local projection and monomorphizer primitives,
+  preserve the existing one-hop dispatch engine, move the total generic-expansion budget out of the global
+  corpus and into each query, retain base edges on cap/budget/malformed-binding fallback, and always apply
+  semantic factory bridges. Grouped diagnostics disclose read locality, precision, fallback, and exact budget
+  overshoot without a positional-parameter blob. Factory type resolution is arity-preserving for nested generic
+  and tuple arguments. Tree, graph-hazard, and impact cache schemas advance for the same-input/different-output
+  derivation change. Twenty-two tests bring exact discovery to **1,134 tests**. The demand source remains
+  deliberately dormant at command level until the live `path` wiring slice.
+- **macOS suite gate:** canonical temp roots prevent NuGet from seeing `/var` and `/private/var` as two copies of
+  one referenced project; the resident equivalence fixture uses deterministic one-at-a-time project loading;
+  and `mini-ci.ps1` caps outer TUnit workers at two on macOS because Buildalyzer already parallelizes projects.
+  The full **1,134-test** suite improved from **17m22s** (one 998s outlier) to **3m28s**, with 1,133 pass, one
+  intentional skip, zero failures, and a 32.2s slowest test.
+- **Next:** Slice 6B3, wire live `path` to the demand source with locality counters before demand-driven exact
+  refinement.
 
 ## Why — the workflow that makes this the target
 

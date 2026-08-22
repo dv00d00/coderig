@@ -19,19 +19,24 @@ internal static class QueryCacheKeys
     // deliberate logic/schema change, which is the honest signal. The cost is discipline: a derivation
     // change with no matching bump serves stale (same tradeoff the tree/hazard keys have always carried).
     internal const int EpSchema = 1;
+
     // v1->v2: TraceNode gained TruncationCause (no stale conflated seen flags); v2->v3: the BOUNDED reach-input
     // loader now carries reference_facts.EnclosingScopes (it never selected the column), so the cached effects
     // gain the lexical-scope observations — lock_held_across_effect / transaction_spans_effect — that were
     // silently absent on the SQL fast path. Same store, same rules, MORE observations: a warm v2 blob would
     // keep serving the pre-fix effects (and, through DeriveCommand.HazardFindings, the mis-tiered race_window /
     // lazy_init classification the span observations drive) forever.
-    internal const int TreeSchema = 3;
+    // v3->v4: whole-graph monomorphization no longer has a corpus-global instantiation cap, and generic-
+    // factory candidate resolution now preserves containing-type arity; both change same-store tree reach.
+    internal const int TreeSchema = 4;
 
     // v1->v2 EnclosingGuards; v2->v3 lazy_init_race lock-enclosed tier; v3->v4 the n_plus_1 read gate gained
     // object_store + the `execute` operation (a BUILTIN-rules edit, which the rulesHash — computed over the
     // loaded rule FILES — does not see, so without this bump a warm cache would keep serving the old 175).
     internal const int HazardEffectsSchema = 4;
-    internal const int GraphHazSchema = 1;
+
+    // v1->v2: remove the corpus-global generic-instantiation cap and preserve generic-factory type arity.
+    internal const int GraphHazSchema = 2;
 
     // The FINDING-VIEW payload/logic version: how the hazard-augmented effect set is CLASSIFIED and PROJECTED
     // into displayed findings (the /api/hazards mark stream, the derive Hazards/Amplification split), as opposed
@@ -46,7 +51,8 @@ internal static class QueryCacheKeys
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)
     // added to the payload — a warm v4 blob decodes with empty amplification lists and would silently render a
     // newly-looped effect as "no change".
-    internal const int ImpactSchema = 5;
+    // v5->v6: remove the global mono cap and preserve factory type arity in both shaped graphs in the diff.
+    internal const int ImpactSchema = 6;
 
     // The composite token the CLIENT keys its cache by (hashed with the rules fingerprint in /api/meta). It
     // folds in EVERY per-artifact schema version, so bumping ANY one above also moves the client's derivation

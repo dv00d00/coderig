@@ -111,18 +111,18 @@ public static class GenericMonomorphizer
                     return;
                 }
 
-                foreach (var e in bodyEdges)
-                {
-                    var newReceiver = e.ReceiverType is null ? null : GenericSubstitution.Substitute(e.ReceiverType, map);
-                    clonedEdges.Add(
-                        e with
-                        {
-                            Caller = newCaller,
-                            Callee = RedirectClonedCallee(e, inst, instIds),
-                            ReceiverType = newReceiver,
-                        }
-                    );
-                }
+                clonedEdges.AddRange(
+                    CloneCallerEdges(
+                        bodyEdges,
+                        newCaller,
+                        inst,
+                        map,
+                        candidate =>
+                            instIds.Contains(
+                                MonomorphizedNodeId.For(candidate.MethodId, candidate.DeclaringBinding, candidate.MethodBinding)
+                            )
+                    )
+                );
             }
         }
 
@@ -151,10 +151,37 @@ public static class GenericMonomorphizer
     //   - an edge whose binding tokens RESOLVE (against this instantiation) to an inventoried instantiation
     //     -> that nested instantiation node;
     //   - otherwise the original callee (non-generic, unresolved, or un-inventoried -> sound CHA fallback).
+    public static IReadOnlyList<CallEdge> CloneCallerEdges(
+        IReadOnlyList<CallEdge> baseEdges,
+        string newCaller,
+        GenericInstantiationInventory.GenericInstantiation bindingContext,
+        IReadOnlyDictionary<string, string> typeParameterMap,
+        Func<GenericInstantiationInventory.GenericInstantiation, bool> admitNested
+    )
+    {
+        var cloned = new List<CallEdge>(baseEdges.Count);
+        foreach (var edge in baseEdges)
+        {
+            var newReceiver = edge.ReceiverType is null
+                ? null
+                : GenericSubstitution.Substitute(edge.ReceiverType, typeParameterMap.Keys.ToArray(), typeParameterMap.Values.ToArray());
+            cloned.Add(
+                edge with
+                {
+                    Caller = newCaller,
+                    Callee = RedirectClonedCallee(edge, bindingContext, admitNested),
+                    ReceiverType = newReceiver,
+                }
+            );
+        }
+
+        return cloned;
+    }
+
     private static string RedirectClonedCallee(
         CallEdge edge,
         GenericInstantiationInventory.GenericInstantiation inst,
-        HashSet<string> instIds
+        Func<GenericInstantiationInventory.GenericInstantiation, bool> admitNested
     )
     {
         // A call into the method's own lambda closure: re-point to the lambda's instantiation (same binding).
@@ -163,36 +190,51 @@ public static class GenericMonomorphizer
             return MonomorphizedNodeId.For(edge.Callee, declaringBinding: inst.DeclaringBinding, methodBinding: inst.MethodBinding);
         }
 
-        var declTokens = GenericSubstitution.ParseBindingTokens(edge.DeclaringTypeArgBinding);
-        var methTokens = GenericSubstitution.ParseBindingTokens(edge.MethodTypeArgBinding);
-        if (declTokens.Count == 0 && methTokens.Count == 0)
-        {
-            return edge.Callee; // non-generic edge
-        }
-
-        var declaring = GenericSubstitution.ResolveTokens(
-            declTokens,
+        var candidate = ResolveInstantiation(
+            edge,
             enclosingDeclaringBinding: inst.DeclaringBinding,
             enclosingMethodBinding: inst.MethodBinding
         );
-        var method = GenericSubstitution.ResolveTokens(
-            methTokens,
-            enclosingDeclaringBinding: inst.DeclaringBinding,
-            enclosingMethodBinding: inst.MethodBinding
-        );
-        if (declaring is null || method is null)
+        if (candidate is null)
         {
-            return edge.Callee; // a forwarded token didn't resolve here -> leave the callee CHA
+            return edge.Callee;
         }
 
-        var candidate = MonomorphizedNodeId.For(edge.Callee, declaringBinding: declaring, methodBinding: method);
-        return instIds.Contains(candidate) ? candidate : edge.Callee;
+        return admitNested(candidate)
+            ? MonomorphizedNodeId.For(candidate.MethodId, candidate.DeclaringBinding, candidate.MethodBinding)
+            : edge.Callee;
     }
 
     // The instantiation node an ORIGINAL edge should be redirected to, or null to leave it at base. Only an
     // edge whose own binding is FULLY CONCRETE (resolves against an empty enclosing context) and matches an
     // inventory instantiation is redirected.
     private static string? IncomingRedirect(CallEdge edge, HashSet<string> instIds)
+    {
+        var instantiation = ResolveInstantiation(
+            edge,
+            enclosingDeclaringBinding: Array.Empty<string>(),
+            enclosingMethodBinding: Array.Empty<string>()
+        );
+        if (instantiation is null)
+        {
+            return null; // forwarded/unresolved -> the caller's clone handles it
+        }
+
+        var candidate = MonomorphizedNodeId.For(
+            instantiation.MethodId,
+            declaringBinding: instantiation.DeclaringBinding,
+            methodBinding: instantiation.MethodBinding
+        );
+        return instIds.Contains(candidate) ? candidate : null;
+    }
+
+    // The one binding resolver shared by whole-graph materialization and demand-shaped adjacency.
+    // Null means non-generic or unresolved and therefore leaves the original base edge intact.
+    public static GenericInstantiationInventory.GenericInstantiation? ResolveInstantiation(
+        CallEdge edge,
+        IReadOnlyList<string> enclosingDeclaringBinding,
+        IReadOnlyList<string> enclosingMethodBinding
+    )
     {
         var declTokens = GenericSubstitution.ParseBindingTokens(edge.DeclaringTypeArgBinding);
         var methTokens = GenericSubstitution.ParseBindingTokens(edge.MethodTypeArgBinding);
@@ -201,23 +243,27 @@ public static class GenericMonomorphizer
             return null;
         }
 
-        var declaring = GenericSubstitution.ResolveTokens(
-            declTokens,
-            enclosingDeclaringBinding: Array.Empty<string>(),
-            enclosingMethodBinding: Array.Empty<string>()
-        );
-        var method = GenericSubstitution.ResolveTokens(
-            methTokens,
-            enclosingDeclaringBinding: Array.Empty<string>(),
-            enclosingMethodBinding: Array.Empty<string>()
-        );
-        if (declaring is null || method is null)
+        var declaring = GenericSubstitution.ResolveTokens(declTokens, enclosingDeclaringBinding, enclosingMethodBinding);
+        var method = GenericSubstitution.ResolveTokens(methTokens, enclosingDeclaringBinding, enclosingMethodBinding);
+        return declaring is null || method is null
+            ? null
+            : new GenericInstantiationInventory.GenericInstantiation(edge.Callee, declaring, method);
+    }
+
+    public static IReadOnlyDictionary<string, string> BuildTypeParameterMap(
+        GenericInstantiationInventory.GenericInstantiation inst,
+        Func<string, IReadOnlyList<string>> typeParamNamesFor,
+        string? containingType
+    )
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (containingType is not null)
         {
-            return null; // forwarded/unresolved -> the caller's clone handles it
+            ZipInto(map, names: typeParamNamesFor(containingType), binding: inst.DeclaringBinding, methodWins: false);
         }
 
-        var candidate = MonomorphizedNodeId.For(edge.Callee, declaringBinding: declaring, methodBinding: method);
-        return instIds.Contains(candidate) ? candidate : null;
+        ZipInto(map, names: typeParamNamesFor(inst.MethodId), binding: inst.MethodBinding, methodWins: true);
+        return map;
     }
 
     // Merged type-param NAME -> concrete map for an instantiation: declaring-type params (zipped to the
@@ -230,14 +276,8 @@ public static class GenericMonomorphizer
         Dictionary<string, string?> containingTypeOf
     )
     {
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (containingTypeOf.TryGetValue(inst.MethodId, out var containingType) && containingType is not null)
-        {
-            ZipInto(map, names: typeParamNamesFor(containingType), binding: inst.DeclaringBinding, methodWins: false);
-        }
-
-        ZipInto(map, names: typeParamNamesFor(inst.MethodId), binding: inst.MethodBinding, methodWins: true);
-        return map;
+        containingTypeOf.TryGetValue(inst.MethodId, out var containingType);
+        return new Dictionary<string, string>(BuildTypeParameterMap(inst, typeParamNamesFor, containingType), StringComparer.Ordinal);
     }
 
     private static void ZipInto(Dictionary<string, string> map, IReadOnlyList<string> names, IReadOnlyList<string> binding, bool methodWins)

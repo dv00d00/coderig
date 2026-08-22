@@ -15,7 +15,8 @@ namespace Rig.Domain.Functions;
 //     didn't bind — those need transitive resolution when the caller is monomorphized (a later refinement);
 //     v1 SKIPS the edge and the method stays CHA (the sound fallback). ~92% of bindings are fully concrete.
 //   - Covers BOTH method generics (MethodTypeArgBinding) AND declaring-type generics (DeclaringTypeArgBinding).
-//   - Capped per-method and in total; over-cap methods drop ALL their instantiations and stay CHA (disclosed).
+//   - Capped per-method; over-cap methods drop ALL their instantiations and stay CHA (disclosed). There is
+//     deliberately no corpus-global cap: unrelated generic callers must not change another caller's answer.
 public static class GenericInstantiationInventory
 {
     // One reachable generic-method instantiation. Keyed by callee method id + its concrete declaring-type
@@ -24,14 +25,14 @@ public static class GenericInstantiationInventory
     // type lists (e.g. ["MedDBase…BillingRuleEntity", "int"]).
     public sealed record GenericInstantiation(string MethodId, IReadOnlyList<string> DeclaringBinding, IReadOnlyList<string> MethodBinding);
 
-    // The inventory plus the methods that were CAPPED (too many distinct instantiations, or total cap hit) —
+    // The inventory plus the methods that were CAPPED (too many distinct instantiations) —
     // those contribute ZERO instantiations and remain CHA at materialization.
     public sealed record InstantiationInventoryResult(
         IReadOnlyList<GenericInstantiation> Instantiations,
         IReadOnlyList<string> CappedMethods
     );
 
-    public static InstantiationInventoryResult Build(FactGraphData graph, int maxPerMethod = 50, int maxTotal = 100_000)
+    public static InstantiationInventoryResult Build(FactGraphData graph, int maxPerMethod = 50)
     {
         // Distinct instantiations grouped by method, deduped by full key (method + both bindings).
         var byMethod = new Dictionary<string, Dictionary<string, GenericInstantiation>>(StringComparer.Ordinal);
@@ -168,28 +169,14 @@ public static class GenericInstantiationInventory
             }
         }
 
-        // Apply the TOTAL cap deterministically: flatten in stable order, take up to maxTotal, and record
-        // any method that contributes an instantiation beyond the cut as capped (it stays CHA).
-        var ordered = byMethod
+        var kept = byMethod
             .Values.SelectMany(distinct => distinct.Values)
             .OrderBy(i => i.MethodId, StringComparer.Ordinal)
             .ThenBy(i => string.Join(",", i.DeclaringBinding), StringComparer.Ordinal)
             .ThenBy(i => string.Join(",", i.MethodBinding), StringComparer.Ordinal)
             .ToList();
 
-        var kept = new List<GenericInstantiation>(Math.Min(ordered.Count, maxTotal));
-        foreach (var instantiation in ordered)
-        {
-            if (kept.Count >= maxTotal)
-            {
-                capped.Add(instantiation.MethodId);
-                continue;
-            }
-
-            kept.Add(instantiation);
-        }
-
-        // A method partially cut by the total cap also has its kept instantiations dropped — capped means CHA.
+        // A method over the local cap contributes no partial precision — capped means CHA.
         if (capped.Count > 0)
         {
             kept = kept.Where(i => !capped.Contains(i.MethodId)).ToList();

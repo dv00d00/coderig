@@ -188,4 +188,16 @@ public sealed class GenericInstantiationInventoryTests
             .Instantiations.Select(i => i.MethodId)
             .ShouldBe(first.Instantiations.Select(i => i.MethodId).OrderBy(m => m, StringComparer.Ordinal));
     }
+
+    [Test]
+    public void Build_has_only_the_local_per_method_limit_not_a_corpus_global_limit()
+    {
+        var parameters = typeof(GenericInstantiationInventory)
+            .GetMethod(nameof(GenericInstantiationInventory.Build))!
+            .GetParameters()
+            .Select(parameter => parameter.Name)
+            .ToArray();
+
+        parameters.ShouldBe(["graph", "maxPerMethod"]);
+    }
 }
