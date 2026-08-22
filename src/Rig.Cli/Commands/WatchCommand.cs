@@ -33,6 +33,13 @@ internal static class WatchCommand
         {
             Description = "Cold-boot the resident index, print the status line, and exit (no watching).",
         };
+        var noServe = new Option<bool>("--no-serve")
+        {
+            Description =
+                "Maintain live facts for this process's own stdin only — do not publish the query endpoint, and do not "
+                + "refuse to start when another resident index already owns this directory. For deliberately running a "
+                + "second host; a resident index costs GBs of RAM, so this is not the default.",
+        };
         var query = new Option<string?>("--query")
         {
             Description = "Answer one query against the booted resident facts (e.g. --query \"reaches Program.Main\"). "
@@ -60,6 +67,7 @@ internal static class WatchCommand
             rules,
             once,
             query,
+            noServe,
             restore,
         };
         cmd.SetAction(pr =>
@@ -72,6 +80,7 @@ internal static class WatchCommand
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         once: pr.GetValue(once),
                         query: pr.GetValue(query),
+                        noServe: pr.GetValue(noServe),
                         restore: pr.GetValue(restore),
                         output: output,
                         error: error,
@@ -87,6 +96,7 @@ internal static class WatchCommand
         IReadOnlyList<string> extraRules,
         bool once,
         string? query,
+        bool noServe,
         bool restore,
         TextWriter output,
         TextWriter error,
@@ -100,6 +110,25 @@ internal static class WatchCommand
         // The dtb cache is NOT optional garnish: without it the cold boot pays a full MSBuild pass
         // (see AnalyzeRetainingWorkspaceAsync's note). Same location `index` uses, so they share hits.
         var buildCacheDir = Path.Combine(StoreLayout.RigDir(workingDirectory), "dtb-cache");
+
+        // OWNERSHIP, CHECKED BEFORE THE COLD BOOT — and the ordering is the whole point. A resident index costs
+        // 10.8 GB at boot and ~19 GB after an edit+reconcile on a 227-project solution, so discovering the clash
+        // AFTER analysing would already have spent the thing the check exists to protect. Refusing here costs
+        // nothing.
+        //
+        // Two hosts on one directory is not a supported configuration: both would bind (the endpoint allows
+        // several listener instances so one stays armed while another is served), whichever accepts first would
+        // answer, and if they booted with different rules their answers would differ with no way for a client to
+        // tell. `--no-serve` is the deliberate escape hatch. `--once` never publishes an endpoint, so it never
+        // clashes.
+        if (!once && !noServe && LiveQueryTransport.ServerExists(LiveQueryTransport.PipeNameFor(workingDirectory)))
+        {
+            error.WriteLine($"rig: a resident index is already watching {workingDirectory}");
+            error.WriteLine($"     (endpoint {LiveQueryTransport.EndpointPath(LiveQueryTransport.PipeNameFor(workingDirectory))})");
+            error.WriteLine("");
+            error.WriteLine("     Stop it first, or pass --no-serve to run a second host that maintains facts but does not answer queries.");
+            return 2;
+        }
 
         output.WriteLine($"watch: {solutionPath}");
         var bootWatch = Stopwatch.StartNew();
@@ -160,7 +189,22 @@ internal static class WatchCommand
             // stale. See LiveQueryTransport.
             // TryStart, not Start: a query endpoint that cannot be published must not cost the resident loop.
             // The host still maintains live facts and still answers its own stdin; it just says so.
-            await using var server = LiveQueryServer.TryStart(workingDirectory, host.ServeAsync, output);
+            //
+            // Re-checked here as well as pre-boot: two hosts started within the same boot window would both
+            // have passed the earlier probe. This narrows that race to the width of a single probe rather than
+            // the width of a cold boot. It cannot close it entirely, and a host that loses the race declines to
+            // serve rather than binding alongside.
+            var owned = !noServe && !LiveQueryTransport.ServerExists(LiveQueryTransport.PipeNameFor(workingDirectory));
+            await using var server = owned ? LiveQueryServer.TryStart(workingDirectory, host.ServeAsync, output) : null;
+            if (!owned)
+            {
+                output.WriteLine(
+                    noServe
+                        ? "watch: NOT serving (--no-serve) — one-shot `rig reaches/path/callers/tree` will read the .rig store. This host answers its own stdin only."
+                        : "watch: NOT serving — another resident index claimed this directory's endpoint while this one was booting. This host answers its own stdin only."
+                );
+            }
+
             if (server is not null)
             {
                 output.WriteLine(

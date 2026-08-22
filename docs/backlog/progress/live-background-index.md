@@ -1150,3 +1150,30 @@ unrelated to what it guards teaches people to re-run it, which is worse than no 
    because the cap's failure mode was a silent stale answer through an accept gap). Two clients could then be
    answered by hosts booted with different rules. Disclosed only in the host log; a single-instance cap that
    fails LOUDLY is the alternative and needs a decision.
+
+### Two `rig watch` in one directory: refuse to boot (decided 2026-08-22)
+
+The reported trade — "single-instance cap vs the always-armed listener" — was FALSE. `MaxServerInstances = 4`
+exists so a listener stays armed while another is being served; that is a within-process concern. The multi-host
+problem is separate, and `Start` already DETECTED the clash and logged it before binding anyway.
+
+The decisive argument is not nondeterministic routing, it is memory: a resident host is **10.8 GB at boot and
+~19 GB after an edit + reconcile** on a 227-project solution. Two by accident is 21-38 GB on a 64 GB box, so
+"warn and carry on" is the wrong shape whichever host answers.
+
+So a second `rig watch` in the same working directory now **refuses to boot**, and the ORDERING is the point —
+the check runs before the cold analyze, so a clash costs nothing:
+
+```
+$ rig watch RuntimeIntelligenceGraph.slnx
+rig: a resident index is already watching C:\Git\coderig
+     (endpoint \.\pipe\rig-live-5ba1ca0aff1bc0e8)
+
+     Stop it first, or pass --no-serve to run a second host that maintains facts but does not answer queries.
+exit 2
+```
+
+`--no-serve` is the deliberate escape hatch (facts for this process's own stdin, no endpoint published, no
+refusal). `--once` never publishes an endpoint, so it never clashes. The probe is repeated just before binding,
+which narrows the two-hosts-booting-simultaneously race from the width of a cold boot to the width of one probe —
+it cannot close it, and the loser declines to serve rather than binding alongside.
