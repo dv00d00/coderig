@@ -16,7 +16,9 @@
 | `rig effects-diff <a> <b> [--only p…] [--label s] [--format tsv]` | Symmetric difference of the forward-reachable EFFECT-SETS of two entry points — what one touches that the other doesn't. `--only <provider[:op]>` (repeatable) scopes it (e.g. write-set divergence `--only llblgen:write --only llblgen:bulk_write --only llblgen:delete`); `--label` names the pair in output. EP-vs-EP within one store (vs `impact`, which is commit-vs-commit). |
 | `rig dispatch-fans [--top n] [--cause absent-receiver\|base-typed-receiver\|external-or-unbound\|type-parameter] [--format tsv]` | Diagnostic: dispatch hubs whose receiver did NOT narrow the CHA fan-out, ranked + classified by cause — the residual over-approximation surface (a calibration aid for receiver narrowing, not an everyday query). |
 | `rig graph` | Rebuild the derived call-graph views (`call_edges`+`dispatch_edges`) from facts — the fast SQL traversal path. Idempotent, no rescan. **Now run automatically at the tail of `index`** (opt out: `index --no-graph`); run standalone after editing `handoffDispatchers`/factory rules (no re-index needed). |
-| `rig dead [--lib] [--include-dispatch] [--all] [--root pat…] [--rules p…] [--format tsv]` | Unreachable first-party methods. Report-only. ⚠️ **Currently DISABLED** (unwired in Root.cs — errors "not matched"). See SKILL.md. |
+| `rig serve [--port n] [--no-open]` | Serve the store-backed interactive web tree/effects explorer for the current `.rig` store (default port 5050). This is not the resident live-index host. |
+| `rig watch <sln\|slnx> [--rules p…] [--once] [--query text] [--no-serve] [--restore]` | Cold-load and retain a workspace, apply saved `.cs` edits to in-memory facts, and serve live `reaches`/`path`/`callers`/`tree` queries. Writes no store. `--once` boots then exits; `--query` answers once; `--no-serve` permits a second stdin-only host; `--restore` is opt-in for an unrestored tree. |
+| `rig dead <args>` | Explaining disabled stub. The former implementation used the all-hops dispatch superset and is unsound against the one-hop traversal engine. Approximate with `rig callers <method> --roots`. |
 | `rig refs <pat> [--first-party] [--kind <refkind>] [--limit n]` | Reference facts to a symbol (invocation/methodGroup/ctor/typeUse/throw/attributeUse). |
 | `rig symbols <pat> [--kind <k>] [--limit n] [--no-lambdas]` | Declared symbols (method/type/property/field/event). `--no-lambdas` drops compiler `~λ`/`<>c` noise; when truncated prints "showing N of TOTAL". |
 | `rig show <pat> [--context n] [--limit n]` | Source text of a matched declaration (`Line`..`EndLine`), with a line-number gutter. **Attribution is enforced:** the working tree is read only when the store is clean, `SourceCommit` == HEAD, and that file is unmodified; otherwise the indexed revision is read from git and marked `(from git <sha>)`. If neither is possible it prints `file:line` plus a one-line reason rather than lines it cannot attribute. Declarations over 400 lines are truncated with an explicit marker. |
@@ -38,9 +40,9 @@ not touch.
 
 | option | accepted by | rejected by |
 |---|---|---|
-| `--rules` | `index`, `derive`, `reaches`, `tree`, `callers`, `path`, `impact`, `entrypoints`, `dispatch-fans` | `symbols`, `refs`, `files`, `runs`, `show`, `di`, `profile` |
+| `--rules` | `index`, `watch`, `derive`, `reaches`, `tree`, `callers`, `path`, `impact`, `entrypoints`, `dispatch-fans` | `serve`, `symbols`, `refs`, `files`, `runs`, `show`, `di`, `profile` |
 | `--store` | every read command | `runs` (enumerates ALL stores by design), `profile` |
-| `--format` | `derive`, `reaches`, `tree`, `callers`, `path`, `impact`, `entrypoints`, `effects-diff`, `show` | `symbols`, `refs`, `files`, `runs`, `di`, `profile` |
+| `--format` | `derive`, `reaches`, `tree`, `callers`, `path`, `impact`, `entrypoints`, `effects-diff`, `show` | `watch`, `serve`, `symbols`, `refs`, `files`, `runs`, `di`, `profile` |
 
 So `rig symbols "Foo" --rules ./rig.rules.json` fails with `Unrecognized command or argument '--rules'`, and
 that is correct — drop the flag. Rule of thumb: **if the command derives, it takes `--rules`; if it just

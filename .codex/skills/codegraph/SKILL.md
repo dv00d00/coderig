@@ -1,140 +1,106 @@
 ---
 name: codegraph
-description: Work on the codegraph Runtime Intelligence Graph repo. Use when modifying this repository's .NET 10 CLI, Roslyn/MSBuild analysis, declarative rules, SQLite storage, playground fixtures, tests, docs/progress, or handover notes.
+description: Work on the codegraph Runtime Intelligence Graph repo. Use when modifying this repository's .NET 10 CLI, Roslyn/MSBuild analysis, declarative rules, immutable SQLite stores, live resident indexing, web explorer, playground fixtures, tests, backlog docs, or the in-repo rig operator skill.
 ---
 
 # Codegraph
 
-## Core Direction
+Read the repository-root `AGENTS.md` before acting. It contains the current orchestration, build, test,
+dispatch, cache-invalidation, and MedDBase-calibration rules; do not duplicate or override them here.
 
-Keep this repo CLI-first. The product is `rig`, a .NET 10 command-line analyzer
-that indexes .NET solutions into immutable SQLite runs and reports entrypoints,
-effects, DI facts, source inventory, and bounded callgraphs.
+## Sources of truth
 
-Do not drift into MCP servers, dashboards, or alternate projections unless the
-user explicitly asks. Human-readable output is the development default; add JSON
-or terse modes only as separate projections.
+Use current code and navigation, not archived milestone prose:
 
-Preserve the architecture split:
+- CLI registration and command descriptions: `src/Rig.Cli/CommandLine/Root.cs`.
+- Per-command options: each command's `Build` method or `dotnet run --project src/Rig.Cli -- <command> --help`.
+- Product overview and concise command table: `README.md`.
+- Documentation map: `docs/README.md`; vocabulary: `docs/ubiquitous-language.md`.
+- Work state: files under `docs/backlog/{todo,progress,done}/`.
+- Operator-facing `rig` skill: `.agents/skills/rig/{SKILL.md,REFERENCE.md}`.
 
-- Roslyn AST and config parser output are ground truth.
-- Callgraphs, effects, observations, and stored rows are derived state.
-- Detection should be rule-first and composable. Avoid bespoke detector creep
-  when a declarative rule or small shared primitive will work.
+When the sources disagree, treat `Root.cs` and the command builders as the executable API, then update
+the docs or skill that drifted.
 
-## Repo Map
+## Architecture
 
-- `src/Rig.Cli` - CLI executable, command routing, and human-readable rendering.
-- `src/Rig.Analysis` - Roslyn/MSBuild loading, extraction, rules, and callgraph logic.
-- `src/Rig.Domain` - dependency-free records such as `AnalysisResult`, `EffectInfo`, and `CallGraphInfo`.
-- `src/Rig.Storage` - EF Core/SQLite context, entities, focused read queries, writes.
-- `tests/Rig.Tests` - fast unit tests plus a small number of Roslyn integration smoke tests.
-- `playgrounds/EntryPointEffects` - owned, fast playground fixture with local package metadata.
-- `playgrounds/OrchardCore/rig.rules.json` and `playgrounds/eShop/rig.rules.json` - large external playground rules only; source trees are intentionally ignored.
-- `docs/progress.md` and `docs/handover.md` - living coordination artifacts.
+Preserve the two-stage model:
 
-## Commands
+1. Roslyn/MSBuild extraction writes immutable, rule-agnostic facts.
+2. Query-time derivation builds effects, observations, hazards, dispatch, and reachability without Roslyn.
 
-Use explicit solution paths. The VS Code setting disables default solution
-selection; do not rely on editor or extension auto-discovery.
+Semantic binding belongs to Roslyn facts. Whole-program dispatch is an explicit over-approximation and
+forward traversals use one-hop dispatch. Every derived effect's enclosing id must be a reachable graph
+node; property, field, and event ids are not graph nodes.
 
-The packed app may be installed as a global .NET tool and accessible as `rig`.
-When it is available, use it for quick manual checks:
+The durable tier is the commit-scoped SQLite store. The live tier retains a Roslyn workspace and facts in
+memory for working-tree queries; it does not replace immutable stores or `impact`.
 
-```powershell
-rig index playgrounds/EntryPointEffects/EntryPointEffects.slnx
-rig entrypoints
-rig effects
-rig callgraph 6 --full
-rig files --skipped
-rig profile validate
-```
+## Current CLI surface
 
-When validating source changes, prefer build/test commands and `dotnet run`
-from the working tree so the current checkout is exercised:
+Registered command families are:
 
-```powershell
-dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false
+- Build/store: `index`, `graph`, `runs`.
+- Fact/source inspection: `di`, `symbols`, `refs`, `show`, `files`, `profile`.
+- Traversal: `path`, `tree`, `callers`, `reaches`, `dispatch-fans`.
+- Derivation/diff: `derive`, `effects-diff`, `entrypoints`, `impact`.
+- Hosts: `serve`, `watch`.
+- `dead` is an explaining disabled stub until it uses the one-hop traversal engine.
+
+Do not revive removed `mine`, `effects`, `trace`, or `callgraph` commands. Use `derive`,
+`reaches`, `tree`, `callers`, and `path`.
+
+`watch` currently serves live `reaches`, `path`, `callers`, and `tree` queries. `derive` remains
+store-backed, and `impact` compares two immutable stores. Confirm the exact live subset in
+`src/Rig.Cli/Live` before extending it.
+
+## Repository map
+
+- `src/Rig.Cli`: command routing, renderers, live host/client, web API, and browser assets.
+- `src/Rig.Analysis`: solution loading, Roslyn extraction, rules, and resident workspace.
+- `src/Rig.Domain`: dependency-light fact records and derivation/traversal functions.
+- `src/Rig.Storage`: SQLite schema, focused reads/writes, and graph materialization.
+- `tests/Rig.Tests`: TUnit tests and owned integration fixtures.
+- `playgrounds/`: owned calibration fixtures and ignored external source checkouts.
+- `docs/backlog/`: current work tracking.
+
+Keep Roslyn dependencies out of `Rig.Storage`. Prefer declarative rules and shared derivation primitives
+over framework-specific detector code.
+
+## Change checks
+
+- Extraction change: verify fact parity and re-index real calibration data.
+- Derivation or cached payload change: bump the relevant `QueryCacheKeys.*Schema` constant and leave the
+  one-line version trail described in `AGENTS.md`.
+- Traversal/dispatch change: exercise one-hop dispatch and receiver narrowing tests.
+- Live change: compare live answers with store-backed answers using anti-vacuous set equality; do not use
+  counts alone.
+- Browsable report, ranking, diff, or graph: decide and record the web follow-on at design time.
+
+## Build and test
+
+The test stack is TUnit on Microsoft.Testing.Platform:
+
+```bash
 dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false
-dotnet run --project src/Rig.Cli -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
-dotnet run --project src/Rig.Cli -- entrypoints
-dotnet run --project src/Rig.Cli -- effects
-dotnet run --project src/Rig.Cli -- callgraph 6 --full
-dotnet run --project src/Rig.Cli -- files --skipped
-dotnet run --project src/Rig.Cli -- profile validate
+dotnet test RuntimeIntelligenceGraph.slnx --no-build --no-restore /p:UseSharedCompilation=false
+dotnet run --project tests/Rig.Tests --no-build -- \
+  --treenode-filter "/*/*/<ClassName>/*"
 ```
 
-Use `/p:UseSharedCompilation=false` for build/test verification in this repo;
-it avoids intermittent compiler-server and Roslyn test hangs seen locally.
+Do not use `dotnet test --filter` for focused runs. Do not put MSBuild switches after the TUnit `--`.
+Use `scripts/mini-ci.ps1` for the final format, build, full-test, pack, and global-tool reinstall flow.
 
-## Testing Policy
+Tests authored for a new feature belong in a new `<Feature>Tests.cs`, not the shared
+`CliApplicationTests.cs`. Verify rendering assertions against actual `rig` output.
 
-Prefer many small focused tests for pure behavior:
+## Docs and skill maintenance
 
-- rule matching and glob matching
-- source-file classification
-- profile validation and rule merging
-- CLI argument errors
-- renderers and projections
+Update or add the relevant backlog card; the removed `docs/progress.md` and `docs/handover.md` are not
+valid targets.
 
-Keep Roslyn/MSBuild integration tests few and explicit. They should copy the
-owned `EntryPointEffects` playground to a fresh temp directory, restore there,
-and avoid sharing `obj`, `bin`, `.rig`, or SQLite files between tests.
+The canonical operator skill is `.agents/skills/rig`. Keep its command table aligned with actual help.
+The installed `~/.codex/skills/rig` copy is disposable: reinstall by deleting the destination directory
+and copying the canonical directory, as documented in `AGENTS.md`; never patch the installed copy.
 
-Do not use vendored public repos such as CleanArchitecture as unit or integration
-fixtures. Large real-world repos can be used manually or through ignored local
-playgrounds, with only their `rig.rules.json` files tracked.
-
-Current expected suite shape is small fast tests plus integration smoke tests,
-not one giant assertion file.
-
-## Rule Model
-
-Effect rules compose with AND across present predicates. OR is represented by
-parallel rules with the same output shape. Preserve overlap when it is useful
-evidence.
-
-Common rule fields:
-
-- `methods` - method names to match.
-- `declaringTypes` - method declaring type filter.
-- `receiverTypes` - receiver type/interface/base type filter.
-- `containingNamespaces`, `containingTypes`, `containingMethods` - contextual filters.
-- `resource` - resolver strategy such as `http_argument`, `string_argument`,
-  `ef_dbset_receiver`, `ef_query_root`, `ef_context_receiver`,
-  `ef_database_facade`, `receiver_type`, or `argument_type`.
-- `treatAsDispatch` - dispatch traversal rule, not an emitted effect.
-
-When adding a provider or framework, start with targeted JSON rules and shared
-matcher/resource primitives. Add custom extractor logic only when the rule model
-cannot represent the signal.
-
-## CLI Behavior
-
-Default callgraph mode is focused: only effect-reachable paths are printed, and
-BOUNDARY lines are hidden. Use `--full` when tests or debugging need the complete
-tree, including external and unresolved boundaries. Use `--summary` for a flat
-effect inventory.
-
-Keep output ASCII-terse and stable unless the user requests a presentation
-change. Existing tests often encode CLI text as a contract.
-
-## Storage
-
-Storage uses normalized EF Core/SQLite tables plus focused read queries. Preserve
-the pattern where CLI read commands load only the data they need. Avoid reviving
-full JSON blob reads for command paths.
-
-`src/Rig.Storage` should not gain Roslyn dependencies.
-
-## Docs And Handover
-
-For coherent slices, update `docs/progress.md`. Update `docs/handover.md` when
-the next agent needs new caveats, commands, architecture boundaries, or fixture
-policy. Keep these docs short and factual.
-
-## Git Hygiene
-
-The worktree may contain unrelated local files such as `.vscode/` or helper
-scripts. Do not stage or revert them unless the user explicitly asks. Before
-committing, inspect `git status --short` and stage only the intended slice.
+Before committing, inspect `git status --short` and stage only the intended slice.
