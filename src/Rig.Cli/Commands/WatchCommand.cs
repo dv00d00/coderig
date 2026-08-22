@@ -57,6 +57,12 @@ internal static class WatchCommand
                 + "when the tree has not been restored/built yet — an unrestored checkout resolves no "
                 + "references, so the compilation is effectively EMPTY and every answer is 0).",
         };
+        var verifyCascadeGate = new Option<bool>("--verify-cascade-gate")
+        {
+            Description =
+                "Verify each would-be body-only surface classification by re-extracting the cascade it would skip. "
+                + "A mismatch publishes the fresh coarse facts and permanently disables the gate for that project in this process.",
+        };
         var cmd = new Command(
             name: "watch",
             description: "Live background index: cold-analyze once retaining the workspace, then atomically publish each "
@@ -69,6 +75,7 @@ internal static class WatchCommand
             query,
             noServe,
             restore,
+            verifyCascadeGate,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -82,6 +89,7 @@ internal static class WatchCommand
                         query: pr.GetValue(query),
                         noServe: pr.GetValue(noServe),
                         restore: pr.GetValue(restore),
+                        verifyCascadeGate: pr.GetValue(verifyCascadeGate),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -98,6 +106,7 @@ internal static class WatchCommand
         string? query,
         bool noServe,
         bool restore,
+        bool verifyCascadeGate,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -145,7 +154,8 @@ internal static class WatchCommand
                 error: error,
                 watch: !once,
                 workingDirectory: workingDirectory,
-                restore: restore
+                restore: restore,
+                verifyCascadeGate: verifyCascadeGate
             );
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
@@ -283,8 +293,8 @@ internal static class WatchCommand
 // The resident loop, split from the command action so a test can drive it end-to-end (boot → disk
 // edit → poll) without a console. Owns the FileSystemWatcher, debounce and one publication worker.
 // `_gate` keeps status/query capture coherent with publication. Dependent reconciliation and derived-
-// artifact warming are explicit primitives: the watch loop does neither automatically, so a save burst
-// publishes exactly one eager generation and keeps its dirty disclosure until an explicit reconcile.
+// artifact warming are explicit primitives by default: the opt-in cascade verifier is the one mode that
+// reconciles before emitting its status, while ordinary watch keeps dirty debt until an explicit request.
 internal sealed class WatchHost : IAsyncDisposable
 {
     private static readonly TimeSpan DefaultDebounce = TimeSpan.FromMilliseconds(300);
@@ -295,6 +305,7 @@ internal sealed class WatchHost : IAsyncDisposable
     private readonly RuleSet _rules;
     private readonly string _workingDirectory;
     private readonly TimeSpan _debounce;
+    private readonly bool _verifyCascadeGate;
     private readonly Channel<string> _changes = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
@@ -329,7 +340,8 @@ internal sealed class WatchHost : IAsyncDisposable
         TextWriter output,
         TextWriter error,
         bool watch,
-        TimeSpan debounce
+        TimeSpan debounce,
+        bool verifyCascadeGate
     )
     {
         _index = index;
@@ -338,6 +350,7 @@ internal sealed class WatchHost : IAsyncDisposable
         _rules = rules;
         _workingDirectory = workingDirectory;
         _debounce = debounce;
+        _verifyCascadeGate = verifyCascadeGate;
         ProjectCount = index.CurrentSolution.ProjectIds.Count;
 
         if (!watch)
@@ -401,6 +414,9 @@ internal sealed class WatchHost : IAsyncDisposable
         // `rig watch --restore`: run the MSBuild Restore target before each design-time build. Off by
         // default, exactly as `rig index --restore` is.
         bool restore = false,
+        // Opt-in safety oracle: after each edit publication, reconcile through the private cascade
+        // verifier before the status line is emitted. Default watch remains lazy.
+        bool verifyCascadeGate = false,
         CancellationToken cancellationToken = default
     )
     {
@@ -418,7 +434,7 @@ internal sealed class WatchHost : IAsyncDisposable
             restore: restore,
             interner: interner
         );
-        var index = new ResidentIndex(workspace, baseFacts, solutionPath, rules, interner: interner);
+        var index = new ResidentIndex(workspace, baseFacts, solutionPath, rules, interner: interner, verifyCascadeGate: verifyCascadeGate);
         return new WatchHost(
             index,
             solutionPath,
@@ -427,7 +443,8 @@ internal sealed class WatchHost : IAsyncDisposable
             output,
             error ?? TextWriter.Null,
             watch,
-            debounce ?? DefaultDebounce
+            debounce ?? DefaultDebounce,
+            verifyCascadeGate
         );
     }
 
@@ -647,7 +664,8 @@ internal sealed class WatchHost : IAsyncDisposable
     }
 
     // The single worker: debounce a burst of watcher events into one atomic eager publication, then
-    // print the status with its persistent dirty disclosure. It deliberately does not reconcile or warm.
+    // print the status with its persistent dirty disclosure. Default mode does not reconcile or warm;
+    // verify mode reconciles under the same host gate before that status is visible.
     private async Task RunLoopAsync(CancellationToken cancellationToken)
     {
         var reader = _changes.Reader;
@@ -742,13 +760,30 @@ internal sealed class WatchHost : IAsyncDisposable
             try
             {
                 await _index.ApplyEditsAsync(edits, cancellationToken);
-                ReleasePublishedSnapshotCaches();
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 _output.WriteLine($"live: FAILED to apply {edits.Count}-file batch: {exception.Message}");
                 return 0;
             }
+
+            if (_verifyCascadeGate)
+            {
+                try
+                {
+                    await _index.ReconcileAsync(cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    // ApplyEdits already published a sound eager generation with explicit debt. A
+                    // verifier failure must not rewrite that as "no edit" or suppress its status;
+                    // retain the outstanding debt and disclose the failed optional oracle.
+                    _output.WriteLine(
+                        $"live: cascade verification FAILED after applying {edits.Count}-file batch: {exception.Message} — eager facts published; debt retained"
+                    );
+                }
+            }
+            ReleasePublishedSnapshotCaches();
 
             Interlocked.Add(ref _appliedFiles, edits.Count);
             _lastEditSeconds = watch.Elapsed.TotalSeconds;
@@ -761,8 +796,9 @@ internal sealed class WatchHost : IAsyncDisposable
         return edits.Count;
     }
 
-    // Explicit scheduler/test seam. Watcher publication never calls it automatically: dirty debt stays
-    // visible until a caller deliberately pays the cascade cost.
+    // Explicit scheduler/test seam. Default watcher publication never calls it automatically: dirty debt
+    // stays visible until a caller deliberately pays the cascade cost. Verify mode invokes the same index
+    // primitive directly under the host gate so its classification and oracle remain one gated operation.
     public async Task<bool> ReconcileAllAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
@@ -830,6 +866,12 @@ internal sealed class WatchHost : IAsyncDisposable
             segments.Add($"{unreconciled} project(s) unreconciled");
         }
 
+        var cascadeGateStatus = CascadeGateStatusSegment(snapshot);
+        if (cascadeGateStatus is not null)
+        {
+            segments.Add(cascadeGateStatus);
+        }
+
         segments.AddRange(CompilationHealthNotice.StatusSegments(snapshot.GetCompilationHealth(), IndexedFiles(snapshot)));
         if (Volatile.Read(ref _watcherOverflowed) != 0)
         {
@@ -847,6 +889,11 @@ internal sealed class WatchHost : IAsyncDisposable
         var body = $"{applied} file(s) applied | {string.Join(" | ", segments)}";
         return _lastEditSeconds < 0 ? body : $"{body} | last edit {_lastEditSeconds:F2}s";
     }
+
+    internal static string? CascadeGateStatusSegment(FactSnapshot snapshot) =>
+        snapshot.Surfaces.GateDisabledCount == 0
+            ? null
+            : $"cascade gate disabled for {snapshot.Surfaces.GateDisabledCount} project(s) after verification mismatch — coarse fallback active";
 
     // The population the file count is quoted against: the distinct paths this analysis actually
     // indexed. Memoized per immutable snapshot, because it is rebuilt on every status line and answer and MedDBase has ~10.5k

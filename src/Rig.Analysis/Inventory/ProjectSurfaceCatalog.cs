@@ -43,7 +43,8 @@ internal sealed record ProjectSurfacePartition(
     ProjectSurfaceShard MetaShard,
     string LastAcceptedSurfaceHash,
     bool IsClassifiable,
-    bool RequiresCoarseReconciliation
+    bool RequiresCoarseReconciliation,
+    bool GateDisabled
 )
 {
     internal string Aggregate() => ProjectSurfaceBuilder.Aggregate(SourceShards.Values.Concat(GeneratedShards).Append(MetaShard));
@@ -66,6 +67,16 @@ internal sealed class ProjectSurfaceCatalog
     internal static ProjectSurfaceCatalog Empty { get; } = new(ImmutableDictionary<ProjectId, ProjectSurfacePartition>.Empty);
 
     internal IReadOnlyDictionary<ProjectId, ProjectSurfacePartition> Projects => _projects;
+
+    internal int GateDisabledCount => _projects.Count(pair => pair.Value.GateDisabled);
+
+    internal IReadOnlyCollection<string> GateDisabledProjectNames =>
+        _projects
+            .Values.Where(partition => partition.GateDisabled)
+            .Select(partition => partition.ProjectName)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
 
     internal static ProjectSurfaceCatalog Seed(Solution solution, IReadOnlyList<ProjectSurfaceSnapshot>? surfaces)
     {
@@ -153,7 +164,8 @@ internal sealed class ProjectSurfaceCatalog
                 meta.Length == 1 ? meta[0] : new ProjectSurfaceShard("", false, ""),
                 surface.SurfaceHash,
                 classifiable,
-                RequiresCoarseReconciliation: false
+                RequiresCoarseReconciliation: false,
+                GateDisabled: false
             );
         }
 
@@ -206,9 +218,10 @@ internal sealed class ProjectSurfaceCatalog
 
         var refreshed = partition with { GeneratedShards = refresh.GeneratedShards, MetaShard = refresh.MetaShard };
         var aggregate = refreshed.Aggregate();
-        state = string.Equals(aggregate, partition.LastAcceptedSurfaceHash, StringComparison.Ordinal)
-            ? SurfaceState.BodyOnly
-            : SurfaceState.Changed;
+        state =
+            !partition.GateDisabled && string.Equals(aggregate, partition.LastAcceptedSurfaceHash, StringComparison.Ordinal)
+                ? SurfaceState.BodyOnly
+                : SurfaceState.Changed;
         refreshed = refreshed with { LastAcceptedSurfaceHash = aggregate };
         if (state == SurfaceState.Changed)
         {
@@ -226,6 +239,19 @@ internal sealed class ProjectSurfaceCatalog
             if (builder.TryGetValue(projectId, out var partition) && partition.RequiresCoarseReconciliation)
             {
                 builder[projectId] = partition with { RequiresCoarseReconciliation = false };
+            }
+        }
+        return new ProjectSurfaceCatalog(builder.ToImmutable(), _unresolvedEmitterPaths);
+    }
+
+    internal ProjectSurfaceCatalog MarkGateDisabled(IEnumerable<ProjectId> projectIds)
+    {
+        var builder = _projects.ToBuilder();
+        foreach (var projectId in projectIds)
+        {
+            if (builder.TryGetValue(projectId, out var partition))
+            {
+                builder[projectId] = partition with { GateDisabled = true, RequiresCoarseReconciliation = false };
             }
         }
         return new ProjectSurfaceCatalog(builder.ToImmutable(), _unresolvedEmitterPaths);

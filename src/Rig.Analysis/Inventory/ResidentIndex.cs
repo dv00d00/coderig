@@ -35,6 +35,7 @@ internal sealed class ResidentIndex : IDisposable
     private readonly IDirtySetPolicy _cascadePolicy;
     private readonly ResidentFileExtractor _extractFiles;
     private readonly ResidentSurfaceRefresher _refreshSurface;
+    private readonly bool _verifyCascadeGate;
     private readonly ImmutableDictionary<string, ImmutableArray<DocumentId>> _documentsByPath;
 
     // Host-lifetime string interner shared by every re-extraction: a re-extracted generation's retained
@@ -56,7 +57,8 @@ internal sealed class ResidentIndex : IDisposable
         IDirtySetPolicy? cascadePolicy = null,
         StringInterner? interner = null,
         ResidentFileExtractor? extractFiles = null,
-        ResidentSurfaceRefresher? refreshSurface = null
+        ResidentSurfaceRefresher? refreshSurface = null,
+        bool verifyCascadeGate = false
     )
     {
         _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
@@ -68,6 +70,7 @@ internal sealed class ResidentIndex : IDisposable
         _interner = interner ?? StringInterner.CreateDefault();
         _extractFiles = extractFiles ?? SolutionAnalyzer.ExtractFromDocumentsByFileAsync;
         _refreshSurface = refreshSurface ?? SolutionAnalyzer.RefreshProjectSurfaceAsync;
+        _verifyCascadeGate = verifyCascadeGate;
         var documentsByPath = ImmutableDictionary.CreateBuilder<string, ImmutableArray<DocumentId>>(StringComparer.OrdinalIgnoreCase);
         foreach (var document in workspace.CurrentSolution.Projects.SelectMany(project => project.Documents))
         {
@@ -113,6 +116,8 @@ internal sealed class ResidentIndex : IDisposable
                 .ToArray();
         }
     }
+
+    public IReadOnlyCollection<string> CascadeGateDisabledProjects => CaptureSnapshot().Surfaces.GateDisabledProjectNames;
 
     // Base facts with every overlaid file's facts REPLACED (never appended). Recomputed lazily after
     // any edit/reconcile; callers get a consistent snapshot.
@@ -275,6 +280,7 @@ internal sealed class ResidentIndex : IDisposable
         var overlay = basis.Overlay;
         var states = basis.Delta.SurfaceStates.ToBuilder();
         var debt = basis.Dirty.PendingByOrigin.ToBuilder();
+        var wouldBeBodyOnly = new List<ProjectId>();
         var classified = false;
         foreach (var projectId in requested)
         {
@@ -312,7 +318,16 @@ internal sealed class ResidentIndex : IDisposable
                 // Once no contribution remains, the sticky coarse requirement is satisfied too.
                 catalog = catalog.MarkReconciled([projectId]);
             }
-            if (state == SurfaceState.BodyOnly && !catalog.Projects[projectId].RequiresCoarseReconciliation)
+            if (
+                state == SurfaceState.BodyOnly
+                && !catalog.Projects[projectId].RequiresCoarseReconciliation
+                && _verifyCascadeGate
+                && debt.ContainsKey(projectId)
+            )
+            {
+                wouldBeBodyOnly.Add(projectId);
+            }
+            else if (state == SurfaceState.BodyOnly && !catalog.Projects[projectId].RequiresCoarseReconciliation)
             {
                 debt.Remove(projectId);
             }
@@ -322,6 +337,61 @@ internal sealed class ResidentIndex : IDisposable
         if (!classified)
         {
             return false;
+        }
+
+        if (wouldBeBodyOnly.Count > 0)
+        {
+            var verifierDocuments = wouldBeBodyOnly.SelectMany(projectId => debt[projectId]).ToImmutableHashSet();
+            var verifierSlices = await ExtractAsync(basis.Solution, verifierDocuments, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var mismatches = ImmutableHashSet.CreateBuilder<ProjectId>();
+            foreach (var projectId in wouldBeBodyOnly)
+            {
+                foreach (var documentId in debt[projectId])
+                {
+                    var filePath = basis.Solution.GetDocument(documentId)?.FilePath;
+                    if (filePath is null)
+                    {
+                        throw new InvalidOperationException("Cascade verification cannot classify a debt document with no file path.");
+                    }
+
+                    var path = Path.GetFullPath(filePath);
+                    if (!verifierSlices.TryGetValue(path, out var fresh))
+                    {
+                        throw new InvalidOperationException($"Cascade verification returned no file-fact slice for '{path}'.");
+                    }
+                    var current = CascadeGateVerification.CurrentPathSlice(_baseResult, overlay, path);
+                    if (!CascadeGateVerification.Matches(current, fresh))
+                    {
+                        mismatches.Add(projectId);
+                        break;
+                    }
+                }
+            }
+
+            if (mismatches.Count > 0)
+            {
+                // The extraction was one batch over all would-be skipped debt. Installing all of its
+                // path slices is safe; ownership remains per-origin, so unrelated Unknown/Changed debt
+                // is retained even when it overlaps a freshly paid path.
+                overlay = overlay.SetItems(verifierSlices);
+                catalog = catalog
+                    .ReplaceEmitters(
+                        basis.Solution,
+                        verifierSlices.Values.SelectMany(slice => slice.ProjectSurfaces.IsDefault ? [] : slice.ProjectSurfaces)
+                    )
+                    .MarkGateDisabled(mismatches);
+                foreach (var projectId in mismatches)
+                {
+                    states[projectId] = SurfaceState.Changed;
+                }
+            }
+
+            foreach (var projectId in wouldBeBodyOnly)
+            {
+                debt.Remove(projectId);
+            }
         }
 
         var candidate = new FactSnapshot(

@@ -1,9 +1,9 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–5B completed locally 2026-08-22: deterministic scale/trial baselines,
+**Status:** PROGRESS — Slices 0–5C completed locally 2026-08-22: deterministic scale/trial baselines,
 emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
-watcher batches, the v7 surface-fact substrate, and per-origin lazy surface refinement. Next: independent
-cascade verification and fallback.
+watcher batches, the v7 surface-fact substrate, per-origin lazy surface refinement, and independent cascade
+verification with coarse fallback. Next: the delta-aware graph view and demand-driven refinement.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -53,7 +53,15 @@ cascade verification and fallback.
   project context before replacement. Publication remains cancellation/stale-CAS safe, watcher edits do no
   refresh work, and reconciliation refines before selecting only payable origin debt. Six deterministic tests
   bring exact discovery to **1,095 tests**.
-- **Next:** Slice 5C, add the independent cascade verifier/fallback around the now-active surface gate.
+- **Slice 5C:** opt-in `rig watch --verify-cascade-gate` independently re-extracts the exact coarse debt a
+  would-be `BodyOnly` classification would skip and compares all eight query-visible fact arrays as
+  duplicate-sensitive multisets before one candidate CAS. A match discards the verifier slices; a mismatch
+  atomically publishes the fresh coarse facts, permanently disables the gate for that project in the resident
+  process, and discloses the active coarse fallback on every status/query line. Disabled projects still refresh
+  generator/meta inputs before every forced coarse reconcile. Three deterministic match, real-reference
+  mismatch/fallback, and cancelled/stale-publication tests bring exact discovery to **1,098 tests**.
+- **Next:** Slice 6, partition base/overlay adjacency behind a delta-aware `GraphView` so localized traversal
+  avoids whole-snapshot graph materialization while preserving forward/reverse and one-hop dispatch parity.
 
 ## Why — the workflow that makes this the target
 
