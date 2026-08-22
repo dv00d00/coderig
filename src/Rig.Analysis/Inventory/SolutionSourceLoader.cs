@@ -1417,7 +1417,9 @@ internal static class SolutionSourceLoader
                     FilePath: document.FilePath,
                     Tree: tree,
                     Root: root,
-                    SemanticModel: semanticModel
+                    SemanticModel: semanticModel,
+                    ProjectFilePath: project.FilePath ?? "",
+                    AssemblyName: compilation.AssemblyName ?? project.Name
                 )
             );
         }
@@ -1607,7 +1609,7 @@ internal static class SolutionSourceLoader
     // must not fail the whole index) but is REPORTED on the progress channel: silently-dropped
     // generated documents are invisible recall loss, and in a resident workspace the silence would
     // persist for the process lifetime, not just one index.
-    private static async Task<IReadOnlyList<SourceModel>> RunSourceGeneratorsAsync(
+    internal static async Task<IReadOnlyList<SourceModel>> RunSourceGeneratorsAsync(
         Project project,
         Compilation compilation,
         Action<string>? progress,
@@ -1654,7 +1656,9 @@ internal static class SolutionSourceLoader
                         Tree: tree,
                         Root: root,
                         SemanticModel: semanticModel,
-                        IsGenerated: true
+                        IsGenerated: true,
+                        ProjectFilePath: project.FilePath ?? "",
+                        AssemblyName: generatedCompilation.AssemblyName ?? project.Name
                     )
                 );
             }

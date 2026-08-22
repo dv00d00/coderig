@@ -43,5 +43,7 @@ internal sealed record SourceModel(
     SyntaxTree Tree,
     SyntaxNode Root,
     SemanticModel SemanticModel,
-    bool IsGenerated = false
+    bool IsGenerated = false,
+    string ProjectFilePath = "",
+    string AssemblyName = ""
 );

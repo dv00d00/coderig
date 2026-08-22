@@ -34,6 +34,7 @@ internal sealed class ResidentIndex : IDisposable
     private readonly IDirtySetPolicy _eagerPolicy;
     private readonly IDirtySetPolicy _cascadePolicy;
     private readonly ResidentFileExtractor _extractFiles;
+    private readonly ResidentSurfaceRefresher _refreshSurface;
     private readonly ImmutableDictionary<string, ImmutableArray<DocumentId>> _documentsByPath;
 
     // Host-lifetime string interner shared by every re-extraction: a re-extracted generation's retained
@@ -54,7 +55,8 @@ internal sealed class ResidentIndex : IDisposable
         IDirtySetPolicy? eagerPolicy = null,
         IDirtySetPolicy? cascadePolicy = null,
         StringInterner? interner = null,
-        ResidentFileExtractor? extractFiles = null
+        ResidentFileExtractor? extractFiles = null,
+        ResidentSurfaceRefresher? refreshSurface = null
     )
     {
         _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
@@ -65,6 +67,7 @@ internal sealed class ResidentIndex : IDisposable
         _cascadePolicy = cascadePolicy ?? new ProjectCascadePolicy();
         _interner = interner ?? StringInterner.CreateDefault();
         _extractFiles = extractFiles ?? SolutionAnalyzer.ExtractFromDocumentsByFileAsync;
+        _refreshSurface = refreshSurface ?? SolutionAnalyzer.RefreshProjectSurfaceAsync;
         var documentsByPath = ImmutableDictionary.CreateBuilder<string, ImmutableArray<DocumentId>>(StringComparer.OrdinalIgnoreCase);
         foreach (var document in workspace.CurrentSolution.Projects.SelectMany(project => project.Documents))
         {
@@ -84,7 +87,8 @@ internal sealed class ResidentIndex : IDisposable
             _baseResult,
             ImmutableDictionary.Create<string, FileFacts>(StringComparer.OrdinalIgnoreCase),
             DirtySet.Empty,
-            SnapshotDelta.Empty
+            SnapshotDelta.Empty,
+            ProjectSurfaceCatalog.Seed(workspace.CurrentSolution, baseResult.ProjectSurfaces)
         );
     }
 
@@ -167,26 +171,74 @@ internal sealed class ResidentIndex : IDisposable
 
         var changed = validated.Keys.ToArray();
         var eager = _eagerPolicy.DocumentsToReextract(solution, changed).Distinct().ToArray();
-        var cascade = _cascadePolicy.DocumentsToReextract(solution, changed).Distinct().ToArray();
+        var editedOrigins = validated.Values.SelectMany(v => v.Documents).Select(d => d.ProjectId).ToImmutableHashSet();
+        IReadOnlyDictionary<ProjectId, IReadOnlyCollection<DocumentId>> cascadeByOrigin;
+        if (_cascadePolicy is IOriginAwareDirtySetPolicy originAware)
+        {
+            cascadeByOrigin = originAware.DocumentsToReextractByOrigin(solution, changed);
+        }
+        else
+        {
+            // Custom/test policies retain their one-call contract. Attributing their conservative union to
+            // every edited origin may retain extra debt, but can never clear required work.
+            var union = _cascadePolicy.DocumentsToReextract(solution, changed).Distinct().ToArray();
+            cascadeByOrigin = editedOrigins.ToDictionary(id => id, _ => (IReadOnlyCollection<DocumentId>)union);
+        }
         var slices = await ExtractAsync(solution, eager, cancellationToken);
         var overlay = basis.Overlay.SetItems(slices);
 
         // The cascade the eager arm did NOT cover is owed; the eagerly covered documents are current
         // against the newest snapshot, so they also settle any PREVIOUS batch's cascade debt.
         var eagerSet = eager.ToImmutableHashSet();
-        var pending = basis.Dirty.PendingDocuments.Union(cascade).ToImmutableHashSet().Except(eagerSet);
+        var pendingByOrigin = basis.Dirty.PendingByOrigin.ToBuilder();
+        foreach (var origin in pendingByOrigin.Keys.ToArray())
+        {
+            var remaining = pendingByOrigin[origin].Except(eagerSet).ToImmutableHashSet();
+            if (remaining.Count == 0)
+            {
+                pendingByOrigin.Remove(origin);
+            }
+            else
+            {
+                pendingByOrigin[origin] = remaining;
+            }
+        }
+        foreach (var origin in editedOrigins)
+        {
+            var contribution = cascadeByOrigin.GetValueOrDefault(origin, []).ToImmutableHashSet().Except(eagerSet);
+            if (contribution.Count == 0)
+            {
+                pendingByOrigin.Remove(origin);
+            }
+            else
+            {
+                pendingByOrigin[origin] = contribution;
+            }
+        }
+
+        var surfaceStates = basis.Delta.SurfaceStates.ToBuilder();
+        foreach (var origin in editedOrigins)
+        {
+            surfaceStates[origin] = SurfaceState.Unknown;
+        }
+        var surfaces = basis.Surfaces.ReplaceEmitters(
+            solution,
+            slices.Values.SelectMany(s => s.ProjectSurfaces.IsDefault ? [] : s.ProjectSurfaces)
+        );
+        var affectedProjects = cascadeByOrigin.Values.SelectMany(d => d).Concat(eager).Select(d => d.ProjectId).ToImmutableHashSet();
         var candidate = new FactSnapshot(
             basis.Revision.Next(),
             solution,
             _baseResult,
             overlay,
-            DirtySet.From(solution, pending),
+            DirtySet.FromContributions(solution, pendingByOrigin.ToImmutable()),
             new SnapshotDelta(
                 slices.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
-                cascade.Concat(eager).Select(d => d.ProjectId).ToImmutableHashSet(),
+                affectedProjects,
                 ImmutableHashSet<string>.Empty,
-                SurfaceState.Unknown
-            )
+                surfaceStates.ToImmutable()
+            ),
+            surfaces
         );
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -196,30 +248,144 @@ internal sealed class ResidentIndex : IDisposable
         }
     }
 
-    // Re-extract the outstanding cascade and clear the disclosure. Returns true only when this exact
-    // basis reference was published; false means no work or a newer snapshot superseded the candidate.
-    public async Task<bool> ReconcileAsync(CancellationToken cancellationToken = default)
+    // Lazily classify only the requested Unknown origin projects. All Roslyn/generator work happens
+    // against one captured Solution and produces a private catalog candidate; cancellation or a stale
+    // expected-reference CAS changes no published member.
+    public async Task<bool> RefineUnknownSurfacesAsync(
+        IReadOnlySet<ProjectId>? projects = null,
+        CancellationToken cancellationToken = default
+    )
     {
         var basis = CaptureSnapshot();
-        if (basis.Dirty.PendingDocuments.Count == 0)
+        var requested = basis
+            .Delta.SurfaceStates.Where(pair =>
+                pair.Value == SurfaceState.Unknown
+                && basis.Surfaces.Projects.TryGetValue(pair.Key, out var partition)
+                && partition.IsClassifiable
+                && (projects is null || projects.Contains(pair.Key))
+            )
+            .Select(pair => pair.Key)
+            .ToArray();
+        if (requested.Length == 0)
         {
             return false;
         }
 
-        var pending = basis.Dirty.PendingDocuments;
+        var catalog = basis.Surfaces;
+        var overlay = basis.Overlay;
+        var states = basis.Delta.SurfaceStates.ToBuilder();
+        var debt = basis.Dirty.PendingByOrigin.ToBuilder();
+        var classified = false;
+        foreach (var projectId in requested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var refresh = await _refreshSurface(basis.Solution, projectId, _rules, cancellationToken, _interner);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!catalog.TryApplyRefresh(projectId, refresh, out var refreshedCatalog, out var state))
+            {
+                continue;
+            }
+
+            if (refresh.GeneratedFacts is not null && catalog.Projects.TryGetValue(projectId, out var priorPartition))
+            {
+                var generated = refresh.GeneratedFacts;
+                foreach (var retiredPath in priorPartition.GeneratedShards.Select(s => s.EmitterFilePath))
+                {
+                    if (!generated.ContainsKey(retiredPath))
+                    {
+                        overlay = overlay.SetItem(retiredPath, EmptyFileFacts());
+                    }
+                }
+                overlay = overlay.SetItems(generated);
+            }
+            catalog = refreshedCatalog;
+            states[projectId] = state;
+            if (state == SurfaceState.Changed && !debt.ContainsKey(projectId))
+            {
+                // The eager edit already covered the entire affected closure, so there is no coarse
+                // work to keep sticky even though the accepted surface fingerprint moved.
+                catalog = catalog.MarkReconciled([projectId]);
+            }
+            if (state == SurfaceState.BodyOnly && !debt.ContainsKey(projectId))
+            {
+                // A later eager batch can pay every document owed by an earlier Changed surface.
+                // Once no contribution remains, the sticky coarse requirement is satisfied too.
+                catalog = catalog.MarkReconciled([projectId]);
+            }
+            if (state == SurfaceState.BodyOnly && !catalog.Projects[projectId].RequiresCoarseReconciliation)
+            {
+                debt.Remove(projectId);
+            }
+            classified = true;
+        }
+
+        if (!classified)
+        {
+            return false;
+        }
+
+        var candidate = new FactSnapshot(
+            basis.Revision.Next(),
+            basis.Solution,
+            _baseResult,
+            overlay,
+            DirtySet.FromContributions(basis.Solution, debt.ToImmutable()),
+            basis.Delta with
+            {
+                SurfaceStates = states.ToImmutable(),
+            },
+            catalog
+        );
+        cancellationToken.ThrowIfCancellationRequested();
+        return ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, candidate, basis), basis);
+    }
+
+    // Re-extract classified outstanding cascades. Unknown origins remain disclosed: their source-generator
+    // facts may be stale, so a source-document-only coarse pass is not allowed to clear their debt.
+    // Returns true only when this exact basis reference was published; false means no payable work or a
+    // newer snapshot superseded the candidate.
+    public async Task<bool> ReconcileAsync(CancellationToken cancellationToken = default)
+    {
+        var refined = await RefineUnknownSurfacesAsync(projects: null, cancellationToken);
+        var basis = CaptureSnapshot();
+        if (basis.Dirty.PendingDocuments.Count == 0)
+        {
+            return refined;
+        }
+
+        var payableOrigins = basis
+            .Dirty.PendingByOrigin.Keys.Where(projectId =>
+                basis.Delta.SurfaceStates.GetValueOrDefault(projectId) != SurfaceState.Unknown
+                && basis.Surfaces.Projects.TryGetValue(projectId, out var partition)
+                && partition.IsClassifiable
+                && partition.RequiresCoarseReconciliation
+            )
+            .ToImmutableHashSet();
+        if (payableOrigins.Count == 0)
+        {
+            return refined;
+        }
+
+        var pending = payableOrigins.SelectMany(projectId => basis.Dirty.PendingByOrigin[projectId]).ToImmutableHashSet();
         var slices = await ExtractAsync(basis.Solution, pending, cancellationToken);
+        var surfaces = basis
+            .Surfaces.ReplaceEmitters(basis.Solution, slices.Values.SelectMany(s => s.ProjectSurfaces.IsDefault ? [] : s.ProjectSurfaces))
+            .MarkReconciled(payableOrigins);
+        var remainingDebt = basis.Dirty.PendingByOrigin.RemoveRange(payableOrigins);
+        var remainingStates = basis.Delta.SurfaceStates.RemoveRange(payableOrigins);
         var candidate = new FactSnapshot(
             basis.Revision.Next(),
             basis.Solution,
             _baseResult,
             basis.Overlay.SetItems(slices),
-            DirtySet.Empty,
+            DirtySet.FromContributions(basis.Solution, remainingDebt),
             new SnapshotDelta(
                 slices.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
                 pending.Select(d => d.ProjectId).ToImmutableHashSet(),
                 ImmutableHashSet<string>.Empty,
-                SurfaceState.Unknown
-            )
+                remainingStates
+            ),
+            surfaces
         );
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -251,11 +417,24 @@ internal sealed class ResidentIndex : IDisposable
             return new Dictionary<string, FileFacts>(StringComparer.OrdinalIgnoreCase);
         }
 
-        return await _extractFiles(solution, documents, _solutionPath, _rules, cancellationToken, _interner);
+        // FileFacts replacement is path-global, so every selected path must be rebound in every linked
+        // project context even when only one context belongs to the payable origin. Otherwise replacing
+        // Shared.cs(A)'s slice would erase Shared.cs(C)'s still-current emissions.
+        var expanded = documents
+            .SelectMany(documentId =>
+            {
+                var path = solution.GetDocument(documentId)?.FilePath;
+                return path is null ? [documentId] : DocumentsAtPath(Path.GetFullPath(path));
+            })
+            .Distinct()
+            .ToArray();
+        return await _extractFiles(solution, expanded, _solutionPath, _rules, cancellationToken, _interner);
     }
 
     private IReadOnlyCollection<DocumentId> DocumentsAtPath(string fullPath) =>
         _documentsByPath.TryGetValue(fullPath, out var documents) ? documents : [];
+
+    private static FileFacts EmptyFileFacts() => new([], [], [], [], [], [], [], []);
 
     internal static AnalysisResult MergeFacts(AnalysisResult baseResult, ImmutableDictionary<string, FileFacts> overlay) =>
         FactSnapshot.MaterializeFacts(baseResult, overlay);
@@ -278,7 +457,10 @@ internal sealed record FileFacts(
     // This file's compile-health rows: exactly ONE when the re-extraction saw error diagnostics in it,
     // and EMPTY when it did not. Empty is the load-bearing case — it is what clears a base flag on
     // merge when a broken file is fixed.
-    ImmutableArray<FileCompileHealth> CompileHealth
+    ImmutableArray<FileCompileHealth> CompileHealth,
+    // One contribution per Roslyn project context for this emitter. Default preserves compatibility
+    // with hand-built fixtures, which then deliberately fail closed under the surface gate.
+    ImmutableArray<ProjectSurfaceContribution> ProjectSurfaces = default
 );
 
 internal delegate Task<Dictionary<string, FileFacts>> ResidentFileExtractor(

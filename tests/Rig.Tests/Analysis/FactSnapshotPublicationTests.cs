@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
 using Rig.Analysis.Inventory;
+using Rig.Domain;
 using Rig.Domain.Data;
 using Shouldly;
 using RuleSet = Rig.Domain.Data.RuleSet;
@@ -227,17 +228,24 @@ public sealed class FactSnapshotPublicationTests
             );
             workspace.AddSolution(SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create(), projects: [project]));
 
+            var meta = Shard("", "meta");
+            var shards = new[] { Shard(firstPath, "revision-zero"), Shard(secondPath, "dependent-zero"), meta };
             var baseFacts = new AnalysisResult(
                 Path.Combine(root, "Snapshot.sln"),
                 [Source(firstPath, "revision-zero"), Source(secondPath, "dependent-zero")],
-                []
+                [],
+                ProjectSurfaces:
+                [
+                    new ProjectSurfaceSnapshot("SnapshotProject", "", "SnapshotProject", shards, ProjectSurfaceBuilder.Aggregate(shards)),
+                ]
             );
             var index = new ResidentIndex(
                 workspace,
                 baseFacts,
                 baseFacts.SolutionPath,
                 new RuleSet(),
-                extractFiles: extractor ?? ExtractAsync
+                extractFiles: extractor ?? ExtractAsync,
+                refreshSurface: (_, _, _, _, _) => Task.FromResult(new ProjectSurfaceRefresh([], meta, IsClassifiable: true))
             );
             return new SnapshotFixture(index, firstDocumentId, secondDocumentId, firstPath, secondPath);
         }
@@ -257,7 +265,25 @@ public sealed class FactSnapshotPublicationTests
                 var document = solution.GetDocument(documentId)!;
                 var filePath = document.FilePath!;
                 var evidence = (await document.GetTextAsync(cancellationToken)).ToString();
-                byFile[filePath] = new FileFacts([Source(filePath, evidence)], [], [], [], [], [], [], []);
+                byFile[filePath] = new FileFacts(
+                    [Source(filePath, evidence)],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [
+                        new ProjectSurfaceContribution(
+                            "SnapshotProject",
+                            "",
+                            "SnapshotProject",
+                            Shard(filePath, evidence),
+                            IsClassifiable: true
+                        ),
+                    ]
+                );
             }
 
             return byFile;
@@ -275,5 +301,7 @@ public sealed class FactSnapshotPublicationTests
 
         private static SourceFileInfo Source(string path, string evidence) =>
             new("SnapshotProject", path, "indexed", "high", "test", "test", evidence);
+
+        private static ProjectSurfaceShard Shard(string path, string value) => new(path, false, ProjectContentHash.Compute([value]));
     }
 }

@@ -12,6 +12,14 @@ internal interface IDirtySetPolicy
     IReadOnlyCollection<DocumentId> DocumentsToReextract(Solution solution, IReadOnlyCollection<string> changedFilePaths);
 }
 
+internal interface IOriginAwareDirtySetPolicy : IDirtySetPolicy
+{
+    IReadOnlyDictionary<ProjectId, IReadOnlyCollection<DocumentId>> DocumentsToReextractByOrigin(
+        Solution solution,
+        IReadOnlyCollection<string> changedFilePaths
+    );
+}
+
 // The EAGER arm of the converging design: just the documents whose paths changed. Fast, and NOT sound
 // on its own — a dependent's binding can change without its text changing (add an overload in file A
 // and file B's call may re-bind). ResidentIndex uses it for the immediate re-extract on an edit, then
@@ -44,9 +52,15 @@ internal sealed class ChangedFilesOnlyPolicy : IDirtySetPolicy
 // populates from the MSBuild ProjectReference closure — and deliberately NOT from reference_facts: a
 // facts-derived graph is a measured LOWER BOUND (a csproj reference with no observed call produces no
 // edge), so cascading over it silently under-invalidates.
-internal sealed class ProjectCascadePolicy : IDirtySetPolicy
+internal sealed class ProjectCascadePolicy : IOriginAwareDirtySetPolicy
 {
-    public IReadOnlyCollection<DocumentId> DocumentsToReextract(Solution solution, IReadOnlyCollection<string> changedFilePaths)
+    public IReadOnlyCollection<DocumentId> DocumentsToReextract(Solution solution, IReadOnlyCollection<string> changedFilePaths) =>
+        DocumentsToReextractByOrigin(solution, changedFilePaths).Values.SelectMany(d => d).Distinct().ToArray();
+
+    public IReadOnlyDictionary<ProjectId, IReadOnlyCollection<DocumentId>> DocumentsToReextractByOrigin(
+        Solution solution,
+        IReadOnlyCollection<string> changedFilePaths
+    )
     {
         var seeds = new HashSet<ProjectId>();
         foreach (var path in changedFilePaths)
@@ -72,42 +86,35 @@ internal sealed class ProjectCascadePolicy : IDirtySetPolicy
             }
         }
 
-        // Transitive closure over the reverse edges, seeds included.
-        var affected = new HashSet<ProjectId>(seeds);
-        var queue = new Queue<ProjectId>(seeds);
-        while (queue.Count > 0)
+        var result = new Dictionary<ProjectId, IReadOnlyCollection<DocumentId>>();
+        foreach (var seed in seeds)
         {
-            if (!dependents.TryGetValue(queue.Dequeue(), out var directDependents))
+            var affected = new HashSet<ProjectId> { seed };
+            var queue = new Queue<ProjectId>([seed]);
+            while (queue.Count > 0)
             {
-                continue;
-            }
-
-            foreach (var dependent in directDependents)
-            {
-                if (affected.Add(dependent))
+                if (!dependents.TryGetValue(queue.Dequeue(), out var directDependents))
                 {
-                    queue.Enqueue(dependent);
+                    continue;
+                }
+
+                foreach (var dependent in directDependents)
+                {
+                    if (affected.Add(dependent))
+                    {
+                        queue.Enqueue(dependent);
+                    }
                 }
             }
+
+            result[seed] = solution
+                .Projects.Where(p => affected.Contains(p.Id) && p.Language == LanguageNames.CSharp)
+                .SelectMany(p => p.Documents)
+                .Where(d => d.FilePath?.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) == true)
+                .Select(d => d.Id)
+                .ToArray();
         }
 
-        var documents = new List<DocumentId>();
-        foreach (var project in solution.Projects)
-        {
-            if (!affected.Contains(project.Id) || project.Language != LanguageNames.CSharp)
-            {
-                continue;
-            }
-
-            foreach (var document in project.Documents)
-            {
-                if (document.FilePath?.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) == true)
-                {
-                    documents.Add(document.Id);
-                }
-            }
-        }
-
-        return documents;
+        return result;
     }
 }

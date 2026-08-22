@@ -1,8 +1,9 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–5A completed locally 2026-08-22: deterministic scale/trial baselines,
+**Status:** PROGRESS — Slices 0–5B completed locally 2026-08-22: deterministic scale/trial baselines,
 emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
-watcher batches, and the dormant v7 surface-fact substrate. Next: per-origin lazy surface refinement.
+watcher batches, the v7 surface-fact substrate, and per-origin lazy surface refinement. Next: independent
+cascade verification and fallback.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -44,8 +45,15 @@ watcher batches, and the dormant v7 surface-fact substrate. Next: per-origin laz
   rather than overwrite, while project-file identity remains available for per-origin live debt. The index
   schema is **v7**, so existing stores fail fast and require re-indexing. The substrate is deliberately dormant:
   no cascade is suppressed yet. Six deterministic tests bring exact discovery to **1,089 tests**.
-- **Next:** Slice 5B, lazily classify an `Unknown` dirty partition with the designed surface-hash gate so a
-  body-only edit settles at the changed-file boundary while a public-surface change expands through dependents.
+- **Slice 5B:** dirty debt is now immutable and per edited-project origin. An edit remains `Unknown` until
+  explicit refinement refreshes generator/meta inputs and compares its current source shards with the last
+  accepted project fingerprint: `BodyOnly` settles only that origin, while `Changed` retains a sticky coarse
+  cascade until reconciliation pays it. Missing, ambiguous, failed-generator, and colliding generated-emitter
+  states fail closed and remain disclosed; path-grain extraction always expands linked files through every
+  project context before replacement. Publication remains cancellation/stale-CAS safe, watcher edits do no
+  refresh work, and reconciliation refines before selecting only payable origin debt. Six deterministic tests
+  bring exact discovery to **1,095 tests**.
+- **Next:** Slice 5C, add the independent cascade verifier/fallback around the now-active surface gate.
 
 ## Why — the workflow that makes this the target
 

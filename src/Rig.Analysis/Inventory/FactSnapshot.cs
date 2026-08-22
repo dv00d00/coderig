@@ -16,48 +16,46 @@ internal enum SurfaceState
     Changed,
 }
 
-internal sealed record DirtySet(
-    ImmutableHashSet<DocumentId> PendingDocuments,
-    ImmutableHashSet<string> PendingFiles,
-    ImmutableHashSet<ProjectId> PendingProjects
-)
+internal sealed record DirtySet
 {
-    internal static DirtySet Empty { get; } =
-        new(
-            ImmutableHashSet<DocumentId>.Empty,
-            ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase),
-            ImmutableHashSet<ProjectId>.Empty
-        );
-
-    internal static DirtySet From(Solution solution, IEnumerable<DocumentId> documents)
+    private DirtySet(Solution? solution, ImmutableDictionary<ProjectId, ImmutableHashSet<DocumentId>> pendingByOrigin)
     {
-        var pendingDocuments = documents.ToImmutableHashSet();
-        if (pendingDocuments.Count == 0)
-        {
-            return Empty;
-        }
-
+        PendingByOrigin = pendingByOrigin;
+        PendingDocuments = pendingByOrigin.Values.SelectMany(d => d).ToImmutableHashSet();
+        PendingProjects = PendingDocuments.Select(d => d.ProjectId).ToImmutableHashSet();
         var files = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
-        var projects = ImmutableHashSet.CreateBuilder<ProjectId>();
-        foreach (var documentId in pendingDocuments)
+        if (solution is not null)
         {
-            projects.Add(documentId.ProjectId);
-            var filePath = solution.GetDocument(documentId)?.FilePath;
-            if (filePath is not null)
+            foreach (var documentId in PendingDocuments)
             {
-                files.Add(filePath);
+                var filePath = solution.GetDocument(documentId)?.FilePath;
+                if (filePath is not null)
+                {
+                    files.Add(filePath);
+                }
             }
         }
-
-        return new DirtySet(pendingDocuments, files.ToImmutable(), projects.ToImmutable());
+        PendingFiles = files.ToImmutable();
     }
+
+    internal ImmutableDictionary<ProjectId, ImmutableHashSet<DocumentId>> PendingByOrigin { get; }
+    internal ImmutableHashSet<DocumentId> PendingDocuments { get; }
+    internal ImmutableHashSet<string> PendingFiles { get; }
+    internal ImmutableHashSet<ProjectId> PendingProjects { get; }
+
+    internal static DirtySet Empty { get; } = new(null, ImmutableDictionary<ProjectId, ImmutableHashSet<DocumentId>>.Empty);
+
+    internal static DirtySet FromContributions(
+        Solution solution,
+        ImmutableDictionary<ProjectId, ImmutableHashSet<DocumentId>> pendingByOrigin
+    ) => pendingByOrigin.Count == 0 ? Empty : new DirtySet(solution, pendingByOrigin);
 }
 
 internal sealed record SnapshotDelta(
     ImmutableHashSet<string> ReplacedFiles,
     ImmutableHashSet<ProjectId> ConservativelyAffectedProjects,
     ImmutableHashSet<string> KnownChangedSymbols,
-    SurfaceState SurfaceState
+    ImmutableDictionary<ProjectId, SurfaceState> SurfaceStates
 )
 {
     internal static SnapshotDelta Empty { get; } =
@@ -65,7 +63,7 @@ internal sealed record SnapshotDelta(
             ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase),
             ImmutableHashSet<ProjectId>.Empty,
             ImmutableHashSet<string>.Empty,
-            SurfaceState.Unknown
+            ImmutableDictionary<ProjectId, SurfaceState>.Empty
         );
 }
 
@@ -84,7 +82,8 @@ internal sealed class FactSnapshot : IFactSnapshotView
         AnalysisResult baseFacts,
         ImmutableDictionary<string, FileFacts> overlay,
         DirtySet dirty,
-        SnapshotDelta delta
+        SnapshotDelta delta,
+        ProjectSurfaceCatalog? surfaces = null
     )
     {
         Revision = revision;
@@ -93,6 +92,7 @@ internal sealed class FactSnapshot : IFactSnapshotView
         Overlay = overlay ?? throw new ArgumentNullException(nameof(overlay));
         Dirty = dirty ?? throw new ArgumentNullException(nameof(dirty));
         Delta = delta ?? throw new ArgumentNullException(nameof(delta));
+        Surfaces = surfaces ?? ProjectSurfaceCatalog.Empty;
         _compilationHealth = new Lazy<CompilationHealth?>(
             () => MergeCompilationHealth(BaseFacts, Overlay),
             LazyThreadSafetyMode.ExecutionAndPublication
@@ -109,6 +109,7 @@ internal sealed class FactSnapshot : IFactSnapshotView
     internal ImmutableDictionary<string, FileFacts> Overlay { get; }
     internal DirtySet Dirty { get; }
     internal SnapshotDelta Delta { get; }
+    internal ProjectSurfaceCatalog Surfaces { get; }
 
     public string SolutionPath => BaseFacts.SolutionPath;
 

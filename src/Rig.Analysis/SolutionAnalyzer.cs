@@ -193,7 +193,7 @@ public static class SolutionAnalyzer
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
-        var (sourceFiles, orderedSources, extractionResults, health) = await ReadAndExtractDocumentsAsync(
+        var (sourceFiles, orderedSources, extractionResults, health, _) = await ReadAndExtractDocumentsAsync(
             solution: solution,
             documents: documents,
             solutionFullPath: solutionFullPath,
@@ -255,7 +255,7 @@ public static class SolutionAnalyzer
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
-        var (sourceFiles, orderedSources, extractionResults, health) = await ReadAndExtractDocumentsAsync(
+        var (sourceFiles, orderedSources, extractionResults, health, surfaceContributions) = await ReadAndExtractDocumentsAsync(
             solution: solution,
             documents: documents,
             solutionFullPath: solutionFullPath,
@@ -295,6 +295,14 @@ public static class SolutionAnalyzer
             }
         }
 
+        foreach (var contribution in surfaceContributions)
+        {
+            if (builders.TryGetValue(contribution.Shard.EmitterFilePath, out var surfaceBuilder))
+            {
+                surfaceBuilder.ProjectSurfaces.Add(contribution);
+            }
+        }
+
         for (var i = 0; i < orderedSources.Count; i++)
         {
             var facts = extractionResults[i];
@@ -318,11 +326,99 @@ public static class SolutionAnalyzer
                 TypeRelations: builder.TypeRelations.ToImmutableArray(),
                 Dispatch: builder.Dispatch.ToImmutableArray(),
                 Allocations: builder.Allocations.ToImmutableArray(),
-                CompileHealth: builder.CompileHealth.ToImmutableArray()
+                CompileHealth: builder.CompileHealth.ToImmutableArray(),
+                ProjectSurfaces: builder.ProjectSurfaces.ToImmutableArray()
             );
         }
 
         return slices;
+    }
+
+    // Lazy Slice-5 surface refresh. Ordinary source shards already arrived through the eager by-file
+    // extraction; refinement pays only for the current compilation's project-wide meta inputs and source
+    // generator output. Failures return an unclassifiable value so the caller retains coarse debt.
+    internal static async Task<ProjectSurfaceRefresh> RefreshProjectSurfaceAsync(
+        Microsoft.CodeAnalysis.Solution solution,
+        ProjectId projectId,
+        RuleSet rules,
+        CancellationToken cancellationToken,
+        StringInterner? interner = null
+    )
+    {
+        var project = solution.GetProject(projectId);
+        if (project is null || project.Language != LanguageNames.CSharp || rules.IsExcludedProject(project.Name))
+        {
+            return new ProjectSurfaceRefresh([], new ProjectSurfaceShard("", false, ""), false);
+        }
+
+        try
+        {
+            var compilation = await project.GetCompilationAsync(cancellationToken);
+            if (compilation is null)
+            {
+                return new ProjectSurfaceRefresh([], new ProjectSurfaceShard("", false, ""), false);
+            }
+
+            var health = new CompilationHealthCollector();
+            var generated = await SolutionSourceLoader.RunSourceGeneratorsAsync(
+                project,
+                compilation,
+                progress: null,
+                health,
+                cancellationToken
+            );
+            if (health.Build().GeneratorFailures.Any())
+            {
+                throw new InvalidOperationException(
+                    $"Source-generator refresh failed for '{project.Name}'; its surface remains Unknown and coarse debt is retained."
+                );
+            }
+
+            var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
+            var extractions = ExtractProject(
+                generated,
+                rules,
+                diMethodNames,
+                parallelism: null,
+                interner ?? StringInterner.CreateDefault(),
+                cancellationToken
+            );
+            var generatedShards = generated
+                .Select((source, i) => ProjectSurfaceBuilder.BuildEmitter(source, extractions[i]))
+                .ToImmutableArray();
+            var generatedFacts = ImmutableDictionary.CreateBuilder<string, FileFacts>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < generated.Count; i++)
+            {
+                var source = generated[i];
+                var facts = extractions[i];
+                generatedFacts[source.FilePath] = new FileFacts(
+                    [new SourceFileInfo(project.Name, source.FilePath, "indexed", "high", "generated", "source_generator", "")],
+                    facts.DiRegistrations.ToImmutableArray(),
+                    facts.Symbols.ToImmutableArray(),
+                    facts.References.ToImmutableArray(),
+                    facts.TypeRelations.ToImmutableArray(),
+                    facts.Dispatch.ToImmutableArray(),
+                    facts.Allocations.ToImmutableArray(),
+                    []
+                );
+            }
+            return new ProjectSurfaceRefresh(
+                generatedShards,
+                ProjectSurfaceBuilder.BuildMeta(project.ParseOptions as Microsoft.CodeAnalysis.CSharp.CSharpParseOptions, compilation),
+                true,
+                generatedFacts.ToImmutable()
+            );
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // Refinement is an optimization gate. Any Roslyn/generator failure leaves the surface
+            // Unknown so ResidentIndex retains the conservative cascade for coarse reconciliation.
+            return new ProjectSurfaceRefresh([], new ProjectSurfaceShard("", false, ""), false);
+        }
     }
 
     private sealed class FileFactsBuilder
@@ -335,6 +431,7 @@ public static class SolutionAnalyzer
         public List<DispatchFact> Dispatch { get; } = [];
         public List<AllocationFact> Allocations { get; } = [];
         public List<FileCompileHealth> CompileHealth { get; } = [];
+        public List<ProjectSurfaceContribution> ProjectSurfaces { get; } = [];
     }
 
     // Shared front half of the two per-document entry points above: classify + read + bind the given
@@ -346,7 +443,8 @@ public static class SolutionAnalyzer
         List<SourceFileInfo> SourceFiles,
         List<SourceModel> OrderedSources,
         SourceExtractionResult[] ExtractionResults,
-        CompilationHealth Health
+        CompilationHealth Health,
+        List<ProjectSurfaceContribution> ProjectSurfaces
     )> ReadAndExtractDocumentsAsync(
         Microsoft.CodeAnalysis.Solution solution,
         IReadOnlyCollection<DocumentId> documents,
@@ -359,6 +457,7 @@ public static class SolutionAnalyzer
         var sources = new List<SourceModel>();
         var sourceFiles = new List<SourceFileInfo>();
         var health = new CompilationHealthCollector();
+        var surfaceContributions = new Dictionary<(ProjectId Project, string FilePath), ProjectSurfaceContribution>();
 
         foreach (var projectGroup in documents.GroupBy(d => d.ProjectId))
         {
@@ -366,6 +465,21 @@ public static class SolutionAnalyzer
             if (project is null || project.Language != LanguageNames.CSharp || rules.IsExcludedProject(project.Name))
             {
                 continue;
+            }
+
+            foreach (var documentId in projectGroup)
+            {
+                var path = project.GetDocument(documentId)?.FilePath;
+                if (path is not null)
+                {
+                    surfaceContributions[(project.Id, path)] = new ProjectSurfaceContribution(
+                        project.Name,
+                        project.FilePath ?? "",
+                        project.AssemblyName ?? project.Name,
+                        new ProjectSurfaceShard(path, false, ""),
+                        IsClassifiable: false
+                    );
+                }
             }
 
             var compilation = await project.GetCompilationAsync(cancellationToken);
@@ -446,7 +560,9 @@ public static class SolutionAnalyzer
                         FilePath: document.FilePath,
                         Tree: tree,
                         Root: root,
-                        SemanticModel: semanticModel
+                        SemanticModel: semanticModel,
+                        ProjectFilePath: project.FilePath ?? "",
+                        AssemblyName: compilation.AssemblyName ?? project.Name
                     )
                 );
             }
@@ -458,7 +574,37 @@ public static class SolutionAnalyzer
         var orderedSources = sources.OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
         var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
         var extractionResults = ExtractProject(orderedSources, rules, diMethodNames, parallelism: null, interner, cancellationToken);
-        return (sourceFiles, orderedSources, extractionResults, health.Build());
+        for (var i = 0; i < orderedSources.Count; i++)
+        {
+            var source = orderedSources[i];
+            var matchingProjects = solution
+                .Projects.Where(p =>
+                    (
+                        !string.IsNullOrWhiteSpace(source.ProjectFilePath)
+                        && p.FilePath is not null
+                        && string.Equals(
+                            Path.GetFullPath(p.FilePath),
+                            Path.GetFullPath(source.ProjectFilePath),
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    ) || (string.IsNullOrWhiteSpace(source.ProjectFilePath) && p.Name == source.ProjectName)
+                )
+                .ToArray();
+            if (matchingProjects.Length != 1)
+            {
+                continue;
+            }
+            var project = matchingProjects[0];
+
+            surfaceContributions[(project.Id, source.FilePath)] = new ProjectSurfaceContribution(
+                source.ProjectName,
+                source.ProjectFilePath,
+                source.AssemblyName,
+                ProjectSurfaceBuilder.BuildEmitter(source, extractionResults[i]),
+                IsClassifiable: true
+            );
+        }
+        return (sourceFiles, orderedSources, extractionResults, health.Build(), surfaceContributions.Values.ToList());
     }
 
     // Per-PROJECT extraction sink (live-background-index slice 2), invoked by the loader while that
