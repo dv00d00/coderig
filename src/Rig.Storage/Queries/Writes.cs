@@ -442,77 +442,10 @@ public static class Writes
             saved += InsertRows(
                 connection,
                 transaction,
-                "INSERT INTO reference_facts (RunId, ReferenceFactIndex, TargetSymbolId, RefKind, EnclosingSymbolId, TargetAssembly, "
-                    + "TargetInSource, FilePath, Line, ReceiverType, FirstArgumentTemplate, FirstArgumentType, EnclosingLoopKind, "
-                    + "EnclosingLoopDetail, EnclosingInvocations, EnclosingCatchTypes, TypeArguments, FirstArgumentName, DelegateConsumer, "
-                    + "EnclosingScopes, ArgumentTemplates, ArgumentNames, DeclaringTypeArgBinding, MethodTypeArgBinding, NonVirtual, "
-                    + "EnclosingGuards, EnclosingLoopElementType, EnclosingLoopBindType, InExpressionTree) "
-                    + "VALUES ($run,$idx,$target,$kind,$enc,$tasm,$insrc,$file,$line,$recv,$fat,$fatype,$elk,$eld,$einv,$ect,$ta,$fan,$dc,"
-                    + "$es,$at,$an,$dtab,$mtab,$nonvirtual,$eg,$elt,$elbt,$expr);",
-                [
-                    "$run",
-                    "$idx",
-                    "$target",
-                    "$kind",
-                    "$enc",
-                    "$tasm",
-                    "$insrc",
-                    "$file",
-                    "$line",
-                    "$recv",
-                    "$fat",
-                    "$fatype",
-                    "$elk",
-                    "$eld",
-                    "$einv",
-                    "$ect",
-                    "$ta",
-                    "$fan",
-                    "$dc",
-                    "$es",
-                    "$at",
-                    "$an",
-                    "$dtab",
-                    "$mtab",
-                    "$nonvirtual",
-                    "$eg",
-                    "$elt",
-                    "$elbt",
-                    "$expr",
-                ],
+                ReferenceFactBulkInsert.Sql,
+                ReferenceFactBulkInsert.ParameterNames,
                 references,
-                (p, r, i) =>
-                {
-                    p[0].Value = runId;
-                    p[1].Value = i;
-                    p[2].Value = r.TargetSymbolId;
-                    p[3].Value = r.RefKind;
-                    p[4].Value = (object?)r.EnclosingSymbolId ?? DBNull.Value;
-                    p[5].Value = r.TargetAssembly;
-                    p[6].Value = r.TargetInSource ? 1 : 0;
-                    p[7].Value = r.FilePath;
-                    p[8].Value = r.Line;
-                    p[9].Value = (object?)r.ReceiverType ?? DBNull.Value;
-                    p[10].Value = (object?)r.FirstArgumentTemplate ?? DBNull.Value;
-                    p[11].Value = (object?)r.FirstArgumentType ?? DBNull.Value;
-                    p[12].Value = (object?)r.EnclosingLoopKind ?? DBNull.Value;
-                    p[13].Value = (object?)r.EnclosingLoopDetail ?? DBNull.Value;
-                    p[14].Value = (object?)r.EnclosingInvocations ?? DBNull.Value;
-                    p[15].Value = (object?)r.EnclosingCatchTypes ?? DBNull.Value;
-                    p[16].Value = (object?)r.TypeArguments ?? DBNull.Value;
-                    p[17].Value = (object?)r.FirstArgumentName ?? DBNull.Value;
-                    p[18].Value = (object?)r.DelegateConsumer ?? DBNull.Value;
-                    p[19].Value = (object?)r.EnclosingScopes ?? DBNull.Value;
-                    p[20].Value = (object?)r.ArgumentTemplates ?? DBNull.Value;
-                    p[21].Value = (object?)r.ArgumentNames ?? DBNull.Value;
-                    p[22].Value = (object?)r.DeclaringTypeArgBinding ?? DBNull.Value;
-                    p[23].Value = (object?)r.MethodTypeArgBinding ?? DBNull.Value;
-                    p[24].Value = r.NonVirtual ? 1 : 0;
-                    p[25].Value = (object?)r.EnclosingGuards ?? DBNull.Value;
-                    p[26].Value = (object?)r.EnclosingLoopElementType ?? DBNull.Value;
-                    p[27].Value = (object?)r.EnclosingLoopBindType ?? DBNull.Value;
-                    p[28].Value = r.InExpressionTree ? 1 : 0;
-                },
+                ReferenceFactBulkInsert.Binder(runId),
                 alreadySaved: saved,
                 total: total,
                 progress,
