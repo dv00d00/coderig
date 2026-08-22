@@ -210,8 +210,21 @@ internal sealed class SourceRenderer
     // path with backslashes. Returns null when the file resolves outside the root (a different work tree).
     private static string? RepoRelativePath(string root, string filePath)
     {
-        var relative = Path.GetRelativePath(root, filePath).Replace(oldChar: '\\', newChar: '/');
+        var relative = Path.GetRelativePath(NormalizeMacPath(root), NormalizeMacPath(filePath)).Replace(oldChar: '\\', newChar: '/');
         return relative.StartsWith("../", StringComparison.Ordinal) || relative == ".." || Path.IsPathRooted(relative) ? null : relative;
+    }
+
+    private static string NormalizeMacPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!OperatingSystem.IsMacOS())
+        {
+            return fullPath;
+        }
+
+        return fullPath.StartsWith("/var/", StringComparison.Ordinal) || fullPath.StartsWith("/tmp/", StringComparison.Ordinal)
+            ? "/private" + fullPath
+            : fullPath;
     }
 
     // Repo root + HEAD for the work tree containing `filePath`, cached per directory (many symbols share a

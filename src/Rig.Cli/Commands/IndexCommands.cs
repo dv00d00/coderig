@@ -194,7 +194,7 @@ internal static class IndexCommands
     // ("Failed to load" + non-zero exit) — adding an early throw here would bypass that handler (it sits
     // before the try) and is redundant with it.
     internal static string ResolveSolutionPath(string target, string workingDirectory) =>
-        Path.GetFullPath(path: target, basePath: workingDirectory);
+        Path.IsPathFullyQualified(target) ? target : Path.GetFullPath(path: target, basePath: workingDirectory);
 
     internal static async Task<int> RunIndexAsync(
         string target,

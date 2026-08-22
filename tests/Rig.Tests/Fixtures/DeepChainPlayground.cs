@@ -26,7 +26,7 @@ public sealed class DeepChainPlayground : IDisposable
     {
         var repositoryRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
         var sourceDirectory = Path.Combine(repositoryRoot, "playgrounds", "DeepChain");
-        var rootDirectory = Directory.CreateTempSubdirectory("rig-deepchain-spike-").FullName;
+        var rootDirectory = CreateTempDirectory();
         var targetDirectory = Path.Combine(rootDirectory, "DeepChain");
 
         CopyDirectory(sourceDirectory, targetDirectory);
@@ -35,6 +35,19 @@ public sealed class DeepChainPlayground : IDisposable
         await RunDotnetAsync(["restore", solutionPath], targetDirectory);
 
         return new DeepChainPlayground(rootDirectory, solutionPath, targetDirectory);
+    }
+
+    private static string CreateTempDirectory()
+    {
+        var tempDirectory = Path.GetFullPath(Path.GetTempPath());
+        if (OperatingSystem.IsMacOS() && tempDirectory.StartsWith("/var/", StringComparison.Ordinal))
+        {
+            // /var is a symlink to /private/var on macOS. NuGet can otherwise discover one project through
+            // each spelling while restoring a solution and race itself writing the same project.assets.json.
+            tempDirectory = "/private" + tempDirectory;
+        }
+
+        return Directory.CreateDirectory(Path.Combine(tempDirectory, $"rig-deepchain-spike-{Guid.NewGuid():N}")).FullName;
     }
 
     public void Dispose()

@@ -10,6 +10,7 @@ namespace Rig.Tests.Analysis;
 // Roslyn-FREE — no SemanticModel, no red syntax root, nothing that pins a Compilation per file. The
 // assertion is STRUCTURAL (the types can no longer carry Roslyn state), not a memory measurement, so it
 // cannot flake and cannot be satisfied by an "empty at the moment we looked" coincidence.
+[NotInParallel]
 public sealed class ExtractionStreamingTests
 {
     // The old shape was `SolutionSourceSet.IndexedSources: IReadOnlyList<SourceModel>` — a SemanticModel
