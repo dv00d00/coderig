@@ -68,8 +68,9 @@ public sealed class WatchCommandTests
         // No FACT STORE anywhere: the answer came out of memory. (`.rig/` itself does get created — it holds
         // the design-time-build cache the cold boot shares with `rig index` — but no rig.db is written.)
         var rigDirectory = Path.Combine(playground.WorkingDirectory, ".rig");
-        (Directory.Exists(rigDirectory) ? Directory.GetFiles(rigDirectory, "rig.db", SearchOption.AllDirectories) : [])
-            .ShouldBeEmpty("`watch --query` must answer without needing or writing a fact store.");
+        (Directory.Exists(rigDirectory) ? Directory.GetFiles(rigDirectory, "rig.db", SearchOption.AllDirectories) : []).ShouldBeEmpty(
+            "`watch --query` must answer without needing or writing a fact store."
+        );
     }
 
     // An unrecognized query says what IS supported instead of failing obscurely.
@@ -97,10 +98,10 @@ public sealed class WatchCommandTests
     }
 
     // Acceptance 2: the loop end-to-end on a temp copy of DeepChain — boot with the watcher live,
-    // write a REAL edit to a file on disk, poll until the watcher applies it, assert the facts
-    // reflect it, then poll until the background reconcile clears the disclosure.
+    // write a REAL two-file burst on disk, poll until one eager generation publishes, and prove the
+    // dependent debt remains disclosed until an explicit scheduler request reconciles it.
     [Test]
-    public async Task Watcher_applies_a_disk_edit_and_the_background_reconcile_clears_the_disclosure()
+    public async Task Watcher_publishes_a_dirty_edit_and_only_explicit_reconcile_clears_the_disclosure()
     {
         using var playground = await DeepChainPlayground.CreateAsync();
         var rules = RuleSetLoader.Load(playground.WorkingDirectory);
@@ -119,9 +120,8 @@ public sealed class WatchCommandTests
 
         // Anti-vacuity: the reference the edit will add must NOT be in the boot facts.
         var bootFacts = await host.GetCurrentFactsAsync();
-        (bootFacts.References ?? []).ShouldNotContain(r =>
-            r.TargetSymbolId == QueryTarget && r.EnclosingSymbolId == BookEnclosing
-        );
+        (bootFacts.References ?? []).ShouldNotContain(r => r.TargetSymbolId == QueryTarget && r.EnclosingSymbolId == BookEnclosing);
+        var bootQueryBodyHash = bootFacts.Symbols!.Single(s => s.SymbolId == QueryTarget).BodyHash;
 
         // The real edit, written to DISK: Book gains a direct Foundation.Db.Query call (the same edit
         // ResidentIndexTests proves fact-identical to a cold index).
@@ -136,35 +136,51 @@ public sealed class WatchCommandTests
         );
         await File.WriteAllTextAsync(editedFilePath, editedText);
 
-        // (a) the watcher picks the save up and applies it (debounce + eager re-extract).
+        // A second project changes in the same debounce window. Its body-only edit gives this test an
+        // independent fact to inspect without changing the reachability shape above.
+        var dbFilePath = Path.Combine(playground.WorkingDirectory, "Foundation", "Db.cs");
+        var dbText = await File.ReadAllTextAsync(dbFilePath);
+        dbText.ShouldContain("rows for:");
+        await File.WriteAllTextAsync(dbFilePath, dbText.Replace("rows for:", "db rows for:", StringComparison.Ordinal));
+
+        // (a) the watcher coalesces both saves into one revision and one eager extraction batch.
         await WaitUntilAsync(
-            () => Task.FromResult(host.AppliedFileCount >= 1),
+            () => Task.FromResult(host.AppliedFileCount >= 2),
             TimeSpan.FromSeconds(60),
-            "the watcher never applied the disk edit"
+            "the watcher never applied the two-file disk burst"
         );
+        (await host.GetCurrentRevisionAsync()).ShouldBe(1);
 
         // (b) the served facts reflect the edit immediately (the eager arm).
         var facts = await host.GetCurrentFactsAsync();
         (facts.References ?? []).ShouldContain(r =>
             r.RefKind == "invocation" && r.TargetSymbolId == QueryTarget && r.EnclosingSymbolId == BookEnclosing
         );
+        facts.Symbols!.Single(s => s.SymbolId == QueryTarget).BodyHash.ShouldNotBe(bootQueryBodyHash);
 
-        // (c) the background reconcile the host kicked drains the cascade; the disclosure clears
-        // without any further prompting.
-        await WaitUntilAsync(
-            async () => (await host.GetUnreconciledProjectsAsync()).Count == 0,
-            TimeSpan.FromSeconds(120),
-            "the background reconcile never cleared the disclosure"
-        );
+        // (c) A query consumes the eager generation on demand, says the affected boundary is stale,
+        // and does NOT secretly pay the full cascade. With automatic warming removed, this first query
+        // also reports the derived factories it actually forced.
+        (await host.GetUnreconciledProjectsAsync()).ShouldNotBeEmpty();
+        var answer = await host.AnswerQueryAsync("reaches BookingService.Book");
+        answer.Split(Environment.NewLine)[0].ShouldContain("affected facts STALE");
+        answer.Split(Environment.NewLine)[0].ShouldContain("project(s) unreconciled");
+        answer.ShouldContain("live: derived layer built this generation:");
+        (await host.GetUnreconciledProjectsAsync()).ShouldNotBeEmpty("a query must not trigger reconcile-all");
+        output.ToString().ShouldNotContain("derived layer warmed");
+        output.ToString().ShouldNotContain("| reconcile ");
 
-        // The applied edit survives the reconcile, and the status line reported the loop's stages.
+        // (d) Reconcile-all is now an explicit scheduler/verification primitive. It publishes one exact
+        // successor generation, clears the disclosure, and preserves the changed-file fact.
+        (await host.ReconcileAllAsync()).ShouldBeTrue();
+        (await host.GetCurrentRevisionAsync()).ShouldBe(2);
+        (await host.GetUnreconciledProjectsAsync()).ShouldBeEmpty();
+
         facts = await host.GetCurrentFactsAsync();
         (facts.References ?? []).ShouldContain(r =>
             r.RefKind == "invocation" && r.TargetSymbolId == QueryTarget && r.EnclosingSymbolId == BookEnclosing
         );
-        var printed = output.ToString();
-        printed.ShouldContain("file(s) applied");
-        printed.ShouldContain("all projects reconciled");
+        (await host.GetStatusLineAsync()).ShouldContain("all projects reconciled");
     }
 
     private static async Task WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout, string reason)

@@ -1,8 +1,8 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–3 completed locally 2026-08-22: deterministic scale/trial baselines,
-emitter provenance, immutable snapshot generations with atomic publication, and a streaming composite fact
-view. Next: dirty-only watcher batching and removal of unconditional derived-artifact warming.
+**Status:** PROGRESS — Slices 0–4 completed locally 2026-08-22: deterministic scale/trial baselines,
+emitter provenance, immutable snapshot generations, a streaming composite fact view, and atomic dirty-only
+watcher batches without automatic reconciliation or derived warming. Next: lazy surface refinement.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -31,8 +31,14 @@ view. Next: dirty-only watcher batching and removal of unconditional derived-art
   are deletion tombstones, and relation/dispatch provenance remains a multiset until graph projection. Full
   `AnalysisResult` materialization is now confined to explicit compatibility/oracle accessors and is memoized
   once. Three deterministic composite-view tests bring exact discovery to **1,080 tests**.
-- **Next:** Slice 4, make the watcher dirty-only and batched, then remove automatic query-artifact warming so
-  publication work remains bounded by the changed input until a query actually demands a derived artifact.
+- **Slice 4:** a debounced save burst now becomes one private Roslyn candidate, one eager extraction batch,
+  one conservative dirty-union computation, and one CAS publication. The watcher performs neither automatic
+  cascade reconciliation nor derived-artifact warming; dirty answers name their captured revision and say
+  the affected boundary is stale. `ReconcileAllAsync` remains an explicit scheduler/verification primitive.
+  Three deterministic batch-publication tests bring exact discovery to **1,083 tests**, and the real watcher
+  gate proves a two-file, two-project burst publishes as one revision.
+- **Next:** Slice 5, lazily classify an `Unknown` dirty partition with the designed surface-hash gate so a
+  body-only edit settles at the changed-file boundary while a public-surface change expands through dependents.
 
 ## Why — the workflow that makes this the target
 

@@ -34,6 +34,7 @@ internal sealed class ResidentIndex : IDisposable
     private readonly IDirtySetPolicy _eagerPolicy;
     private readonly IDirtySetPolicy _cascadePolicy;
     private readonly ResidentFileExtractor _extractFiles;
+    private readonly ImmutableDictionary<string, ImmutableArray<DocumentId>> _documentsByPath;
 
     // Host-lifetime string interner shared by every re-extraction: a re-extracted generation's retained
     // strings alias the previous generation's instead of duplicating the whole string set per edit (the
@@ -64,6 +65,19 @@ internal sealed class ResidentIndex : IDisposable
         _cascadePolicy = cascadePolicy ?? new ProjectCascadePolicy();
         _interner = interner ?? StringInterner.CreateDefault();
         _extractFiles = extractFiles ?? SolutionAnalyzer.ExtractFromDocumentsByFileAsync;
+        var documentsByPath = ImmutableDictionary.CreateBuilder<string, ImmutableArray<DocumentId>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var document in workspace.CurrentSolution.Projects.SelectMany(project => project.Documents))
+        {
+            if (document.FilePath is null)
+            {
+                continue;
+            }
+
+            var fullPath = Path.GetFullPath(document.FilePath);
+            documentsByPath[fullPath] = documentsByPath.TryGetValue(fullPath, out var existing) ? existing.Add(document.Id) : [document.Id];
+        }
+
+        _documentsByPath = documentsByPath.ToImmutable();
         _currentSnapshot = new FactSnapshot(
             new FactRevision(0),
             workspace.CurrentSolution,
@@ -100,44 +114,67 @@ internal sealed class ResidentIndex : IDisposable
     // any edit/reconcile; callers get a consistent snapshot.
     public AnalysisResult CurrentFacts => CaptureSnapshot().FlattenedFacts;
 
-    // Apply one file edit by building a complete candidate from the captured generation. Neither the
-    // retained workspace nor the published overlay/dirty state moves until the final reference-CAS.
-    public async Task ApplyEditAsync(string filePath, SourceText newText, CancellationToken cancellationToken = default)
+    // Singleton compatibility wrapper. Publication semantics live in ApplyEditsAsync so a debounced
+    // save burst cannot expose one intermediate generation per file.
+    public Task ApplyEditAsync(string filePath, SourceText newText, CancellationToken cancellationToken = default) =>
+        ApplyEditsAsync(new Dictionary<string, SourceText> { [filePath] = newText }, cancellationToken);
+
+    // Apply a complete save burst as ONE immutable generation. All paths are normalized and validated
+    // before extraction starts; every linked DocumentId receives its file's text in the same private
+    // candidate Solution; policies and extraction each see the complete batch exactly once. Neither the
+    // retained workspace nor any published snapshot member moves until the final reference-CAS.
+    public async Task ApplyEditsAsync(IReadOnlyDictionary<string, SourceText> edits, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(newText);
-        var basis = CaptureSnapshot();
-        var fullPath = Path.GetFullPath(filePath);
-        var documentIds = basis.Solution.GetDocumentIdsWithFilePath(fullPath);
-        if (documentIds.IsEmpty)
+        ArgumentNullException.ThrowIfNull(edits);
+        if (edits.Count == 0)
         {
-            throw new ArgumentException($"No document in the retained workspace has the path '{fullPath}'.", nameof(filePath));
+            return;
+        }
+
+        var basis = CaptureSnapshot();
+        var normalized = new Dictionary<string, SourceText>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (filePath, newText) in edits)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+            ArgumentNullException.ThrowIfNull(newText);
+            normalized[Path.GetFullPath(filePath)] = newText;
+        }
+
+        var validated = new Dictionary<string, (SourceText Text, IReadOnlyCollection<DocumentId> Documents)>(
+            StringComparer.OrdinalIgnoreCase
+        );
+        foreach (var (fullPath, newText) in normalized)
+        {
+            var documentIds = DocumentsAtPath(fullPath);
+            if (documentIds.Count == 0)
+            {
+                throw new ArgumentException($"No document in the retained workspace has the path '{fullPath}'.", nameof(edits));
+            }
+
+            var canonicalPath = basis.Solution.GetDocument(documentIds.First())!.FilePath!;
+            validated[Path.GetFullPath(canonicalPath)] = (newText, documentIds);
         }
 
         var solution = basis.Solution;
-        foreach (var documentId in documentIds)
+        foreach (var (_, edit) in validated)
         {
-            solution = solution.WithDocumentText(documentId, newText, PreservationMode.PreserveValue);
+            var (newText, documentIds) = edit;
+            foreach (var documentId in documentIds)
+            {
+                solution = solution.WithDocumentText(documentId, newText, PreservationMode.PreserveValue);
+            }
         }
 
-        string[] changed = [fullPath];
-        var eager = _eagerPolicy.DocumentsToReextract(solution, changed);
+        var changed = validated.Keys.ToArray();
+        var eager = _eagerPolicy.DocumentsToReextract(solution, changed).Distinct().ToArray();
+        var cascade = _cascadePolicy.DocumentsToReextract(solution, changed).Distinct().ToArray();
         var slices = await ExtractAsync(solution, eager, cancellationToken);
         var overlay = basis.Overlay.SetItems(slices);
 
         // The cascade the eager arm did NOT cover is owed; the eagerly covered documents are current
-        // against the newest snapshot, so they are also settled for any PREVIOUS edit's cascade.
+        // against the newest snapshot, so they also settle any PREVIOUS batch's cascade debt.
         var eagerSet = eager.ToImmutableHashSet();
-        var cascade = _cascadePolicy.DocumentsToReextract(solution, changed);
-        var pending = basis.Dirty.PendingDocuments.ToBuilder();
-        foreach (var documentId in cascade)
-        {
-            if (!eagerSet.Contains(documentId))
-            {
-                pending.Add(documentId);
-            }
-        }
-
-        pending.ExceptWith(eagerSet);
+        var pending = basis.Dirty.PendingDocuments.Union(cascade).ToImmutableHashSet().Except(eagerSet);
         var candidate = new FactSnapshot(
             basis.Revision.Next(),
             solution,
@@ -146,7 +183,7 @@ internal sealed class ResidentIndex : IDisposable
             DirtySet.From(solution, pending),
             new SnapshotDelta(
                 slices.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
-                cascade.Select(d => d.ProjectId).ToImmutableHashSet(),
+                cascade.Concat(eager).Select(d => d.ProjectId).ToImmutableHashSet(),
                 ImmutableHashSet<string>.Empty,
                 SurfaceState.Unknown
             )
@@ -155,7 +192,7 @@ internal sealed class ResidentIndex : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         if (!ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, candidate, basis), basis))
         {
-            throw new InvalidOperationException("The resident edit was superseded by a newer fact snapshot.");
+            throw new InvalidOperationException("The resident edit batch was superseded by a newer fact snapshot.");
         }
     }
 
@@ -216,6 +253,9 @@ internal sealed class ResidentIndex : IDisposable
 
         return await _extractFiles(solution, documents, _solutionPath, _rules, cancellationToken, _interner);
     }
+
+    private IReadOnlyCollection<DocumentId> DocumentsAtPath(string fullPath) =>
+        _documentsByPath.TryGetValue(fullPath, out var documents) ? documents : [];
 
     internal static AnalysisResult MergeFacts(AnalysisResult baseResult, ImmutableDictionary<string, FileFacts> overlay) =>
         FactSnapshot.MaterializeFacts(baseResult, overlay);

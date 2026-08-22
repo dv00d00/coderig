@@ -14,10 +14,9 @@ namespace Rig.Cli.Commands;
 
 // `rig watch <solution>` — the resident host for the live background index (the integration slice of
 // docs/backlog/progress/live-background-index.md). Cold-analyzes the solution ONCE retaining the Roslyn
-// workspace, then watches the source tree: each .cs save is re-extracted eagerly (facts servable in
-// ~a second on MedDBase) while the sound cascade reconciles on a background task, with the disclosure
-// (`N project(s) unreconciled`) printed until it clears. ResidentIndex deliberately owns no
-// threads/timers — this command is the loop's owner: watcher, debounce, scheduling, status lines.
+// workspace, then watches the source tree: each debounced .cs save burst is re-extracted and published
+// atomically while the dependent cascade remains explicitly unreconciled. ResidentIndex deliberately
+// owns no threads/timers — this command owns the watcher, debounce, publication and status lines.
 //
 // Queries are served three ways, all off the same fact generation: `--query` (one answer at boot), the stdin
 // loop, and — in watch mode — a named-pipe endpoint named after this working directory, so a plain one-shot
@@ -60,8 +59,8 @@ internal static class WatchCommand
         };
         var cmd = new Command(
             name: "watch",
-            description: "Live background index: cold-analyze once retaining the workspace, then re-extract each saved .cs file "
-                + "in ~a second and reconcile the cascade in the background (facts stay in memory; no store is written)."
+            description: "Live background index: cold-analyze once retaining the workspace, then atomically publish each "
+                + "debounced .cs save batch (dependent reconciliation is explicit; no store is written)."
         )
         {
             target,
@@ -282,20 +281,10 @@ internal static class WatchCommand
 }
 
 // The resident loop, split from the command action so a test can drive it end-to-end (boot → disk
-// edit → poll) without a console. Owns the FileSystemWatcher, the debounce, and the one WORKER that
-// touches the ResidentIndex; `_gate` makes the read accessors (status/facts/disclosure) safe against
-// the worker, and the worker is the only writer. Reconcile runs as a background task the worker
-// starts after an apply and CANCELS when the next edit arrives — an edit never queues behind the
-// cascade, which is the whole point of the converging overlay.
-//
-// WARMING runs on a SECOND background task started at the same point and cancelled by the same next edit,
-// because facts being current is not the same as a query being fast: the per-generation derived layer costs
-// ~4.0s on MedDBase on first access and nothing thereafter, so before this the first query after EVERY edit
-// paid it. Warming builds it off the worker's path so that query pays nothing. The two tasks differ in one
-// respect and it is deliberate: the worker AWAITS the cancelled reconcile before touching the index (the
-// ResidentIndex is single-writer, so it must), but it does NOT await the cancelled warm — warming only forces
-// Lazy fields on an IMMUTABLE LiveFactSource and touches no index state, so it is safe to abandon, and
-// awaiting it would be exactly the "an edit waits for warming" trade that warming must always lose.
+// edit → poll) without a console. Owns the FileSystemWatcher, debounce and one publication worker.
+// `_gate` keeps status/query capture coherent with publication. Dependent reconciliation and derived-
+// artifact warming are explicit primitives: the watch loop does neither automatically, so a save burst
+// publishes exactly one eager generation and keeps its dirty disclosure until an explicit reconcile.
 internal sealed class WatchHost : IAsyncDisposable
 {
     private static readonly TimeSpan DefaultDebounce = TimeSpan.FromMilliseconds(300);
@@ -321,13 +310,6 @@ internal sealed class WatchHost : IAsyncDisposable
     // missing" caveat on every subsequent answer, not a transient condition.
     private int _watcherOverflowed;
     private double _lastEditSeconds = -1;
-
-    // The in-flight background warm (and its cancellation), owned by the worker loop. Kept as FIELDS rather
-    // than locals of RunLoopAsync — unlike the reconcile, this task outlives the iteration that started it
-    // (it is cancelled, not awaited, when the next edit arrives), so DisposeAsync must still be able to
-    // cancel and observe it instead of leaving a fire-and-forget task running past the host's lifetime.
-    private Task? _warm;
-    private CancellationTokenSource? _warmCts;
 
     // The query-ready derived layer for the CURRENT immutable snapshot, built on first query and thrown away
     // the moment publication moves. Snapshot reference identity is the correctness token; the revision is
@@ -480,6 +462,19 @@ internal sealed class WatchHost : IAsyncDisposable
         }
     }
 
+    internal async Task<long> GetCurrentRevisionAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return _index.CaptureSnapshot().Revision.Value;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     // Answer one query against the CURRENT fact generation, returning the rendered text.
     //
     // The answer is always PREFIXED with the staleness disclosure (the same line ComposeStatus feeds the
@@ -620,19 +615,6 @@ internal sealed class WatchHost : IAsyncDisposable
         }
         catch (OperationCanceledException) { }
 
-        // Warming is linked to the shutdown token, so it is already cancelled; await the most recent one so a
-        // disposed host leaves no thread still touching a fact generation (the `_gate` dispose below would
-        // otherwise race a warm that had not yet noticed).
-        if (_warm is not null)
-        {
-            try
-            {
-                await _warm;
-            }
-            catch (OperationCanceledException) { }
-        }
-
-        _warmCts?.Dispose();
         _shutdown.Dispose();
         _gate.Dispose();
         _index.Dispose();
@@ -664,34 +646,11 @@ internal sealed class WatchHost : IAsyncDisposable
         return false;
     }
 
-    // The single worker: debounce a burst of watcher events into one batch, apply it eagerly, print
-    // the status (with the disclosure), then start the background reconcile. A NEW edit cancels an
-    // in-flight reconcile before touching the index — ResidentIndex is single-writer by design, and a
-    // cancelled reconcile is safe (its pending set and overlay are only committed on completion).
+    // The single worker: debounce a burst of watcher events into one atomic eager publication, then
+    // print the status with its persistent dirty disclosure. It deliberately does not reconcile or warm.
     private async Task RunLoopAsync(CancellationToken cancellationToken)
     {
         var reader = _changes.Reader;
-        Task? reconcile = null;
-        CancellationTokenSource? reconcileCts = null;
-
-        async Task StopReconcileAsync()
-        {
-            if (reconcile is null)
-            {
-                return;
-            }
-
-            reconcileCts!.Cancel();
-            try
-            {
-                await reconcile;
-            }
-            catch (OperationCanceledException) { }
-            reconcileCts.Dispose();
-            reconcile = null;
-            reconcileCts = null;
-        }
-
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -709,12 +668,6 @@ internal sealed class WatchHost : IAsyncDisposable
                 {
                     break;
                 }
-
-                await StopReconcileAsync();
-                // Cancel — but deliberately do NOT await — any in-flight warm before touching the index. It
-                // holds no index state, so abandoning it is safe, and awaiting it would make this edit wait on
-                // work whose only purpose is to make a LATER query fast. Warming always loses that trade.
-                CancelWarming();
 
                 // Debounce: one save fires several watcher events (and editors write in bursts) —
                 // absorb until the channel has been quiet for the debounce window, so one save is one
@@ -743,178 +696,90 @@ internal sealed class WatchHost : IAsyncDisposable
                 var applied = await ApplyBatchAsync(batch, cancellationToken);
                 if (applied == 0)
                 {
-                    // Nothing applied (an obj/ escapee, a non-workspace file, a file deleted mid-burst), so the
-                    // fact generation did NOT move — but the warm was already cancelled above. Restart it so a
-                    // stray save cannot leave the current generation permanently half-warmed. Cheap and silent:
-                    // whatever it already built is memoized, so this only finishes the remainder, and the
-                    // completion line is suppressed when there was no remainder to build.
-                    await StartWarmingAsync(cancellationToken);
                     continue;
                 }
 
                 _output.WriteLine(await GetStatusLineAsync(cancellationToken));
-
-                reconcileCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                reconcile = ReconcileInBackgroundAsync(reconcileCts.Token);
-                await StartWarmingAsync(cancellationToken);
             }
         }
         catch (OperationCanceledException) { }
-        finally
-        {
-            await StopReconcileAsync();
-            CancelWarming();
-        }
     }
-
-    // Start warming the CURRENT generation's derived layer. The LiveFactSource is resolved under `_gate` from
-    // one captured snapshot, but the BUILD runs outside it — holding the gate for
-    // seconds would block the next apply, which is the one thing this loop must never do. Nothing here is
-    // ordered against a query either: LiveFactSource is immutable per generation, so a query arriving mid-warm
-    // either finds its artifact already memoized or joins the in-flight build.
-    private async Task StartWarmingAsync(CancellationToken cancellationToken)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            var facts = CurrentLiveFacts(_index.CaptureSnapshot());
-
-            // Install the warm while still holding the publication gate. Otherwise a reconcile can
-            // publish and cancel between snapshot capture and assigning these fields, leaving a warm
-            // for the retired eager generation running uncancelled.
-            _warmCts?.Dispose();
-            _warmCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            _warm = WarmInBackgroundAsync(facts, _warmCts.Token);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    // Cancel the in-flight warm without waiting for it. Every warm CTS is LINKED to the shutdown token, so a
-    // task abandoned here is also cancelled by DisposeAsync — it cannot outlive the host even though only the
-    // most recent one is awaited there.
-    private void CancelWarming() => _warmCts?.Cancel();
-
-    private Task WarmInBackgroundAsync(LiveFactSource facts, CancellationToken cancellationToken) =>
-        Task.Run(
-            () =>
-            {
-                // Artifacts already memoized before this warm — the same before/after count AnswerQueryAsync
-                // uses, and for the same reason: it is the only way to tell "I built this" from "it was
-                // already there", and reporting the generation's accumulated costs as if THIS task had just
-                // paid them would be a false disclosure.
-                var built = facts.BuildTimes.Count;
-                var watch = Stopwatch.StartNew();
-                try
-                {
-                    facts.WarmQueryArtifacts(cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    return; // a newer edit (or shutdown) superseded this generation — nothing to say
-                }
-                catch (Exception exception)
-                {
-                    // A warm failure must never take the host down and must never pass silently: the layer
-                    // stays unbuilt, so the next query builds it and would hit the same fault where the user
-                    // can see it. Disclose and move on.
-                    _output.WriteLine($"live: background warm of the derived layer FAILED: {exception.Message}");
-                    return;
-                }
-
-                watch.Stop();
-                if (facts.BuildTimes.Count == built)
-                {
-                    return; // nothing left to build (a restarted warm on an unchanged generation) — say nothing
-                }
-
-                // The counterpart of AnswerQueryAsync's cost line: this says the cost was paid HERE, off the
-                // query path, so the absence of a cost line on the next answer is explained rather than
-                // mysterious. The artifact list is the GENERATION's, which on the normal path is exactly what
-                // this task built.
-                _output.WriteLine($"live: derived layer warmed in {watch.Elapsed.TotalSeconds:F2}s: {facts.BuildTimeLine()}");
-            },
-            cancellationToken
-        );
 
     private async Task<int> ApplyBatchAsync(IReadOnlyCollection<string> batch, CancellationToken cancellationToken)
     {
         var watch = Stopwatch.StartNew();
-        var applied = 0;
+        var edits = new Dictionary<string, SourceText>(StringComparer.OrdinalIgnoreCase);
+        var solution = _index.CurrentSolution;
+        foreach (var path in batch)
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (solution.GetDocumentIdsWithFilePath(fullPath).IsEmpty)
+            {
+                // A brand-new file is not in the retained workspace; ResidentIndex has no add-file
+                // path yet. Disclose rather than silently skip.
+                _output.WriteLine($"live: {fullPath} is not a workspace document (new file?) — not indexed until the next cold boot");
+                continue;
+            }
+
+            var text = await ReadAllTextWithRetryAsync(fullPath, cancellationToken);
+            if (text is null)
+            {
+                _output.WriteLine($"live: FAILED to apply {batch.Count}-file batch: {fullPath} could not be read; no edits published");
+                return 0;
+            }
+
+            edits[fullPath] = SourceText.From(text, Encoding.UTF8);
+        }
+
+        if (edits.Count == 0)
+        {
+            return 0;
+        }
+
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            foreach (var path in batch)
+            try
             {
-                var fullPath = Path.GetFullPath(path);
-                if (_index.CurrentSolution.GetDocumentIdsWithFilePath(fullPath).IsEmpty)
-                {
-                    // A brand-new file is not in the retained workspace; ResidentIndex has no add-file
-                    // path yet. Disclose rather than silently skip.
-                    _output.WriteLine($"live: {fullPath} is not a workspace document (new file?) — not indexed until the next cold boot");
-                    continue;
-                }
-
-                var text = await ReadAllTextWithRetryAsync(fullPath, cancellationToken);
-                if (text is null)
-                {
-                    continue; // deleted mid-burst, or still locked after retries — the next save will catch it
-                }
-
-                try
-                {
-                    await _index.ApplyEditAsync(fullPath, SourceText.From(text, Encoding.UTF8), cancellationToken);
-                    ReleasePublishedSnapshotCaches();
-                    applied++;
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    _output.WriteLine($"live: FAILED to apply {fullPath}: {exception.Message}");
-                }
+                await _index.ApplyEditsAsync(edits, cancellationToken);
+                ReleasePublishedSnapshotCaches();
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _output.WriteLine($"live: FAILED to apply {edits.Count}-file batch: {exception.Message}");
+                return 0;
             }
 
-            if (applied > 0)
-            {
-                Interlocked.Add(ref _appliedFiles, applied);
-                _lastEditSeconds = watch.Elapsed.TotalSeconds;
-            }
+            Interlocked.Add(ref _appliedFiles, edits.Count);
+            _lastEditSeconds = watch.Elapsed.TotalSeconds;
         }
         finally
         {
             _gate.Release();
         }
 
-        return applied;
+        return edits.Count;
     }
 
-    private async Task ReconcileInBackgroundAsync(CancellationToken cancellationToken)
+    // Explicit scheduler/test seam. Watcher publication never calls it automatically: dirty debt stays
+    // visible until a caller deliberately pays the cascade cost.
+    public async Task<bool> ReconcileAllAsync(CancellationToken cancellationToken = default)
     {
-        await Task.Yield(); // never run synchronously on the worker's apply path
-        var watch = Stopwatch.StartNew();
-        string status;
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (await _index.ReconcileAsync(cancellationToken))
+            var published = await _index.ReconcileAsync(cancellationToken);
+            if (published)
             {
-                // A warm may have captured the eager predecessor while reconciliation was extracting.
-                // Retire that work at the same publication boundary as the host's other generation caches.
-                CancelWarming();
                 ReleasePublishedSnapshotCaches();
             }
 
-            var snapshot = _index.CaptureSnapshot();
-            status = ComposeStatus(snapshot);
-            WriteCompilationHealthNote(snapshot);
+            return published;
         }
         finally
         {
             _gate.Release();
         }
-
-        _output.WriteLine($"{status} | reconcile {watch.Elapsed.TotalSeconds:F2}s");
     }
 
     // The live derived layer for whatever generation of facts is current. Caller must hold `_gate` (it reads
@@ -940,13 +805,19 @@ internal sealed class WatchHost : IAsyncDisposable
     // replaced by what is true, quantified: how many indexed files carried compile errors, and how many
     // projects contributed nothing at all. On a tree that compiles this adds NOTHING, which is the point:
     // a disclosure that fires on a healthy tree is one the reader learns to skip.
-    private string ComposeStatus(FactSnapshot snapshot) => $"live: facts current as of {StatusBody(snapshot)}";
+    private string ComposeStatus(FactSnapshot snapshot) =>
+        snapshot.Dirty.PendingProjects.Count == 0
+            ? $"live: facts current as of {StatusBody(snapshot)}"
+            : $"live: revision {snapshot.Revision.Value}: affected facts STALE — {StatusBody(snapshot)}";
 
     // The same facts, led with the SOURCE rather than with currency — what a routed one-shot answer carries.
     // A `rig watch` session already knows where its answers come from; a plain `rig reaches` in another
     // process does not, and "which of the two possible sources answered me" is the first thing its reader
     // needs. The em-dash form is the one the program doc specified for this line.
-    private string ComposeSourceDisclosure(FactSnapshot snapshot) => $"live: facts from resident index — {StatusBody(snapshot)}";
+    private string ComposeSourceDisclosure(FactSnapshot snapshot) =>
+        snapshot.Dirty.PendingProjects.Count == 0
+            ? $"live: facts from resident index — {StatusBody(snapshot)}"
+            : $"live: facts from resident index revision {snapshot.Revision.Value} — affected facts STALE — {StatusBody(snapshot)}";
 
     // Caller must hold `_gate`.
     private string StatusBody(FactSnapshot snapshot)
@@ -1031,8 +902,8 @@ internal sealed class WatchHost : IAsyncDisposable
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
-    // Host-owned caches must not pin the generation that publication just retired. Active queries and
-    // warms keep their own local reference until they finish; after that, no host history remains.
+    // Host-owned caches must not pin the generation that publication just retired. Active queries keep
+    // their own local reference until they finish; after that, no host history remains.
     private void ReleasePublishedSnapshotCaches()
     {
         _liveFacts = null;

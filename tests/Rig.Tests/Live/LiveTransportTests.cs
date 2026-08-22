@@ -88,9 +88,14 @@ public sealed class LiveTransportTests
         // BYTE-IDENTICAL to the in-process live answer. Run second, so the derived layer is already warm and
         // its cost line (which the routed answer carries on stderr) does not appear on this side.
         var facts = await host.GetCurrentFactsAsync();
-        var direct = await LiveQueryRunner.AnswerAsync("reaches HomePage.Show", new LiveFactSource(facts, rules), playground.WorkingDirectory);
+        var direct = await LiveQueryRunner.AnswerAsync(
+            "reaches HomePage.Show",
+            new LiveFactSource(facts, rules),
+            playground.WorkingDirectory
+        );
         routedOut.ShouldBe(direct.Out, "the routed stdout is not byte-identical to the in-process live answer");
-        StripHostLines(routedErr).ShouldBe(direct.Err, "the routed stderr is not the in-process live answer's stderr plus the host's own lines");
+        StripHostLines(routedErr)
+            .ShouldBe(direct.Err, "the routed stderr is not the in-process live answer's stderr plus the host's own lines");
         exitCode.ShouldBe(direct.Exit);
 
         // THE ALLOWLIST, from both ends. Every routable verb reaches a switch arm…
@@ -98,7 +103,11 @@ public sealed class LiveTransportTests
         LiveQueryVerbs.Routable.ShouldBe(new HashSet<string> { "reaches", "path", "callers", "tree" }, ignoreOrder: true);
         foreach (var (verb, options) in RoutableRequests())
         {
-            var served = await LiveQueryRunner.RunRequestAsync(Request(verb, options, playground.WorkingDirectory), live, playground.WorkingDirectory);
+            var served = await LiveQueryRunner.RunRequestAsync(
+                Request(verb, options, playground.WorkingDirectory),
+                live,
+                playground.WorkingDirectory
+            );
             served.DeclineReason.ShouldBeNull($"`{verb}` is in the routable set but the host declined it");
             served.Answer.ShouldNotBeNull();
         }
@@ -106,7 +115,11 @@ public sealed class LiveTransportTests
         // …and nothing else does. `derive` is a real rig command and a plausible thing to ask for, which is
         // exactly why it must be DECLINED server-side rather than reaching any command body.
         var refused = await LiveQueryRunner.RunRequestAsync(
-            Request("derive", new ReachesCommand.Options("X", false, false, false, [], null, null, [], [], false, null, false), playground.WorkingDirectory),
+            Request(
+                "derive",
+                new ReachesCommand.Options("X", false, false, false, [], null, null, [], [], false, null, false),
+                playground.WorkingDirectory
+            ),
             live,
             playground.WorkingDirectory
         );
@@ -123,7 +136,20 @@ public sealed class LiveTransportTests
         var withRules = await LiveQueryRunner.RunRequestAsync(
             Request(
                 LiveQueryVerbs.Reaches,
-                new ReachesCommand.Options("HomePage.Show", false, false, false, ["C:\\nowhere\\extra.json"], null, null, [], [], false, null, false),
+                new ReachesCommand.Options(
+                    "HomePage.Show",
+                    false,
+                    false,
+                    false,
+                    ["C:\\nowhere\\extra.json"],
+                    null,
+                    null,
+                    [],
+                    [],
+                    false,
+                    null,
+                    false
+                ),
                 playground.WorkingDirectory
             ),
             live,
@@ -206,7 +232,9 @@ public sealed class LiveTransportTests
         filterErr.ShouldContain(SourceLinePrefix);
         filterOut
             .Contains("efcore commit", StringComparison.Ordinal)
-            .ShouldBeTrue("an upper-case --only matched nothing over the transport: the case-insensitive filter comparer was lost in the round trip");
+            .ShouldBeTrue(
+                "an upper-case --only matched nothing over the transport: the case-insensitive filter comparer was lost in the round trip"
+            );
 
         // THE EDIT, on disk: AddAsync gains a read of the same DbSet before writing to it.
         var editedFilePath = Path.Combine(playground.WorkingDirectory, "EntryPointEffects.Api", "Services", "TeamRepository.cs");
@@ -232,11 +260,18 @@ public sealed class LiveTransportTests
         after.Out.ShouldContain("efcore read");
         after.Out.ShouldContain("efcore pending_write"); // the pre-existing effects survive the edit
         after.Out.ShouldContain("efcore commit");
-        after.Err.ShouldContain(SourceLinePrefix);
+        after.Err.ShouldContain("live: facts from resident index revision");
+        after.Err.ShouldContain("affected facts STALE");
+        after.Err.ShouldContain("project(s) unreconciled");
 
         // AND THE STORE, in the same directory, does NOT see it — which is what makes the routed answer worth
         // having, and what proves the routed answer did not come from the store.
-        var (storeExit, storeOut, storeErr) = await RunCliAsync(playground.WorkingDirectory, "reaches", "TeamRepository.AddAsync", "--no-live");
+        var (storeExit, storeOut, storeErr) = await RunCliAsync(
+            playground.WorkingDirectory,
+            "reaches",
+            "TeamRepository.AddAsync",
+            "--no-live"
+        );
         Report($"[transport/edit] AFTER (--no-live, store) exit {storeExit}:{Environment.NewLine}{storeOut}{storeErr}");
         storeExit.ShouldBe(0, storeOut + storeErr);
         storeOut
@@ -266,7 +301,9 @@ public sealed class LiveTransportTests
         // rig invocation is in and the one that must be indistinguishable from rig before this slice.
         var (routedExit, routedOut, routedErr) = await RunCliAsync(playground.WorkingDirectory, "reaches", "HomePage.Show");
         var (forcedExit, forcedOut, forcedErr) = await RunCliAsync(playground.WorkingDirectory, "reaches", "HomePage.Show", "--no-live");
-        Report($"[transport/fallback] no host exit {routedExit}, stdout:{Environment.NewLine}{routedOut}stderr:{Environment.NewLine}{routedErr}");
+        Report(
+            $"[transport/fallback] no host exit {routedExit}, stdout:{Environment.NewLine}{routedOut}stderr:{Environment.NewLine}{routedErr}"
+        );
 
         routedExit.ShouldBe(0, routedOut + routedErr);
         routedOut.ShouldContain("From: HomePage.Show");
@@ -304,7 +341,9 @@ public sealed class LiveTransportTests
             var watch = Stopwatch.StartNew();
             var (exitCode, standardOut, standardError) = await RunCliAsync(directory, "reaches", "Anything.AtAll");
             watch.Stop();
-            Report($"[transport/dead-pipe] exit {exitCode} in {watch.Elapsed.TotalSeconds:F2}s:{Environment.NewLine}{standardOut}{standardError}");
+            Report(
+                $"[transport/dead-pipe] exit {exitCode} in {watch.Elapsed.TotalSeconds:F2}s:{Environment.NewLine}{standardOut}{standardError}"
+            );
 
             stub.Connections.ShouldBeGreaterThan(0, "the client never reached the stub endpoint — this test proves nothing");
             standardError.ShouldContain("live: a resident index is watching this directory but did not answer");
@@ -450,13 +489,13 @@ public sealed class LiveTransportTests
             // ATTEMPT — NamedPipeClientStream.ConnectAsync polls until its timeout, so that mistake would
             // cost the whole timeout on every invocation and this is where it would surface.
             // 50 ms, not the 1 ms this first asserted. The bound exists to catch ONE regression: probing with a
-        // real connect budget, because NamedPipeClientStream.ConnectAsync POLLS until its timeout and would
-        // then tax every rig invocation by that whole timeout. That failure mode is hundreds of milliseconds,
-        // so 50 ms still catches it with two orders of margin over the ~50 us this actually costs — while a
-        // 1 ms bound measured in wall-clock inside a 1060-test parallel suite flakes on machine load alone
-        // (observed: passes 3/3 in isolation, failed once under a full-suite run). A perf gate that fails for
-        // reasons unrelated to the thing it guards teaches people to re-run it, which is worse than no gate.
-        perCallMicroseconds.ShouldBeLessThan(50_000);
+            // real connect budget, because NamedPipeClientStream.ConnectAsync POLLS until its timeout and would
+            // then tax every rig invocation by that whole timeout. That failure mode is hundreds of milliseconds,
+            // so 50 ms still catches it with two orders of margin over the ~50 us this actually costs — while a
+            // 1 ms bound measured in wall-clock inside a 1060-test parallel suite flakes on machine load alone
+            // (observed: passes 3/3 in isolation, failed once under a full-suite run). A perf gate that fails for
+            // reasons unrelated to the thing it guards teaches people to re-run it, which is worse than no gate.
+            perCallMicroseconds.ShouldBeLessThan(50_000);
         }
         finally
         {
@@ -501,9 +540,15 @@ public sealed class LiveTransportTests
 
     private static IEnumerable<(string Verb, object Options)> RoutableRequests() =>
         [
-            (LiveQueryVerbs.Reaches, new ReachesCommand.Options("HomePage.Show", false, false, false, [], null, null, [], [], false, null, false)),
+            (
+                LiveQueryVerbs.Reaches,
+                new ReachesCommand.Options("HomePage.Show", false, false, false, [], null, null, [], [], false, null, false)
+            ),
             (LiveQueryVerbs.Path, new PathCommand.Options("HomePage.Show", "Db.Query", false, false, false, [], null, null, false)),
-            (LiveQueryVerbs.Callers, new CallersCommand.Options("Db.Query", false, false, false, false, false, false, [], null, null, null, false)),
+            (
+                LiveQueryVerbs.Callers,
+                new CallersCommand.Options("Db.Query", false, false, false, false, false, false, [], null, null, null, false)
+            ),
             (
                 LiveQueryVerbs.Tree,
                 new TreeCommand.Options(
@@ -694,7 +739,9 @@ public sealed class LiveTransportTests
             await Task.Delay(200);
         }
 
-        throw new TimeoutException($"Timed out after {timeout.TotalSeconds:F0}s: {reason}. Last answer:{Environment.NewLine}{last.Out}{last.Err}");
+        throw new TimeoutException(
+            $"Timed out after {timeout.TotalSeconds:F0}s: {reason}. Last answer:{Environment.NewLine}{last.Out}{last.Err}"
+        );
     }
 
     // Drop the lines the HOST adds around a routed answer — the source disclosure and the per-generation
@@ -704,7 +751,10 @@ public sealed class LiveTransportTests
             Environment.NewLine,
             standardError
                 .Split(Environment.NewLine)
-                .Where(line => !line.StartsWith(SourceLinePrefix, StringComparison.Ordinal) && !line.StartsWith(CostLinePrefix, StringComparison.Ordinal))
+                .Where(line =>
+                    !line.StartsWith(SourceLinePrefix, StringComparison.Ordinal)
+                    && !line.StartsWith(CostLinePrefix, StringComparison.Ordinal)
+                )
         );
 
     private static void Report(string block)

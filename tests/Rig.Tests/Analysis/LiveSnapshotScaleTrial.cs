@@ -31,8 +31,7 @@ namespace Rig.Tests.Analysis;
 //
 // `snapshot` is deliberately rejected until the future same-binary engine arm exists. JSONL is appended
 // and flushed after every milestone; the sibling Markdown file is regenerated from JSONL and is never the
-// source of truth. Current ResidentIndex has only a one-file ApplyEditAsync seam, so trace batches are applied
-// sequentially and disclosed as such instead of pretending this baseline measures an atomic batch API.
+// source of truth. Every trace step, including a multi-file batch, is one atomic resident publication.
 public sealed class LiveSnapshotScaleTrial
 {
     private const string EnabledVariable = "RIG_LIVE_TRIAL_ENABLED";
@@ -423,7 +422,7 @@ public sealed class LiveSnapshotScaleTrial
             SampledPeakWorkingSetBytes: sampler.PeakWorkingSetBytes,
             SampledPeakPrivateBytes: sampler.PeakPrivateBytes,
             SamplingIntervalMilliseconds: config.SamplingIntervalMilliseconds,
-            SamplingDisclosure: $"Process memory was sampled every {config.SamplingIntervalMilliseconds} ms during engine work; shorter spikes may be missed. ManagedLiveBytes is recorded after a forced blocking compacting collection while the query generation remains retained. Allocation delta is since the previous persisted milestone, includes intervening engine cleanup, and excludes canonical hashing/report serialization. Trace batches use the legacy one-file API sequentially.",
+            SamplingDisclosure: $"Process memory was sampled every {config.SamplingIntervalMilliseconds} ms during engine work; shorter spikes may be missed. ManagedLiveBytes is recorded after a forced blocking compacting collection while the query generation remains retained. Allocation delta is since the previous persisted milestone, includes intervening engine cleanup, and excludes canonical hashing/report serialization. Trace steps publish all mutations atomically.",
             Facts: snapshot.FactCounts,
             Graph: snapshot.GraphCounts,
             Work: EmptyWorkCounters(snapshot.DirtyProjects),
@@ -460,6 +459,7 @@ public sealed class LiveSnapshotScaleTrial
 
     private static async Task ApplyStepAsync(ResidentIndex index, string root, TraceEdit edit)
     {
+        var edits = new Dictionary<string, SourceText>(StringComparer.OrdinalIgnoreCase);
         foreach (var mutation in edit.Mutations)
         {
             var path = ResolveCorpusPath(root, mutation.File);
@@ -467,12 +467,15 @@ public sealed class LiveSnapshotScaleTrial
             ReplaceExactlyOnce(current, mutation.Marker, mutation.Replacement, edit.Id, mutation.File);
             var changed = current.Replace(mutation.Marker, mutation.Replacement, StringComparison.Ordinal);
             await File.WriteAllTextAsync(path, changed, Utf8NoBom);
-            await index.ApplyEditAsync(path, SourceText.From(changed, Encoding.UTF8));
+            edits[path] = SourceText.From(changed, Encoding.UTF8);
         }
+
+        await index.ApplyEditsAsync(edits);
     }
 
     private static async Task RevertStepAsync(ResidentIndex index, string root, TraceEdit edit)
     {
+        var edits = new Dictionary<string, SourceText>(StringComparer.OrdinalIgnoreCase);
         foreach (var mutation in edit.Mutations.Reverse())
         {
             var path = ResolveCorpusPath(root, mutation.File);
@@ -480,8 +483,10 @@ public sealed class LiveSnapshotScaleTrial
             ReplaceExactlyOnce(current, mutation.ReverseMarker, mutation.ReverseReplacement, edit.Id, mutation.File);
             var restored = current.Replace(mutation.ReverseMarker, mutation.ReverseReplacement, StringComparison.Ordinal);
             await File.WriteAllTextAsync(path, restored, Utf8NoBom);
-            await index.ApplyEditAsync(path, SourceText.From(restored, Encoding.UTF8));
+            edits[path] = SourceText.From(restored, Encoding.UTF8);
         }
+
+        await index.ApplyEditsAsync(edits);
     }
 
     private static void ReplaceExactlyOnce(string text, string marker, string replacement, string editId, string file)
