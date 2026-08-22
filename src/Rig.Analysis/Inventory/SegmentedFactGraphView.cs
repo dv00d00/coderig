@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 
 namespace Rig.Analysis.Inventory;
 
@@ -43,6 +44,16 @@ internal sealed class SegmentedFactGraphBase
             r => r.RelatedSymbolId,
             r => r.FilePath
         );
+        DispatchRelationsByRelatedFamily = BaseEmitterKeyIndex<TypeRelationFact>.Build(
+            facts.TypeRelations ?? [],
+            r => DispatchRelationKeys.RelatedFamily(r.RelatedSymbolId),
+            r => r.FilePath
+        );
+        DispatchRelationsByUnresolvedInterfaceName = BaseEmitterKeyIndex<TypeRelationFact>.Build(
+            facts.TypeRelations ?? [],
+            DispatchRelationKeys.UnresolvedInterfaceName,
+            r => r.FilePath
+        );
         DispatchBySource = BaseEmitterKeyIndex<DispatchFact>.Build(
             facts.DispatchFacts ?? [],
             d => d.SourceMember,
@@ -72,6 +83,8 @@ internal sealed class SegmentedFactGraphBase
     internal BaseEmitterKeyIndex<SymbolFact> SymbolsByContaining { get; }
     internal BaseEmitterKeyIndex<TypeRelationFact> TypeRelationsByType { get; }
     internal BaseEmitterKeyIndex<TypeRelationFact> TypeRelationsByRelated { get; }
+    internal BaseEmitterKeyIndex<TypeRelationFact> DispatchRelationsByRelatedFamily { get; }
+    internal BaseEmitterKeyIndex<TypeRelationFact> DispatchRelationsByUnresolvedInterfaceName { get; }
     internal BaseEmitterKeyIndex<DispatchFact> DispatchBySource { get; }
     internal BaseEmitterKeyIndex<DispatchFact> DispatchByTarget { get; }
     internal GraphPartitionBuildDiagnostics Diagnostics { get; }
@@ -91,6 +104,8 @@ internal sealed class SegmentedFactGraphOverlay
         OverlayEmitterKeyIndex<SymbolFact> symbolsByContaining,
         OverlayEmitterKeyIndex<TypeRelationFact> typeRelationsByType,
         OverlayEmitterKeyIndex<TypeRelationFact> typeRelationsByRelated,
+        OverlayEmitterKeyIndex<TypeRelationFact> dispatchRelationsByRelatedFamily,
+        OverlayEmitterKeyIndex<TypeRelationFact> dispatchRelationsByUnresolvedInterfaceName,
         OverlayEmitterKeyIndex<DispatchFact> dispatchBySource,
         OverlayEmitterKeyIndex<DispatchFact> dispatchByTarget,
         GraphPartitionUpdateDiagnostics diagnostics
@@ -103,6 +118,8 @@ internal sealed class SegmentedFactGraphOverlay
         SymbolsByContaining = symbolsByContaining;
         TypeRelationsByType = typeRelationsByType;
         TypeRelationsByRelated = typeRelationsByRelated;
+        DispatchRelationsByRelatedFamily = dispatchRelationsByRelatedFamily;
+        DispatchRelationsByUnresolvedInterfaceName = dispatchRelationsByUnresolvedInterfaceName;
         DispatchBySource = dispatchBySource;
         DispatchByTarget = dispatchByTarget;
         Diagnostics = diagnostics;
@@ -117,6 +134,8 @@ internal sealed class SegmentedFactGraphOverlay
             OverlayEmitterKeyIndex<SymbolFact>.Empty,
             OverlayEmitterKeyIndex<TypeRelationFact>.Empty,
             OverlayEmitterKeyIndex<TypeRelationFact>.Empty,
+            OverlayEmitterKeyIndex<TypeRelationFact>.Empty,
+            OverlayEmitterKeyIndex<TypeRelationFact>.Empty,
             OverlayEmitterKeyIndex<DispatchFact>.Empty,
             OverlayEmitterKeyIndex<DispatchFact>.Empty,
             new GraphPartitionUpdateDiagnostics(0, 0, 0)
@@ -129,6 +148,8 @@ internal sealed class SegmentedFactGraphOverlay
     internal OverlayEmitterKeyIndex<SymbolFact> SymbolsByContaining { get; }
     internal OverlayEmitterKeyIndex<TypeRelationFact> TypeRelationsByType { get; }
     internal OverlayEmitterKeyIndex<TypeRelationFact> TypeRelationsByRelated { get; }
+    internal OverlayEmitterKeyIndex<TypeRelationFact> DispatchRelationsByRelatedFamily { get; }
+    internal OverlayEmitterKeyIndex<TypeRelationFact> DispatchRelationsByUnresolvedInterfaceName { get; }
     internal OverlayEmitterKeyIndex<DispatchFact> DispatchBySource { get; }
     internal OverlayEmitterKeyIndex<DispatchFact> DispatchByTarget { get; }
     internal GraphPartitionUpdateDiagnostics Diagnostics { get; }
@@ -142,6 +163,8 @@ internal sealed class SegmentedFactGraphOverlay
         var symbolsByContaining = SymbolsByContaining;
         var typeRelationsByType = TypeRelationsByType;
         var typeRelationsByRelated = TypeRelationsByRelated;
+        var dispatchRelationsByRelatedFamily = DispatchRelationsByRelatedFamily;
+        var dispatchRelationsByUnresolvedInterfaceName = DispatchRelationsByUnresolvedInterfaceName;
         var dispatchBySource = DispatchBySource;
         var dispatchByTarget = DispatchByTarget;
         var rowCount = 0;
@@ -156,6 +179,8 @@ internal sealed class SegmentedFactGraphOverlay
             priorShardsRemoved += symbolsByContaining.OwnedShardCount(emitter);
             priorShardsRemoved += typeRelationsByType.OwnedShardCount(emitter);
             priorShardsRemoved += typeRelationsByRelated.OwnedShardCount(emitter);
+            priorShardsRemoved += dispatchRelationsByRelatedFamily.OwnedShardCount(emitter);
+            priorShardsRemoved += dispatchRelationsByUnresolvedInterfaceName.OwnedShardCount(emitter);
             priorShardsRemoved += dispatchBySource.OwnedShardCount(emitter);
             priorShardsRemoved += dispatchByTarget.OwnedShardCount(emitter);
             referencesByEnclosing = referencesByEnclosing.ReplaceEmitter(emitter, slice.References, r => r.EnclosingSymbolId);
@@ -164,6 +189,16 @@ internal sealed class SegmentedFactGraphOverlay
             symbolsByContaining = symbolsByContaining.ReplaceEmitter(emitter, slice.Symbols, s => s.ContainingSymbolId);
             typeRelationsByType = typeRelationsByType.ReplaceEmitter(emitter, slice.TypeRelations, r => r.TypeSymbolId);
             typeRelationsByRelated = typeRelationsByRelated.ReplaceEmitter(emitter, slice.TypeRelations, r => r.RelatedSymbolId);
+            dispatchRelationsByRelatedFamily = dispatchRelationsByRelatedFamily.ReplaceEmitter(
+                emitter,
+                slice.TypeRelations,
+                r => DispatchRelationKeys.RelatedFamily(r.RelatedSymbolId)
+            );
+            dispatchRelationsByUnresolvedInterfaceName = dispatchRelationsByUnresolvedInterfaceName.ReplaceEmitter(
+                emitter,
+                slice.TypeRelations,
+                DispatchRelationKeys.UnresolvedInterfaceName
+            );
             dispatchBySource = dispatchBySource.ReplaceEmitter(emitter, slice.Dispatch, d => d.SourceMember);
             dispatchByTarget = dispatchByTarget.ReplaceEmitter(emitter, slice.Dispatch, d => d.TargetMember);
             rowCount += slice.Symbols.Length + slice.References.Length + slice.TypeRelations.Length + slice.Dispatch.Length;
@@ -177,6 +212,8 @@ internal sealed class SegmentedFactGraphOverlay
             symbolsByContaining,
             typeRelationsByType,
             typeRelationsByRelated,
+            dispatchRelationsByRelatedFamily,
+            dispatchRelationsByUnresolvedInterfaceName,
             dispatchBySource,
             dispatchByTarget,
             new GraphPartitionUpdateDiagnostics(slices.Count, rowCount, priorShardsRemoved)
@@ -207,6 +244,30 @@ internal sealed class SegmentedFactGraphView(SegmentedFactGraphBase baseLayer, S
 
     public IReadOnlyList<TypeRelationFact> TypeRelationsTo(string relatedSymbolId) =>
         Lookup(baseLayer.TypeRelationsByRelated, overlay.TypeRelationsByRelated, relatedSymbolId).Rows;
+
+    public IReadOnlyList<TypeRelationFact> DispatchRelationsTo(string declaringTypeId) => LookupDispatchRelationsTo(declaringTypeId).Rows;
+
+    internal GraphLookupResult<TypeRelationFact> LookupDispatchRelationsTo(string declaringTypeId)
+    {
+        var relatedFamily = Lookup(
+            baseLayer.DispatchRelationsByRelatedFamily,
+            overlay.DispatchRelationsByRelatedFamily,
+            DispatchRelationKeys.RelatedFamily(declaringTypeId)
+        );
+        var unresolved = Lookup(
+            baseLayer.DispatchRelationsByUnresolvedInterfaceName,
+            overlay.DispatchRelationsByUnresolvedInterfaceName,
+            DispatchRelationKeys.SimpleTypeName(declaringTypeId)
+        );
+        return new GraphLookupResult<TypeRelationFact>(
+            relatedFamily.Rows.Concat(unresolved.Rows).Distinct().ToImmutableArray(),
+            new GraphLookupDiagnostics(
+                relatedFamily.Diagnostics.KeyPartitionsExamined + unresolved.Diagnostics.KeyPartitionsExamined,
+                relatedFamily.Diagnostics.EmitterShardsExamined + unresolved.Diagnostics.EmitterShardsExamined,
+                relatedFamily.Diagnostics.RowsExamined + unresolved.Diagnostics.RowsExamined
+            )
+        );
+    }
 
     public IReadOnlyList<DispatchFact> DispatchFrom(string sourceMember) =>
         Lookup(baseLayer.DispatchBySource, overlay.DispatchBySource, sourceMember).Rows;

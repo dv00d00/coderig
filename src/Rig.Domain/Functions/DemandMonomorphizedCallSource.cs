@@ -6,7 +6,8 @@ namespace Rig.Domain.Functions;
 public sealed record ForwardCallProjectionRules(
     IReadOnlyList<FactHandoffRule>? Handoff = null,
     IReadOnlyList<FactRedirectRule>? Redirect = null,
-    IReadOnlyList<FactGenericFactoryRule>? Factory = null
+    IReadOnlyList<FactGenericFactoryRule>? Factory = null,
+    bool ClassifyEventSubscriptions = false
 );
 
 public sealed record DemandMonomorphizationLimits(int MaxInstantiationsPerMethod = 50, int MaxWorkUnits = 100_000);
@@ -48,6 +49,7 @@ public sealed class DemandMonomorphizedCallSource : IForwardCallSource
     private readonly IReadOnlyList<FactHandoffRule> handoffRules;
     private readonly IReadOnlyList<FactRedirectRule> redirectRules;
     private readonly IReadOnlyList<FactGenericFactoryRule> factoryRules;
+    private readonly bool classifyEventSubscriptions;
     private readonly DemandMonomorphizationLimits limits;
     private readonly Dictionary<string, IReadOnlyList<CallEdge>> baseAdjacency = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<CallEdge>> resultCache = new(StringComparer.Ordinal);
@@ -87,6 +89,7 @@ public sealed class DemandMonomorphizedCallSource : IForwardCallSource
         handoffRules = configuredRules.Handoff ?? [];
         redirectRules = configuredRules.Redirect ?? [];
         factoryRules = configuredRules.Factory ?? [];
+        classifyEventSubscriptions = configuredRules.ClassifyEventSubscriptions;
         this.limits = limits ?? new DemandMonomorphizationLimits();
         if (this.limits.MaxInstantiationsPerMethod <= 0)
         {
@@ -207,7 +210,7 @@ public sealed class DemandMonomorphizedCallSource : IForwardCallSource
         }
 
         baseAdjacencyCacheMisses++;
-        var projected = FactGraphProjection.CallsFrom(countedGraph, caller, handoffRules, redirectRules);
+        var projected = FactGraphProjection.CallsFrom(countedGraph, caller, handoffRules, redirectRules, classifyEventSubscriptions);
         var shaped = new List<CallEdge>(projected.Count);
         foreach (var edge in projected)
         {
@@ -433,6 +436,8 @@ public sealed class DemandMonomorphizedCallSource : IForwardCallSource
         public IReadOnlyList<TypeRelationFact> TypeRelationsFrom(string typeSymbolId) => inner.TypeRelationsFrom(typeSymbolId);
 
         public IReadOnlyList<TypeRelationFact> TypeRelationsTo(string relatedSymbolId) => inner.TypeRelationsTo(relatedSymbolId);
+
+        public IReadOnlyList<TypeRelationFact> DispatchRelationsTo(string declaringTypeId) => inner.DispatchRelationsTo(declaringTypeId);
 
         public IReadOnlyList<DispatchFact> DispatchFrom(string sourceMember)
         {

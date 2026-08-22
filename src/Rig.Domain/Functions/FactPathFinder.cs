@@ -1284,31 +1284,6 @@ public static partial class FactPathFinder
         return count;
     }
 
-    // Simple (un-namespaced, arity-stripped) name from a type DocID:
-    // "T:Ns.IFoo`1" / "!:IFoo" -> "IFoo".
-    private static string SimpleTypeName(string typeId)
-    {
-        var s = typeId;
-        if (s.Length >= 2 && s[1] == ':')
-        {
-            s = s.Substring(2);
-        }
-
-        var lastDot = s.LastIndexOf('.');
-        if (lastDot >= 0)
-        {
-            s = s.Substring(lastDot + 1);
-        }
-
-        var tick = s.IndexOf('`');
-        if (tick >= 0)
-        {
-            s = s.Substring(startIndex: 0, length: tick);
-        }
-
-        return s;
-    }
-
     private static bool Contains(string value, string pattern) => value.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
 
     // Resolve a from/to PATTERN to the set of node ids it selects, with EXACT MATCH WINS: if the pattern

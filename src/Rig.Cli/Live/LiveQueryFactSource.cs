@@ -20,19 +20,15 @@ namespace Rig.Cli.Live;
 //
 // Two honest asymmetries vs the store path, both disclosed rather than papered over:
 //
-//  1. NOTHING BOUNDS THE INPUTS. The store path narrows the effect-derivation inputs to the pattern's SQL
-//     reach closure (SqlReachability); with no SQL there is nothing to narrow with, so the live derivation
-//     runs over the WHOLE fact set. The command then filters effects by `reachable.ContainsKey(
-//     EnclosingSymbolId)` on both paths, which is what makes the ANSWERS agree — LiveReachesTests measures
-//     that byte-for-byte on real playgrounds rather than assuming it. The same holds for the graph-only load
-//     `path`/`callers` take (LoadShapedTraversalGraphAsync): the whole graph is a superset of either
-//     direction's bounded closure and the traversal narrows it, measured in LivePathCallersTests — which is
-//     also where the one VISIBLE consequence is pinned, `path`'s "Fact graph: N call edges …" load banner.
+//  1. MOST INPUTS ARE NOT SQL-BOUNDED. The store path narrows the effect-derivation inputs to the pattern's
+//     SQL reach closure (SqlReachability); live reaches/tree and reverse callers still use the whole resident
+//     graph and let traversal narrow that sound superset. Forward path is the exception: the optional demand
+//     capability below walks keyed caller partitions to a fixed point and never forces TraversalGraph.
 //  2. NO QUERY CACHE. The store path memoizes the (expensive, pattern-independent) EP-site map in
 //     .rig/cache.db keyed by store identity; live facts change per edit, so a disk cache keyed on them would
 //     be a liability. The equivalent here is per-GENERATION memoization: derive once, reuse for every query
 //     against the same facts, discard when the facts move.
-internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSource
+internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSource, IDemandForwardPathFactSource
 {
     private readonly object _gate = new();
 
@@ -64,17 +60,58 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
         );
     }
 
-    // `path`/`callers`' graph-only load. Same memo, same shaping discriminator — the only difference from
+    // `callers`' graph-only load, plus the legacy fallback for a flattened live fixture. Same memo, same shaping discriminator — the only difference from
     // LoadEffectReachInputsAsync is that nothing but the graph is wanted, so nothing but the graph is touched
     // (on the live path that also means the effect derivation is never forced by a `path`/`callers` query).
     //
-    // `direction` is intentionally unused: there is no SQL to bound the load with, so the live graph is the
-    // WHOLE shaped graph — a superset of both the Forward and the Reverse closure. FactPathFinder narrows it
-    // per direction at traversal time on both paths, which is what makes a REVERSE (`callers`) answer agree.
+    // `direction` is intentionally unused here: reverse callers still takes the WHOLE shaped graph and
+    // FactPathFinder narrows it at traversal time. Indexed forward path does not call this member.
     public Task<FactGraphData> LoadShapedTraversalGraphAsync(string pattern, SqlReachability.Direction direction, RuleSet shapedRules) =>
         Task.FromResult(
             SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules)
         );
+
+    public Task<DemandForwardGraphResult> LoadDemandForwardPathGraphAsync(
+        string fromPattern,
+        RuleSet shapedRules,
+        int maxDepth,
+        FactPathFinder.TraversalMode mode,
+        bool classifyEventSubscriptions
+    )
+    {
+        if (Source.Facts is not IIndexedFactSnapshotView indexed)
+        {
+            // Compatibility for callers/tests that construct LiveFactSource from a flattened AnalysisResult.
+            // WatchHost never takes this arm: its resident FactSnapshot implements IIndexedFactSnapshotView.
+            // The fallback is deliberately explicit in diagnostics and is not used for demand caps, budget
+            // exhaustion, or any exception from the keyed builder.
+            var graph = SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules);
+            return Task.FromResult(
+                new DemandForwardGraphResult(
+                    Graph: graph,
+                    Diagnostics: DemandForwardGraphDiagnostics.LegacyFallback(),
+                    EventSubscriptionsClassified: false
+                )
+            );
+        }
+
+        return Task.FromResult(
+            DemandForwardPathGraph.Build(
+                indexed.GraphView,
+                new DemandForwardGraphRules(
+                    Projection: new ForwardCallProjectionRules(
+                        Handoff: shapedRules.Handoff,
+                        Redirect: shapedRules.Redirect,
+                        Factory: shapedRules.Factory,
+                        ClassifyEventSubscriptions: classifyEventSubscriptions
+                    ),
+                    Cut: shapedRules.Cut,
+                    Context: shapedRules.Context
+                ),
+                new DemandForwardGraphRequest(fromPattern, maxDepth, mode)
+            )
+        );
+    }
 
     // Does `shapedRules` shape the graph the same way the memo was shaped? The memo was built with the rules
     // the FACTS were extracted under, and a caller shaping differently must not be silently served the wrong

@@ -5,6 +5,7 @@ using Rig.Cli.CommandLine;
 using Rig.Cli.Live;
 using Rig.Cli.Rendering;
 using Rig.Cli.Telemetry;
+using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.EntryPoints.EntryPointContext;
@@ -110,18 +111,34 @@ internal static class PathCommand
         await using var source = await openSource();
 
         var graphWatch = Stopwatch.StartNew();
+        var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
         // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
         // same first path as the full graph. Falls back to the full EF graph when `rig graph` hasn't run;
-        // the live source has no SQL to bound with at all and hands back the whole shaped graph, which is
-        // a superset of the same closure — see the "Fact graph:" banner note below.
-        var graph = await source.LoadShapedTraversalGraphAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
+        // an indexed live source instead materializes its forward closure through keyed caller partitions.
+        DemandForwardGraphResult? demandLoad = null;
+        FactGraphData graph;
+        if (source is IDemandForwardPathFactSource demand)
+        {
+            demandLoad = await demand.LoadDemandForwardPathGraphAsync(
+                opts.FromPattern,
+                shaped,
+                maxDepth,
+                mode,
+                classifyEventSubscriptions: !opts.Raw
+            );
+            graph = demandLoad.Graph;
+        }
+        else
+        {
+            graph = await source.LoadShapedTraversalGraphAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
+        }
         // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
         // (ReachesCommand/TreeCommand do the same). The handler genuinely runs LATER via the event, not
         // synchronously at the `+=` site, so it must be sync-cut by default and only crossed under --async.
         // Without this, `path`/`callers` walked a `+=` handler as a synchronous call (the 2026-06-16
         // over-reach). `--raw` bypasses all shaping, so it is gated the same way reaches/tree gate it.
-        if (!opts.Raw)
+        if (!opts.Raw && demandLoad?.EventSubscriptionsClassified != true)
         {
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
         }
@@ -151,7 +168,7 @@ internal static class PathCommand
         // LOAD DIAGNOSTIC, NOT AN ANSWER — and the one line in this command whose value depends on the fact
         // SOURCE rather than on the question. It reports the size of the subgraph that was LOADED: on a store
         // with `rig graph` run that is the SQL-bounded forward slice; on the same store without it, the full EF
-        // graph; on the resident live source, the whole in-memory graph. The three numbers differ by
+        // graph; on the resident live source, the query-local demand graph. The three numbers differ by
         // construction and always have (the store path has reported two different values for the same query
         // since the bounded loader landed). The path itself, and every other line below, is identical.
         if (!tsv)
@@ -162,13 +179,7 @@ internal static class PathCommand
         }
 
         var traversalWatch = Stopwatch.StartNew();
-        var path = FactPathFinder.Find(
-            graph,
-            fromPattern: opts.FromPattern,
-            toPattern: opts.ToPattern,
-            maxDepth: CommonOptions.DepthOrUnbounded(opts.Depth),
-            mode: mode
-        );
+        var path = FactPathFinder.Find(graph, fromPattern: opts.FromPattern, toPattern: opts.ToPattern, maxDepth: maxDepth, mode: mode);
         // Phase 3 display-collapse: fold any monomorphized (`~mono`) step ids back to their base method id
         // before render (no-op until Phase 2's Materialize is wired into the load path).
         path = path is null ? null : MonomorphCollapse.CollapsePath(path);

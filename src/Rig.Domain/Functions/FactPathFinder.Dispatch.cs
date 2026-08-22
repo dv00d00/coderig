@@ -555,7 +555,7 @@ public static partial class FactPathFinder
         // otherwise be invisible — Roslyn never bound these, so no mined edge can cover them. (May
         // slightly over-dispatch across same-named interfaces in different namespaces — a deliberate
         // recall-over-precision trade for broken bindings.) Deduped against the mined set via `seen`.
-        if (index.ImplsByErrorInterfaceName.TryGetValue(SimpleTypeName(parsed.Value.TypeId), out var nameImpls))
+        if (index.ImplsByErrorInterfaceName.TryGetValue(DispatchRelationKeys.SimpleTypeName(parsed.Value.TypeId), out var nameImpls))
         {
             AddImplMethods(nameImpls);
         }

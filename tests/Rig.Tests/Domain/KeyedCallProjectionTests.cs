@@ -136,6 +136,8 @@ public sealed class KeyedCallProjectionTests
 
         public IReadOnlyList<TypeRelationFact> TypeRelationsTo(string relatedSymbolId) => throw Unexpected();
 
+        public IReadOnlyList<TypeRelationFact> DispatchRelationsTo(string declaringTypeId) => throw Unexpected();
+
         public IReadOnlyList<DispatchFact> DispatchFrom(string sourceMember)
         {
             if (!allowedSlots.Contains(sourceMember))

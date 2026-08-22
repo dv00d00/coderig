@@ -468,6 +468,8 @@ internal sealed class DemandTestGraph : IFactGraphView
 
     public IReadOnlyList<TypeRelationFact> TypeRelationsTo(string relatedSymbolId) => [];
 
+    public IReadOnlyList<TypeRelationFact> DispatchRelationsTo(string declaringTypeId) => [];
+
     public IReadOnlyList<DispatchFact> DispatchFrom(string sourceMember) =>
         dispatch.Where(fact => fact.SourceMember == sourceMember).ToArray();
 

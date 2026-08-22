@@ -28,6 +28,10 @@ public interface IFactGraphView
     IReadOnlyList<TypeRelationFact> TypeRelationsFrom(string typeSymbolId);
     IReadOnlyList<TypeRelationFact> TypeRelationsTo(string relatedSymbolId);
 
+    // Reverse hierarchy neighborhood used specifically by dispatch: the generic-normalized related
+    // family plus unresolved-interface rows with the declaring type's simple name.
+    IReadOnlyList<TypeRelationFact> DispatchRelationsTo(string declaringTypeId);
+
     IReadOnlyList<DispatchFact> DispatchFrom(string sourceMember);
     IReadOnlyList<DispatchFact> DispatchTo(string targetMember);
 }

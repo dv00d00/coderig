@@ -83,6 +83,53 @@ public sealed class SegmentedGraphViewTests
     }
 
     [Test]
+    public void Dispatch_relation_indexes_cover_generic_and_error_families_across_replacement_and_tombstone()
+    {
+        const string emitterA = "/repo/A.cs";
+        const string emitterB = "/repo/B.cs";
+        var baseCat = new TypeRelationFact("T:App.CatSub", "T:App.Base`1{T:App.Cat}", RelationKinds.Base, emitterA);
+        var baseDog = new TypeRelationFact("T:App.DogSub", "T:App.Base`1{T:App.Dog}", RelationKinds.Base, emitterB);
+        var errorA = new TypeRelationFact("T:App.PartialA", "!:IFoo", RelationKinds.Interface, emitterA);
+        var errorB = new TypeRelationFact("T:App.PartialB", "!:IFoo", RelationKinds.Interface, emitterB);
+        var unrelated = new TypeRelationFact("T:App.Other", "!:IBar", RelationKinds.Interface, emitterA);
+        var baseLayer = SegmentedFactGraphBase.Build(Result(relations: [baseCat, baseDog, errorA, errorB, unrelated]));
+        var captured = new SegmentedFactGraphView(baseLayer, SegmentedFactGraphOverlay.Empty);
+
+        AssertRows(captured.DispatchRelationsTo("T:App.Base`1"), [baseCat, baseDog]);
+        AssertRows(captured.DispatchRelationsTo("T:App.IFoo"), [errorA, errorB]);
+        captured.DispatchRelationsTo("T:App.IFoo").ShouldNotContain(unrelated);
+        captured
+            .LookupDispatchRelationsTo("T:App.Base`1")
+            .Diagnostics.ShouldBe(new GraphLookupDiagnostics(KeyPartitionsExamined: 1, EmitterShardsExamined: 2, RowsExamined: 2));
+        captured
+            .LookupDispatchRelationsTo("T:App.IFoo")
+            .Diagnostics.ShouldBe(new GraphLookupDiagnostics(KeyPartitionsExamined: 1, EmitterShardsExamined: 2, RowsExamined: 2));
+
+        var replacementBase = new TypeRelationFact("T:App.HorseSub", "T:App.Base`1{T:App.Horse}", RelationKinds.Base, emitterB);
+        var replacementError = new TypeRelationFact("T:App.PartialBar", "!:IBar", RelationKinds.Interface, emitterB);
+        var replacedOverlay = SegmentedFactGraphOverlay.Empty.Replace(
+            new Dictionary<string, FileFacts> { [emitterB] = Slice(relations: [replacementBase, replacementError]) }
+        );
+        var replaced = new SegmentedFactGraphView(baseLayer, replacedOverlay);
+
+        AssertRows(replaced.DispatchRelationsTo("T:App.Base`1"), [baseCat, replacementBase]);
+        AssertRows(replaced.DispatchRelationsTo("T:App.IFoo"), [errorA]);
+        AssertRows(replaced.DispatchRelationsTo("T:App.IBar"), [unrelated, replacementError]);
+
+        var tombstoned = new SegmentedFactGraphView(
+            baseLayer,
+            replacedOverlay.Replace(new Dictionary<string, FileFacts> { [emitterB] = Slice() })
+        );
+        AssertRows(tombstoned.DispatchRelationsTo("T:App.Base`1"), [baseCat]);
+        AssertRows(tombstoned.DispatchRelationsTo("T:App.IFoo"), [errorA]);
+        AssertRows(tombstoned.DispatchRelationsTo("T:App.IBar"), [unrelated]);
+
+        // Captured immutable views retain their original base rows after later overlay roots replace them.
+        AssertRows(captured.DispatchRelationsTo("T:App.Base`1"), [baseCat, baseDog]);
+        AssertRows(captured.DispatchRelationsTo("T:App.IFoo"), [errorA, errorB]);
+    }
+
+    [Test]
     public void Replacement_removes_both_reference_directions_empty_tombstones_and_preserves_captured_view()
     {
         const string emitter = "/repo/Changed.cs";

@@ -350,7 +350,7 @@ public static partial class FactPathFinder
 
         index.ImplsByErrorInterfaceName = graph
             .ImplementsEdges.Where(e => e.InterfaceType.StartsWith("!:", StringComparison.Ordinal))
-            .GroupBy(e => SimpleTypeName(e.InterfaceType), StringComparer.Ordinal)
+            .GroupBy(e => DispatchRelationKeys.SimpleTypeName(e.InterfaceType), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
 
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(

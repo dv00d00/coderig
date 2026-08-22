@@ -69,12 +69,35 @@ public static class FactGraphProjection
         IFactGraphView graph,
         string caller,
         IReadOnlyList<FactHandoffRule>? handoffRules = null,
-        IReadOnlyList<FactRedirectRule>? redirectRules = null
+        IReadOnlyList<FactRedirectRule>? redirectRules = null,
+        bool classifyEventSubscriptions = false
     )
     {
-        var calls = ProjectCalls(graph.ReferencesFrom(caller), handoffRules, redirectRules);
+        var references = graph.ReferencesFrom(caller);
+        var calls = ProjectCalls(references, handoffRules, redirectRules);
         var delegateFieldEdges = FactDelegateFieldJoin.EdgesFrom(graph, caller);
-        return delegateFieldEdges.Count == 0 ? calls : [.. calls, .. delegateFieldEdges];
+        IReadOnlyList<CallEdge> combined = delegateFieldEdges.Count == 0 ? calls : [.. calls, .. delegateFieldEdges];
+        if (!classifyEventSubscriptions)
+        {
+            return combined;
+        }
+
+        var eventSites = references
+            .Where(reference =>
+                reference.RefKind == RefKinds.Read
+                && reference.TargetSymbolId.StartsWith("E:", StringComparison.Ordinal)
+                && reference.EnclosingSymbolId is not null
+            )
+            .Select(reference => new EventSubscriptionSite(reference.EnclosingSymbolId!, reference.FilePath, reference.Line))
+            .ToHashSet();
+        return eventSites.Count == 0
+            ? combined
+            : FactPathFinder
+                .MarkEventSubscriptionHandoffs(
+                    new FactGraphData(combined, Array.Empty<ImplementsEdge>(), Array.Empty<MethodRef>()),
+                    eventSites
+                )
+                .CallEdges;
     }
 
     private static IReadOnlyList<CallEdge> ProjectCalls(
