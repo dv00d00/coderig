@@ -73,7 +73,10 @@ keyed graph view in traversal, then add demand-driven refinement.
   Raw multiplicity remains intact while raw row order is explicitly non-semantic; Slice 6B must project
   duplicate method facts deterministically before consuming the view. The first 6B gate makes both raw views
   use stable emitter order and pins the projected first method independent of replacement chronology. Five
-  tests bring exact discovery to **1,104 tests**. No semantic projection or query-locality claim is made yet.
+  tests bring exact discovery to **1,104 tests**. A following caller-local seam now shares the full projection's
+  reference filtering, redirects, semantic dedupe, dispatcher handoffs, and delegate-field joins while reading
+  only one reference key and the delegate slots that caller invokes. One parity/locality test brings exact
+  discovery to **1,105 tests**. No command-level query-locality claim is made yet.
 - **Next:** Slice 6B, consume `IFactGraphView` from traversal with forward/reverse and one-hop dispatch parity;
   then add demand-driven exact refinement.
 

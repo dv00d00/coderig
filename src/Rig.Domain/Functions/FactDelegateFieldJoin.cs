@@ -60,6 +60,44 @@ public static class FactDelegateFieldJoin
         return edges;
     }
 
+    // Caller-local twin of Edges for a keyed resident graph. An invoke fact points from the delegate
+    // slot to its invoking method, so reverse lookup discovers only this caller's slots; forward lookup
+    // then supplies each slot's binds and any escape that suppresses the join.
+    public static IReadOnlyList<CallEdge> EdgesFrom(IFactGraphView graph, string caller)
+    {
+        var slots = graph
+            .DispatchTo(caller)
+            .Where(fact => fact.Kind == DispatchKinds.DelegateFieldInvoke)
+            .Select(fact => fact.SourceMember)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(slot => slot, StringComparer.Ordinal);
+        var edges = new List<CallEdge>();
+        foreach (var slot in slots)
+        {
+            var facts = graph.DispatchFrom(slot);
+            if (
+                facts.Any(fact => fact.Kind == DispatchKinds.DelegateFieldEscape)
+                || !facts.Any(fact => fact.Kind == DispatchKinds.DelegateFieldInvoke && fact.TargetMember == caller)
+            )
+            {
+                continue;
+            }
+
+            foreach (
+                var callable in facts
+                    .Where(fact => fact.Kind == DispatchKinds.DelegateFieldBind)
+                    .Select(fact => fact.TargetMember)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(target => target, StringComparer.Ordinal)
+            )
+            {
+                edges.Add(new CallEdge(Caller: caller, Callee: callable, Kind: EdgeKinds.DelegateField, FilePath: "", Line: 0));
+            }
+        }
+
+        return edges;
+    }
+
     private static void Add(Dictionary<string, SortedSet<string>> map, string key, string value)
     {
         if (!map.TryGetValue(key, out var set))

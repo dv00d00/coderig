@@ -29,25 +29,7 @@ public static class FactGraphProjection
         IReadOnlyList<FactRedirectRule>? redirectRules = null
     )
     {
-        // First-party callees only (TargetInSource): BCL/runtime targets are leaves that add width, not
-        // reach, and have no source symbol. Mirrors LoadFactGraphAsync's WHERE exactly. EXCEPTION: a call
-        // matched by a redirect rule (external convenience overload → virtual hatch) is KEPT despite being
-        // out-of-source and its callee rewritten to the hatch — the external-virtual-override-orphan fix
-        // (docs/backlog.md); receiver-narrowed dispatch then resolves the kept hatch to the first-party override.
-        var callEdges = result
-            .EnumerateReferences()
-            .Where(r =>
-                r.EnclosingSymbolId != null
-                && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
-            )
-            .Select(r => (r, redirect: RedirectClassifier.Redirect(r.TargetSymbolId, redirectRules)))
-            .Where(x => x.r.TargetInSource || x.redirect != null)
-            // The one shared row->CallEdge mapping (see CallEdgeProjection) — also used by the store loader,
-            // so the two cannot differ by a field.
-            .Select(x => CallEdgeProjection.Project(x.r, redirectTo: x.redirect))
-            .Distinct()
-            .ToList();
-        var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
+        var classifiedEdges = ProjectCalls(result.EnumerateReferences(), handoffRules, redirectRules);
 
         var implEdges = result
             .EnumerateTypeRelations()
@@ -78,5 +60,46 @@ public static class FactGraphProjection
 
         // Applied here AND in LoadFactGraphAsync so the two projections match.
         return FactDelegateFieldJoin.Apply(new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch));
+    }
+
+    // Projects the semantic call edges owned by one caller without enumerating the rest of the graph.
+    // The keyed resident view preserves raw row multiplicity; ProjectCalls owns the same semantic dedupe
+    // and caller-local handoff classification used by the full snapshot projection above.
+    public static IReadOnlyList<CallEdge> CallsFrom(
+        IFactGraphView graph,
+        string caller,
+        IReadOnlyList<FactHandoffRule>? handoffRules = null,
+        IReadOnlyList<FactRedirectRule>? redirectRules = null
+    )
+    {
+        var calls = ProjectCalls(graph.ReferencesFrom(caller), handoffRules, redirectRules);
+        var delegateFieldEdges = FactDelegateFieldJoin.EdgesFrom(graph, caller);
+        return delegateFieldEdges.Count == 0 ? calls : [.. calls, .. delegateFieldEdges];
+    }
+
+    private static IReadOnlyList<CallEdge> ProjectCalls(
+        IEnumerable<ReferenceFact> references,
+        IReadOnlyList<FactHandoffRule>? handoffRules,
+        IReadOnlyList<FactRedirectRule>? redirectRules
+    )
+    {
+        // First-party callees only (TargetInSource): BCL/runtime targets are leaves that add width, not
+        // reach, and have no source symbol. Mirrors LoadFactGraphAsync's WHERE exactly. EXCEPTION: a call
+        // matched by a redirect rule (external convenience overload → virtual hatch) is KEPT despite being
+        // out-of-source and its callee rewritten to the hatch — the external-virtual-override-orphan fix
+        // (docs/backlog.md); receiver-narrowed dispatch then resolves the kept hatch to the first-party override.
+        var callEdges = references
+            .Where(r =>
+                r.EnclosingSymbolId != null
+                && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
+            )
+            .Select(r => (r, redirect: RedirectClassifier.Redirect(r.TargetSymbolId, redirectRules)))
+            .Where(x => x.r.TargetInSource || x.redirect != null)
+            // The one shared row->CallEdge mapping (see CallEdgeProjection) — also used by the store loader,
+            // so the two cannot differ by a field.
+            .Select(x => CallEdgeProjection.Project(x.r, redirectTo: x.redirect))
+            .Distinct()
+            .ToList();
+        return HandoffClassifier.Classify(callEdges, handoffRules);
     }
 }
