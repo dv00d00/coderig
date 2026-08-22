@@ -1,8 +1,8 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — architecture resolved; deterministic scale/trial baselines and emitter provenance
-completed locally 2026-08-22. Next: immutable snapshot generations with private construction and atomic
-publication.
+**Status:** PROGRESS — Slices 0–2 completed locally 2026-08-22: deterministic scale/trial baselines,
+emitter provenance, and immutable snapshot generations with atomic publication. Next: a composite fact view
+that removes full `AnalysisResult` materialization from the live path.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -18,9 +18,15 @@ publication.
   Deletion, generated-tree fallback, duplicate-emitter, storage, and cold-oracle regressions cover the seam.
   `SchemaVersion.Index` is **v6**: every existing `.rig` store must be re-indexed; there is deliberately no
   in-place migration for disposable derived stores.
-- **Next:** follow the rust-glancer-derived publication pattern without copying its whole-project clone:
-  build a private immutable candidate, validate its source revision at publication, then atomically swap one
-  generation while readers keep their captured predecessor.
+- **Slice 2:** `ResidentIndex` now owns explicit immutable `FactSnapshot` generations (revision, Roslyn
+  solution, base facts, per-emitter overlay, dirty set, and delta). Edits and reconciliation build private
+  candidates and publish only through an expected-reference CAS; cancellation before that boundary publishes
+  nothing, stale reconciliation cannot overwrite a newer edit, and queries use one captured snapshot for
+  facts plus disclosure. Retired nonempty overlays, file slices, and solutions are proven collectible. Four
+  deterministic publication tests bring exact discovery to **1,077 tests**. This adopts rust-glancer's
+  private-candidate/publication-validation pattern without its whole-project clone or predecessor retention.
+- **Next:** Slice 3, `IFactSnapshotView`: live queries enumerate the segmented base/overlay view directly;
+  retain flattening only as a cold-oracle and compatibility adapter.
 
 ## Why — the workflow that makes this the target
 

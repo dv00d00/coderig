@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using Microsoft.CodeAnalysis;
 using Rig.Analysis.Extraction;
@@ -53,7 +54,7 @@ public static class SolutionAnalyzer
         var sourceSet = await SolutionSourceLoader.LoadAsync(
             solutionPath: solutionFullPath,
             rules: rules,
-            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism, interner),
+            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism, interner, cancellationToken),
             cancellationToken: cancellationToken,
             progress: progress,
             scopeProjectPaths: scopeProjectPaths,
@@ -111,7 +112,7 @@ public static class SolutionAnalyzer
         var sourceSet = await SolutionSourceLoader.LoadAsync(
             solutionPath: solutionFullPath,
             rules: rules,
-            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism, interner),
+            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism, interner, cancellationToken),
             cancellationToken: cancellationToken,
             progress: progress,
             parallelism: parallelism,
@@ -153,7 +154,7 @@ public static class SolutionAnalyzer
             solution: solution,
             solutionPath: solutionFullPath,
             rules: rules,
-            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism: null, interner),
+            extractProject: models => ExtractProject(models, rules, diMethodNames, parallelism: null, interner, cancellationToken),
             cancellationToken: cancellationToken,
             progress: progress
         );
@@ -309,14 +310,14 @@ public static class SolutionAnalyzer
         foreach (var (filePath, builder) in builders)
         {
             slices[filePath] = new FileFacts(
-                SourceFiles: builder.SourceFiles,
-                DiRegistrations: builder.DiRegistrations,
-                Symbols: builder.Symbols,
-                References: builder.References,
-                TypeRelations: builder.TypeRelations,
-                Dispatch: builder.Dispatch,
-                Allocations: builder.Allocations,
-                CompileHealth: builder.CompileHealth
+                SourceFiles: builder.SourceFiles.ToImmutableArray(),
+                DiRegistrations: builder.DiRegistrations.ToImmutableArray(),
+                Symbols: builder.Symbols.ToImmutableArray(),
+                References: builder.References.ToImmutableArray(),
+                TypeRelations: builder.TypeRelations.ToImmutableArray(),
+                Dispatch: builder.Dispatch.ToImmutableArray(),
+                Allocations: builder.Allocations.ToImmutableArray(),
+                CompileHealth: builder.CompileHealth.ToImmutableArray()
             );
         }
 
@@ -455,7 +456,7 @@ public static class SolutionAnalyzer
         // downstream may retain a SemanticModel or red root).
         var orderedSources = sources.OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
         var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
-        var extractionResults = ExtractProject(orderedSources, rules, diMethodNames, parallelism: null, interner);
+        var extractionResults = ExtractProject(orderedSources, rules, diMethodNames, parallelism: null, interner, cancellationToken);
         return (sourceFiles, orderedSources, extractionResults, health.Build());
     }
 
@@ -474,7 +475,8 @@ public static class SolutionAnalyzer
         RuleSet rules,
         IReadOnlySet<string> diMethodNames,
         int? parallelism,
-        StringInterner? interner
+        StringInterner? interner,
+        CancellationToken cancellationToken
     )
     {
         // PER PROJECT, not per run: the cache keys are strong ISymbol references, and a source symbol
@@ -487,7 +489,11 @@ public static class SolutionAnalyzer
         Parallel.For(
             fromInclusive: 0,
             toExclusive: models.Count,
-            new ParallelOptions { MaxDegreeOfParallelism = parallelism ?? Environment.ProcessorCount },
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = parallelism ?? Environment.ProcessorCount,
+                CancellationToken = cancellationToken,
+            },
             i => results[i] = ExtractSource(models[i], rules, symbolCache, diMethodNames)
         );
         return results;

@@ -323,14 +323,15 @@ internal sealed class WatchHost : IAsyncDisposable
     private Task? _warm;
     private CancellationTokenSource? _warmCts;
 
-    // The query-ready derived layer for the CURRENT fact generation, built on first query and thrown away the
-    // moment the facts move. Generation identity is the AnalysisResult INSTANCE: ResidentIndex nulls its
-    // merged-facts field on every apply/reconcile, so a reference change is exactly "the facts moved".
+    // The query-ready derived layer for the CURRENT immutable snapshot, built on first query and thrown away
+    // the moment publication moves. Snapshot reference identity is the correctness token; the revision is
+    // diagnostic only.
     private LiveFactSource? _liveFacts;
+    private FactSnapshot? _liveFactsFor;
 
-    // The indexed-path set for the CURRENT fact generation, and the generation it belongs to.
+    // The indexed-path set for the CURRENT fact generation, and the snapshot it belongs to.
     private IReadOnlySet<string>? _indexedFiles;
-    private AnalysisResult? _indexedFilesFor;
+    private FactSnapshot? _indexedFilesFor;
 
     private WatchHost(
         ResidentIndex index,
@@ -446,8 +447,9 @@ internal sealed class WatchHost : IAsyncDisposable
         string status;
         try
         {
-            status = ComposeStatus();
-            WriteCompilationHealthNote();
+            var snapshot = _index.CaptureSnapshot();
+            status = ComposeStatus(snapshot);
+            WriteCompilationHealthNote(snapshot);
         }
         finally
         {
@@ -462,7 +464,7 @@ internal sealed class WatchHost : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            return _index.UnreconciledProjects;
+            return UnreconciledProjects(_index.CaptureSnapshot());
         }
         finally
         {
@@ -493,11 +495,12 @@ internal sealed class WatchHost : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            facts = CurrentLiveFacts();
-            disclosure = ComposeStatus();
+            var snapshot = _index.CaptureSnapshot();
+            facts = CurrentLiveFacts(snapshot);
+            disclosure = ComposeStatus(snapshot);
             // The footer rides with the answer, not only with the boot log. Stderr, so the answer on
             // stdout stays parseable.
-            WriteCompilationHealthNote();
+            WriteCompilationHealthNote(snapshot);
         }
         finally
         {
@@ -528,11 +531,12 @@ internal sealed class WatchHost : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            facts = CurrentLiveFacts();
-            disclosure = ComposeSourceDisclosure();
+            var snapshot = _index.CaptureSnapshot();
+            facts = CurrentLiveFacts(snapshot);
+            disclosure = ComposeSourceDisclosure(snapshot);
             // Captured, NOT written to the host's own stderr: this note belongs to the answer being sent
             // back, and writing it locally as well would leave the note in the wrong terminal.
-            health = ComposeCompilationHealthNote();
+            health = ComposeCompilationHealthNote(snapshot);
         }
         finally
         {
@@ -575,7 +579,7 @@ internal sealed class WatchHost : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            return _index.CurrentFacts;
+            return _index.CaptureSnapshot().FlattenedFacts;
         }
         finally
         {
@@ -750,23 +754,22 @@ internal sealed class WatchHost : IAsyncDisposable
     // either finds its artifact already memoized or joins the in-flight build.
     private async Task StartWarmingAsync(CancellationToken cancellationToken)
     {
-        LiveFactSource facts;
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            facts = CurrentLiveFacts();
+            var facts = CurrentLiveFacts(_index.CaptureSnapshot());
+
+            // Install the warm while still holding the publication gate. Otherwise a reconcile can
+            // publish and cancel between snapshot capture and assigning these fields, leaving a warm
+            // for the retired eager generation running uncancelled.
+            _warmCts?.Dispose();
+            _warmCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _warm = WarmInBackgroundAsync(facts, _warmCts.Token);
         }
         finally
         {
             _gate.Release();
         }
-
-        // The previous CTS is already cancelled (CancelWarming ran at the top of this iteration); disposing it
-        // here is safe even if its abandoned task is still running, because that task only ever reads the
-        // token's IsCancellationRequested flag.
-        _warmCts?.Dispose();
-        _warmCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _warm = WarmInBackgroundAsync(facts, _warmCts.Token);
     }
 
     // Cancel the in-flight warm without waiting for it. Every warm CTS is LINKED to the shutdown token, so a
@@ -843,6 +846,7 @@ internal sealed class WatchHost : IAsyncDisposable
                 try
                 {
                     await _index.ApplyEditAsync(fullPath, SourceText.From(text, Encoding.UTF8), cancellationToken);
+                    ReleasePublishedSnapshotCaches();
                     applied++;
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
@@ -873,9 +877,17 @@ internal sealed class WatchHost : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            await _index.ReconcileAsync(cancellationToken);
-            status = ComposeStatus();
-            WriteCompilationHealthNote();
+            if (await _index.ReconcileAsync(cancellationToken))
+            {
+                // A warm may have captured the eager predecessor while reconciliation was extracting.
+                // Retire that work at the same publication boundary as the host's other generation caches.
+                CancelWarming();
+                ReleasePublishedSnapshotCaches();
+            }
+
+            var snapshot = _index.CaptureSnapshot();
+            status = ComposeStatus(snapshot);
+            WriteCompilationHealthNote(snapshot);
         }
         finally
         {
@@ -886,15 +898,14 @@ internal sealed class WatchHost : IAsyncDisposable
     }
 
     // The live derived layer for whatever generation of facts is current. Caller must hold `_gate` (it reads
-    // _index.CurrentFacts, which the worker mutates). Rebuilding on a reference change is the WHOLE
-    // invalidation model — no versions to bump, no cache keys, no staleness window: an edited fact set is a
-    // different object, so it gets a different LiveFactSource.
-    private LiveFactSource CurrentLiveFacts()
+    // the published snapshot). Rebuilding on a snapshot-reference change is the WHOLE invalidation model —
+    // no versions to bump, no cache keys, no staleness window.
+    private LiveFactSource CurrentLiveFacts(FactSnapshot snapshot)
     {
-        var facts = _index.CurrentFacts;
-        if (_liveFacts is null || !ReferenceEquals(_liveFacts.Facts, facts))
+        if (_liveFacts is null || !ReferenceEquals(_liveFactsFor, snapshot))
         {
-            _liveFacts = new LiveFactSource(facts, _rules);
+            _liveFacts = new LiveFactSource(snapshot.FlattenedFacts, _rules);
+            _liveFactsFor = snapshot;
         }
 
         return _liveFacts;
@@ -909,27 +920,27 @@ internal sealed class WatchHost : IAsyncDisposable
     // replaced by what is true, quantified: how many indexed files carried compile errors, and how many
     // projects contributed nothing at all. On a tree that compiles this adds NOTHING, which is the point:
     // a disclosure that fires on a healthy tree is one the reader learns to skip.
-    private string ComposeStatus() => $"live: facts current as of {StatusBody()}";
+    private string ComposeStatus(FactSnapshot snapshot) => $"live: facts current as of {StatusBody(snapshot)}";
 
     // The same facts, led with the SOURCE rather than with currency — what a routed one-shot answer carries.
     // A `rig watch` session already knows where its answers come from; a plain `rig reaches` in another
     // process does not, and "which of the two possible sources answered me" is the first thing its reader
     // needs. The em-dash form is the one the program doc specified for this line.
-    private string ComposeSourceDisclosure() => $"live: facts from resident index — {StatusBody()}";
+    private string ComposeSourceDisclosure(FactSnapshot snapshot) => $"live: facts from resident index — {StatusBody(snapshot)}";
 
     // Caller must hold `_gate`.
-    private string StatusBody()
+    private string StatusBody(FactSnapshot snapshot)
     {
         var applied = Volatile.Read(ref _appliedFiles);
-        var unreconciled = _index.UnreconciledProjects.Count;
-        var facts = _index.CurrentFacts;
+        var unreconciled = snapshot.Dirty.PendingProjects.Count;
+        var facts = snapshot.FlattenedFacts;
         var segments = new List<string>();
         if (unreconciled > 0)
         {
             segments.Add($"{unreconciled} project(s) unreconciled");
         }
 
-        segments.AddRange(CompilationHealthNotice.StatusSegments(facts.CompilationHealth, IndexedFiles(facts)));
+        segments.AddRange(CompilationHealthNotice.StatusSegments(facts.CompilationHealth, IndexedFiles(snapshot)));
         if (Volatile.Read(ref _watcherOverflowed) != 0)
         {
             // Must be a segment rather than a one-off console line: otherwise an answer computed from a
@@ -948,15 +959,14 @@ internal sealed class WatchHost : IAsyncDisposable
     }
 
     // The population the file count is quoted against: the distinct paths this analysis actually
-    // indexed. Memoized per fact GENERATION (the AnalysisResult instance is the generation identity all
-    // over this host), because it is rebuilt on every status line and answer and MedDBase has ~10.5k
+    // indexed. Memoized per immutable snapshot, because it is rebuilt on every status line and answer and MedDBase has ~10.5k
     // rows. Caller must hold `_gate`.
-    private IReadOnlySet<string> IndexedFiles(AnalysisResult facts)
+    private IReadOnlySet<string> IndexedFiles(FactSnapshot snapshot)
     {
-        if (_indexedFiles is null || !ReferenceEquals(_indexedFilesFor, facts))
+        if (_indexedFiles is null || !ReferenceEquals(_indexedFilesFor, snapshot))
         {
-            _indexedFiles = CompilationHealthNotice.IndexedFileSet(facts);
-            _indexedFilesFor = facts;
+            _indexedFiles = CompilationHealthNotice.IndexedFileSet(snapshot.FlattenedFacts);
+            _indexedFilesFor = snapshot;
         }
 
         return _indexedFiles;
@@ -970,7 +980,7 @@ internal sealed class WatchHost : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            return ComposeCompilationHealthNote();
+            return ComposeCompilationHealthNote(_index.CaptureSnapshot());
         }
         finally
         {
@@ -979,20 +989,39 @@ internal sealed class WatchHost : IAsyncDisposable
     }
 
     // Caller must hold `_gate`.
-    private IReadOnlyList<string> ComposeCompilationHealthNote()
+    private IReadOnlyList<string> ComposeCompilationHealthNote(FactSnapshot snapshot)
     {
-        var facts = _index.CurrentFacts;
-        return CompilationHealthNotice.Note(facts.CompilationHealth, IndexedFiles(facts));
+        var facts = snapshot.FlattenedFacts;
+        return CompilationHealthNotice.Note(facts.CompilationHealth, IndexedFiles(snapshot));
     }
 
     // Emit the footer note on STDERR. Called wherever an answer or a status line is served, because the
     // note is a property of the FACTS, not of one query. Caller must hold `_gate`.
-    private void WriteCompilationHealthNote()
+    private void WriteCompilationHealthNote(FactSnapshot snapshot)
     {
-        foreach (var line in ComposeCompilationHealthNote())
+        foreach (var line in ComposeCompilationHealthNote(snapshot))
         {
             _error.WriteLine(line);
         }
+    }
+
+    private static IReadOnlyCollection<string> UnreconciledProjects(FactSnapshot snapshot) =>
+        snapshot
+            .Dirty.PendingProjects.Select(id => snapshot.Solution.GetProject(id)?.Name)
+            .Where(name => name is not null)
+            .Select(name => name!)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+    // Host-owned caches must not pin the generation that publication just retired. Active queries and
+    // warms keep their own local reference until they finish; after that, no host history remains.
+    private void ReleasePublishedSnapshotCaches()
+    {
+        _liveFacts = null;
+        _liveFactsFor = null;
+        _indexedFiles = null;
+        _indexedFilesFor = null;
     }
 
     private static async Task<string?> ReadAllTextWithRetryAsync(string fullPath, CancellationToken cancellationToken)

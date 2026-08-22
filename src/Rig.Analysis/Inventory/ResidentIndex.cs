@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
 using Rig.Analysis.Extraction;
@@ -6,14 +7,12 @@ using RuleSet = Rig.Domain.Data.RuleSet;
 
 namespace Rig.Analysis.Inventory;
 
-// The converging overlay for the resident index (live-background-index slice 3). Holds the retained
-// RigWorkspace from the cold load, the BASE AnalysisResult that load produced, and a per-FILE overlay
-// of re-extracted facts. On an edit: the edited file is re-extracted IMMEDIATELY (the eager arm —
-// correct for its own binding by construction, since the retained Solution holds every dependency as
-// live source), while the sound cascade (the changed project plus all transitive MSBuild-reference
-// dependents) is recorded as UNRECONCILED and re-extracted by ReconcileAsync. Between the two,
-// CurrentFacts is servable and UnreconciledProjects is the disclosure a caller must surface — cascade
-// latency becomes a disclosure problem, not an answer-blocking one.
+// The converging resident index. It owns the retained RigWorkspace only as the Roslyn lifetime substrate;
+// every published FactSnapshot owns an immutable Solution, BASE AnalysisResult, per-FILE overlay and dirty
+// set. An edit forks the captured Solution and builds its eager replacement privately, then atomically
+// publishes the complete candidate. The sound cascade is recorded as UNRECONCILED and re-extracted by
+// ReconcileAsync. Between the two, CurrentFacts is servable and UnreconciledProjects is the disclosure a
+// caller must surface — cascade latency becomes a disclosure problem, not an answer-blocking one.
 //
 // Deliberately NO background threads/timers in here: ReconcileAsync is a plain awaitable and the HOST
 // owns scheduling (a later slice). Deliberately no Rig.Storage/Rig.Cli dependency: this is fact-level.
@@ -34,6 +33,7 @@ internal sealed class ResidentIndex : IDisposable
     private readonly RuleSet _rules;
     private readonly IDirtySetPolicy _eagerPolicy;
     private readonly IDirtySetPolicy _cascadePolicy;
+    private readonly ResidentFileExtractor _extractFiles;
 
     // Host-lifetime string interner shared by every re-extraction: a re-extracted generation's retained
     // strings alias the previous generation's instead of duplicating the whole string set per edit (the
@@ -43,16 +43,7 @@ internal sealed class ResidentIndex : IDisposable
     // per generation would forfeit exactly the cross-generation sharing it exists for.
     private readonly StringInterner? _interner;
 
-    // FilePath -> that file's latest re-extracted facts. OrdinalIgnoreCase: Windows paths, and the
-    // loader itself sorts sources OrdinalIgnoreCase.
-    private readonly Dictionary<string, FileFacts> _overlay = new(StringComparer.OrdinalIgnoreCase);
-
-    // Documents owed to the converging cascade but not yet re-extracted since the edit that dirtied
-    // them. Eagerly re-extracted documents are removed: their facts are current w.r.t. the newest
-    // Solution snapshot.
-    private readonly HashSet<DocumentId> _pendingDocuments = [];
-
-    private AnalysisResult? _mergedFacts;
+    private FactSnapshot _currentSnapshot;
 
     public ResidentIndex(
         RigWorkspace workspace,
@@ -61,7 +52,8 @@ internal sealed class ResidentIndex : IDisposable
         RuleSet rules,
         IDirtySetPolicy? eagerPolicy = null,
         IDirtySetPolicy? cascadePolicy = null,
-        StringInterner? interner = null
+        StringInterner? interner = null,
+        ResidentFileExtractor? extractFiles = null
     )
     {
         _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
@@ -71,9 +63,20 @@ internal sealed class ResidentIndex : IDisposable
         _eagerPolicy = eagerPolicy ?? new ChangedFilesOnlyPolicy();
         _cascadePolicy = cascadePolicy ?? new ProjectCascadePolicy();
         _interner = interner ?? StringInterner.CreateDefault();
+        _extractFiles = extractFiles ?? SolutionAnalyzer.ExtractFromDocumentsByFileAsync;
+        _currentSnapshot = new FactSnapshot(
+            new FactRevision(0),
+            workspace.CurrentSolution,
+            _baseResult,
+            ImmutableDictionary.Create<string, FileFacts>(StringComparer.OrdinalIgnoreCase),
+            DirtySet.Empty,
+            SnapshotDelta.Empty
+        );
     }
 
-    public Solution CurrentSolution => _workspace.CurrentSolution;
+    public Solution CurrentSolution => CaptureSnapshot().Solution;
+
+    internal FactSnapshot CaptureSnapshot() => Volatile.Read(ref _currentSnapshot);
 
     // The disclosure: projects whose documents are owed to the cascade but not yet re-extracted.
     // Rendering this is NOT this class's job — a caller surfaces it alongside any answer served from
@@ -82,9 +85,9 @@ internal sealed class ResidentIndex : IDisposable
     {
         get
         {
-            var solution = CurrentSolution;
-            return _pendingDocuments
-                .Select(d => solution.GetProject(d.ProjectId)?.Name)
+            var snapshot = CaptureSnapshot();
+            return snapshot
+                .Dirty.PendingProjects.Select(id => snapshot.Solution.GetProject(id)?.Name)
                 .Where(name => name is not null)
                 .Select(name => name!)
                 .Distinct(StringComparer.Ordinal)
@@ -95,57 +98,95 @@ internal sealed class ResidentIndex : IDisposable
 
     // Base facts with every overlaid file's facts REPLACED (never appended). Recomputed lazily after
     // any edit/reconcile; callers get a consistent snapshot.
-    public AnalysisResult CurrentFacts => _mergedFacts ??= MergeFacts();
+    public AnalysisResult CurrentFacts => CaptureSnapshot().FlattenedFacts;
 
-    // Apply one file edit: mutate the retained workspace, re-extract the edited file at once (eager
-    // arm), and record the outstanding sound cascade as unreconciled.
+    // Apply one file edit by building a complete candidate from the captured generation. Neither the
+    // retained workspace nor the published overlay/dirty state moves until the final reference-CAS.
     public async Task ApplyEditAsync(string filePath, SourceText newText, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(newText);
+        var basis = CaptureSnapshot();
         var fullPath = Path.GetFullPath(filePath);
-        var documentIds = CurrentSolution.GetDocumentIdsWithFilePath(fullPath);
+        var documentIds = basis.Solution.GetDocumentIdsWithFilePath(fullPath);
         if (documentIds.IsEmpty)
         {
             throw new ArgumentException($"No document in the retained workspace has the path '{fullPath}'.", nameof(filePath));
         }
 
+        var solution = basis.Solution;
         foreach (var documentId in documentIds)
         {
-            _workspace.ChangeDocumentText(documentId, newText);
+            solution = solution.WithDocumentText(documentId, newText, PreservationMode.PreserveValue);
         }
 
         string[] changed = [fullPath];
-        var eager = _eagerPolicy.DocumentsToReextract(CurrentSolution, changed);
-        await ReextractAsync(eager, cancellationToken);
+        var eager = _eagerPolicy.DocumentsToReextract(solution, changed);
+        var slices = await ExtractAsync(solution, eager, cancellationToken);
+        var overlay = basis.Overlay.SetItems(slices);
 
         // The cascade the eager arm did NOT cover is owed; the eagerly covered documents are current
         // against the newest snapshot, so they are also settled for any PREVIOUS edit's cascade.
-        var eagerSet = new HashSet<DocumentId>(eager);
-        foreach (var documentId in _cascadePolicy.DocumentsToReextract(CurrentSolution, changed))
+        var eagerSet = eager.ToImmutableHashSet();
+        var cascade = _cascadePolicy.DocumentsToReextract(solution, changed);
+        var pending = basis.Dirty.PendingDocuments.ToBuilder();
+        foreach (var documentId in cascade)
         {
             if (!eagerSet.Contains(documentId))
             {
-                _pendingDocuments.Add(documentId);
+                pending.Add(documentId);
             }
         }
 
-        _pendingDocuments.ExceptWith(eagerSet);
-        _mergedFacts = null;
+        pending.ExceptWith(eagerSet);
+        var candidate = new FactSnapshot(
+            basis.Revision.Next(),
+            solution,
+            _baseResult,
+            overlay,
+            DirtySet.From(solution, pending),
+            new SnapshotDelta(
+                slices.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+                cascade.Select(d => d.ProjectId).ToImmutableHashSet(),
+                ImmutableHashSet<string>.Empty,
+                SurfaceState.Unknown
+            )
+        );
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, candidate, basis), basis))
+        {
+            throw new InvalidOperationException("The resident edit was superseded by a newer fact snapshot.");
+        }
     }
 
-    // Re-extract the outstanding cascade and clear the disclosure. Plain awaitable — the host owns
-    // scheduling/backgrounding (a later slice).
-    public async Task ReconcileAsync(CancellationToken cancellationToken = default)
+    // Re-extract the outstanding cascade and clear the disclosure. Returns true only when this exact
+    // basis reference was published; false means no work or a newer snapshot superseded the candidate.
+    public async Task<bool> ReconcileAsync(CancellationToken cancellationToken = default)
     {
-        if (_pendingDocuments.Count == 0)
+        var basis = CaptureSnapshot();
+        if (basis.Dirty.PendingDocuments.Count == 0)
         {
-            return;
+            return false;
         }
 
-        var pending = _pendingDocuments.ToArray();
-        await ReextractAsync(pending, cancellationToken);
-        _pendingDocuments.Clear();
-        _mergedFacts = null;
+        var pending = basis.Dirty.PendingDocuments;
+        var slices = await ExtractAsync(basis.Solution, pending, cancellationToken);
+        var candidate = new FactSnapshot(
+            basis.Revision.Next(),
+            basis.Solution,
+            _baseResult,
+            basis.Overlay.SetItems(slices),
+            DirtySet.Empty,
+            new SnapshotDelta(
+                slices.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+                pending.Select(d => d.ProjectId).ToImmutableHashSet(),
+                ImmutableHashSet<string>.Empty,
+                SurfaceState.Unknown
+            )
+        );
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, candidate, basis), basis);
     }
 
     public void Dispose() => _workspace.Dispose();
@@ -160,62 +201,53 @@ internal sealed class ResidentIndex : IDisposable
     // DocumentIds' emissions to its one slice, mirroring the cold pass where each project context
     // extracts its copy.
     //
-    // Cancellation-safe: the overlay is written only AFTER the whole batch has extracted, so a
-    // cancelled re-extraction leaves the overlay (and _pendingDocuments, cleared by the caller only on
-    // completion) untouched.
-    private async Task ReextractAsync(IReadOnlyCollection<DocumentId> documents, CancellationToken cancellationToken)
+    // Cancellation-safe: extraction returns private immutable slices. The caller checks cancellation
+    // immediately before its publication CAS, so a cancelled re-extraction changes no current state.
+    private async Task<Dictionary<string, FileFacts>> ExtractAsync(
+        Solution solution,
+        IReadOnlyCollection<DocumentId> documents,
+        CancellationToken cancellationToken
+    )
     {
         if (documents.Count == 0)
         {
-            return;
+            return new Dictionary<string, FileFacts>(StringComparer.OrdinalIgnoreCase);
         }
 
-        var slices = await SolutionAnalyzer.ExtractFromDocumentsByFileAsync(
-            solution: CurrentSolution,
-            documents: documents,
-            solutionPath: _solutionPath,
-            rules: _rules,
-            cancellationToken: cancellationToken,
-            interner: _interner
-        );
-
-        foreach (var (filePath, facts) in slices)
-        {
-            _overlay[filePath] = facts;
-        }
+        return await _extractFiles(solution, documents, _solutionPath, _rules, cancellationToken, _interner);
     }
 
-    private AnalysisResult MergeFacts()
+    internal static AnalysisResult MergeFacts(AnalysisResult baseResult, ImmutableDictionary<string, FileFacts> overlay)
     {
-        if (_overlay.Count == 0)
+        if (overlay.Count == 0)
         {
-            return _baseResult;
+            return baseResult;
         }
 
-        bool Overlaid(string path) => _overlay.ContainsKey(path);
-        var overlayEntries = _overlay.Values.ToArray();
+        bool Overlaid(string path) => overlay.ContainsKey(path);
+        var overlayEntries = overlay.Values.ToArray();
 
         // --- Path-carrying kinds: base rows for non-overlaid files + the overlay's rows. REPLACE, never
         // append. DI registrations whose FilePath is empty or non-.cs (static rules mappings, XML-mined
         // ones) live on the BASE side only — FileFacts.From filters them out of overlay entries, and
         // their paths are never overlay keys, so they pass through the base filter exactly once.
-        var sourceFiles = _baseResult
+        var sourceFiles = baseResult
             .SourceFiles.Where(f => !Overlaid(f.FilePath))
             .Concat(overlayEntries.SelectMany(e => e.SourceFiles))
             .ToArray();
-        var diRegistrations = _baseResult
+        var diRegistrations = baseResult
             .DiRegistrations.Where(r => r.FilePath.Length == 0 || !Overlaid(r.FilePath))
             .Concat(overlayEntries.SelectMany(e => e.DiRegistrations))
             .ToArray();
-        var symbols = (_baseResult.Symbols ?? [])
+        var symbols = (baseResult.Symbols ?? [])
             .Where(s => !Overlaid(s.FilePath))
             .Concat(overlayEntries.SelectMany(e => e.Symbols))
             .ToArray();
-        var references = (_baseResult.References ?? [])
+        var references = (baseResult.References ?? [])
             .Where(r => !Overlaid(r.FilePath))
             .Concat(overlayEntries.SelectMany(e => e.References))
             .ToArray();
-        var allocations = (_baseResult.AllocationFacts ?? [])
+        var allocations = (baseResult.AllocationFacts ?? [])
             .Where(a => !Overlaid(a.FilePath))
             .Concat(overlayEntries.SelectMany(e => e.Allocations))
             .ToArray();
@@ -232,7 +264,7 @@ internal sealed class ResidentIndex : IDisposable
         // compilation-level (no compilation at all, a generator that never ran, a diagnostic with no
         // source location), so no per-FILE re-extraction can either produce or retire one — that takes a
         // fresh cold load, which is exactly what a new base result is.
-        var baseHealth = _baseResult.CompilationHealth ?? CompilationHealth.Empty;
+        var baseHealth = baseResult.CompilationHealth ?? CompilationHealth.Empty;
         var compilationHealth = baseHealth with
         {
             Files = baseHealth
@@ -247,16 +279,16 @@ internal sealed class ResidentIndex : IDisposable
         // inherited implementations); collapsing here would discard the second ownership key and a
         // later edit could no longer retire the emitters independently. Graph projections erase
         // FilePath and dedupe on semantic edge identity at their own boundary.
-        var typeRelations = (_baseResult.TypeRelations ?? [])
+        var typeRelations = (baseResult.TypeRelations ?? [])
             .Where(r => !Overlaid(r.FilePath))
             .Concat(overlayEntries.SelectMany(e => e.TypeRelations))
             .ToArray();
-        var dispatchFacts = (_baseResult.DispatchFacts ?? [])
+        var dispatchFacts = (baseResult.DispatchFacts ?? [])
             .Where(d => !Overlaid(d.FilePath))
             .Concat(overlayEntries.SelectMany(e => e.Dispatch))
             .ToArray();
 
-        return _baseResult with
+        return baseResult with
         {
             SourceFiles = sourceFiles,
             DiRegistrations = diRegistrations,
@@ -277,15 +309,24 @@ internal sealed class ResidentIndex : IDisposable
 // TypeRelations/Dispatch are exactly the file's own emissions, with matching emitter FilePath,
 // grouped per source before flattening.
 internal sealed record FileFacts(
-    IReadOnlyList<SourceFileInfo> SourceFiles,
-    IReadOnlyList<DiRegistrationInfo> DiRegistrations,
-    IReadOnlyList<SymbolFact> Symbols,
-    IReadOnlyList<ReferenceFact> References,
-    IReadOnlyList<TypeRelationFact> TypeRelations,
-    IReadOnlyList<DispatchFact> Dispatch,
-    IReadOnlyList<AllocationFact> Allocations,
+    ImmutableArray<SourceFileInfo> SourceFiles,
+    ImmutableArray<DiRegistrationInfo> DiRegistrations,
+    ImmutableArray<SymbolFact> Symbols,
+    ImmutableArray<ReferenceFact> References,
+    ImmutableArray<TypeRelationFact> TypeRelations,
+    ImmutableArray<DispatchFact> Dispatch,
+    ImmutableArray<AllocationFact> Allocations,
     // This file's compile-health rows: exactly ONE when the re-extraction saw error diagnostics in it,
     // and EMPTY when it did not. Empty is the load-bearing case — it is what clears a base flag on
     // merge when a broken file is fixed.
-    IReadOnlyList<FileCompileHealth> CompileHealth
+    ImmutableArray<FileCompileHealth> CompileHealth
+);
+
+internal delegate Task<Dictionary<string, FileFacts>> ResidentFileExtractor(
+    Solution solution,
+    IReadOnlyCollection<DocumentId> documents,
+    string solutionPath,
+    RuleSet rules,
+    CancellationToken cancellationToken,
+    StringInterner? interner
 );
