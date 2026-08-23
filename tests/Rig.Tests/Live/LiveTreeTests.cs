@@ -619,14 +619,7 @@ public sealed class LiveTreeTests
 
             // Both streams are byte-for-byte; ambiguity and filter/guard disclosures are answer-local too.
             Diff(differences, label, name, "stdout", storeOut.ToString(), answer.Out);
-            Diff(
-                differences,
-                label,
-                name,
-                "stderr",
-                AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()),
-                answer.Err
-            );
+            Diff(differences, label, name, "stderr", AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()), answer.Err);
             answer.Exit.ShouldBe(storeExit, $"[{label}] '{name}': exit code differs (store={storeExit}, live={answer.Exit}).");
             if (query.RequiredInAnswer is { } required)
             {

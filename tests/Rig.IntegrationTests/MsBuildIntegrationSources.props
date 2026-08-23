@@ -1,48 +1,248 @@
 <Project>
   <ItemGroup>
     <!-- Shared fixture lane: keep every PerTestSession AnalyzedPlaygrounds consumer in one process. -->
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FactDerivationTests.cs" Link="Analysis\FactDerivationTests.cs" Namespace="Rig.Tests.Analysis" TestClass="FactDerivationTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FactGraphProjectionParityTests.cs" Link="Analysis\FactGraphProjectionParityTests.cs" Namespace="Rig.Tests.Analysis" TestClass="FactGraphProjectionParityTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\MultiLineHandoffTests.cs" Link="Analysis\MultiLineHandoffTests.cs" Namespace="Rig.Tests.Analysis" TestClass="MultiLineHandoffTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\SearchIndexParityTests.cs" Link="Analysis\SearchIndexParityTests.cs" Namespace="Rig.Tests.Analysis" TestClass="SearchIndexParityTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\SqlReachabilityTests.cs" Link="Analysis\SqlReachabilityTests.cs" Namespace="Rig.Tests.Analysis" TestClass="SqlReachabilityTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactCacheTests.cs" Link="Cli\ImpactCacheTests.cs" Namespace="Rig.Tests.Cli" TestClass="ImpactCacheTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactEpDiffTests.cs" Link="Cli\ImpactEpDiffTests.cs" Namespace="Rig.Tests.Cli" TestClass="ImpactEpDiffTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactTwoStoreTests.cs" Link="Cli\ImpactTwoStoreTests.cs" Namespace="Rig.Tests.Cli" TestClass="ImpactTwoStoreTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\UnusedRefsQueryServiceTests.cs" Link="Cli\UnusedRefsQueryServiceTests.cs" Namespace="Rig.Tests.Cli" TestClass="UnusedRefsQueryServiceTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveFactSourceParityTests.cs" Link="Live\LiveFactSourceParityTests.cs" Namespace="Rig.Tests.Live" TestClass="LiveFactSourceParityTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Storage\ReachInputProjectionTests.cs" Link="Storage\ReachInputProjectionTests.cs" Namespace="Rig.Tests.Storage" TestClass="ReachInputProjectionTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Storage\FactProjectionSharingTests.cs" Link="Storage\FactProjectionSharingTests.cs" Namespace="Rig.Tests.Storage" TestClass="FactProjectionSharingTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Storage\LoadShapedGraphTests.cs" Link="Storage\LoadShapedGraphTests.cs" Namespace="Rig.Tests.Storage" TestClass="LoadShapedGraphTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Storage\SchemaGateTests.cs" Link="Storage\SchemaGateTests.cs" Namespace="Rig.Tests.Storage" TestClass="SchemaGateTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Domain\MonomorphizeShapeGraphTests.cs" Link="Domain\MonomorphizeShapeGraphTests.cs" Namespace="Rig.Tests.Domain" TestClass="MonomorphizeShapeGraphTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactBodyHashIntegrationTests.cs" Link="Cli\ImpactBodyHashIntegrationTests.cs" Namespace="Rig.Tests.Cli" TestClass="ImpactBodyHashStorageTests" />
-    <SharedIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactRefReachIntegrationTests.cs" Link="Cli\ImpactRefReachIntegrationTests.cs" Namespace="Rig.Tests.Cli" TestClass="ImpactRefReachStorageTests" />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FactDerivationTests.cs"
+      Link="Analysis\FactDerivationTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="FactDerivationTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FactGraphProjectionParityTests.cs"
+      Link="Analysis\FactGraphProjectionParityTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="FactGraphProjectionParityTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\MultiLineHandoffTests.cs"
+      Link="Analysis\MultiLineHandoffTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="MultiLineHandoffTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\SearchIndexParityTests.cs"
+      Link="Analysis\SearchIndexParityTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="SearchIndexParityTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\SqlReachabilityTests.cs"
+      Link="Analysis\SqlReachabilityTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="SqlReachabilityTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactCacheTests.cs"
+      Link="Cli\ImpactCacheTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="ImpactCacheTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactEpDiffTests.cs"
+      Link="Cli\ImpactEpDiffTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="ImpactEpDiffTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactTwoStoreTests.cs"
+      Link="Cli\ImpactTwoStoreTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="ImpactTwoStoreTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\UnusedRefsQueryServiceTests.cs"
+      Link="Cli\UnusedRefsQueryServiceTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="UnusedRefsQueryServiceTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveFactSourceParityTests.cs"
+      Link="Live\LiveFactSourceParityTests.cs"
+      Namespace="Rig.Tests.Live"
+      TestClass="LiveFactSourceParityTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Storage\ReachInputProjectionTests.cs"
+      Link="Storage\ReachInputProjectionTests.cs"
+      Namespace="Rig.Tests.Storage"
+      TestClass="ReachInputProjectionTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Storage\FactProjectionSharingTests.cs"
+      Link="Storage\FactProjectionSharingTests.cs"
+      Namespace="Rig.Tests.Storage"
+      TestClass="FactProjectionSharingTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Storage\LoadShapedGraphTests.cs"
+      Link="Storage\LoadShapedGraphTests.cs"
+      Namespace="Rig.Tests.Storage"
+      TestClass="LoadShapedGraphTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Storage\SchemaGateTests.cs"
+      Link="Storage\SchemaGateTests.cs"
+      Namespace="Rig.Tests.Storage"
+      TestClass="SchemaGateTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Domain\MonomorphizeShapeGraphTests.cs"
+      Link="Domain\MonomorphizeShapeGraphTests.cs"
+      Namespace="Rig.Tests.Domain"
+      TestClass="MonomorphizeShapeGraphTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactBodyHashIntegrationTests.cs"
+      Link="Cli\ImpactBodyHashIntegrationTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="ImpactBodyHashStorageTests"
+    />
+    <SharedIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\ImpactRefReachIntegrationTests.cs"
+      Link="Cli\ImpactRefReachIntegrationTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="ImpactRefReachStorageTests"
+    />
 
     <!-- Independent lane: each class is invoked in a fresh test process by the manifest-driven runner. -->
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\CoreAllocationIlAuditTests.cs" Link="Analysis\CoreAllocationIlAuditTests.cs" Namespace="Rig.Tests.Analysis" TestClass="CoreAllocationIlAuditTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\ExtractionStreamingTests.cs" Link="Analysis\ExtractionStreamingTests.cs" Namespace="Rig.Tests.Analysis" TestClass="ExtractionStreamingTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FailedCompilationDisclosureTests.cs" Link="Analysis\FailedCompilationDisclosureTests.cs" Namespace="Rig.Tests.Analysis" TestClass="FailedCompilationDisclosureTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FrameworkSelectionIndexingTests.cs" Link="Analysis\FrameworkSelectionIndexingTests.cs" Namespace="Rig.Tests.Analysis" TestClass="FrameworkSelectionIndexingTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\IncrementalExtractionSpikeTests.cs" Link="Analysis\IncrementalExtractionSpikeTests.cs" Namespace="Rig.Tests.Analysis" TestClass="IncrementalExtractionSpikeTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\InternerMemoryTrial.cs" Link="Analysis\InternerMemoryTrial.cs" Namespace="Rig.Tests.Analysis" TestClass="InternerMemoryTrial" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\LiveScaleGeneratorTests.cs" Link="Analysis\LiveScaleGeneratorTests.cs" Namespace="Rig.Tests.Analysis" TestClass="LiveScaleGeneratorTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\ResidentIndexScaleTests.cs" Link="Analysis\ResidentIndexScaleTests.cs" Namespace="Rig.Tests.Analysis" TestClass="ResidentIndexScaleTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\ResidentWorkspaceTrial.cs" Link="Analysis\ResidentWorkspaceTrial.cs" Namespace="Rig.Tests.Analysis" TestClass="ResidentWorkspaceTrial" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\StrongNameCompilationOptionsTests.cs" Link="Analysis\StrongNameCompilationOptionsTests.cs" Namespace="Rig.Tests.Analysis" TestClass="StrongNameCompilationOptionsTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CallersAsyncUnderreportTests.cs" Link="Cli\CallersAsyncUnderreportTests.cs" Namespace="Rig.Tests.Cli" TestClass="CallersAsyncUnderreportTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CallersFrontierTests.cs" Link="Cli\CallersFrontierTests.cs" Namespace="Rig.Tests.Cli" TestClass="CallersFrontierTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CallersReverseOnlyTsvTests.cs" Link="Cli\CallersReverseOnlyTsvTests.cs" Namespace="Rig.Tests.Cli" TestClass="CallersReverseOnlyTsvTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CallersUxTests.cs" Link="Cli\CallersUxTests.cs" Namespace="Rig.Tests.Cli" TestClass="CallersUxTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CliApplicationTests.cs" Link="Cli\CliApplicationTests.cs" Namespace="Rig.Tests.Cli" TestClass="CliApplicationTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CoreAllocationPlaygroundTests.cs" Link="Cli\CoreAllocationPlaygroundTests.cs" Namespace="Rig.Tests.Cli" TestClass="CoreAllocationPlaygroundTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\RunsStaleStoreTests.cs" Link="Cli\RunsStaleStoreTests.cs" Namespace="Rig.Tests.Cli" TestClass="RunsStaleStoreTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\SeedResolutionDisclosureTests.cs" Link="Cli\SeedResolutionDisclosureTests.cs" Namespace="Rig.Tests.Cli" TestClass="SeedResolutionDisclosureTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\EntryPointFqnTests.cs" Link="Cli\EntryPointFqnTests.cs" Namespace="Rig.Tests.Cli" TestClass="EntryPointFqnTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveHazardCostTrial.cs" Link="Live\LiveHazardCostTrial.cs" Namespace="Rig.Tests.Live" TestClass="LiveHazardCostTrial" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveTransportTests.cs" Link="Live\LiveTransportTests.cs" Namespace="Rig.Tests.Live" TestClass="LiveTransportTests" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\LiveSnapshotScaleTrialIntegrationTests.cs" Link="Analysis\LiveSnapshotScaleTrialIntegrationTests.cs" Namespace="Rig.Tests.Analysis" TestClass="LiveSnapshotScaleTrial" />
-    <IndependentIntegrationSource Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\LlmSummaryCliIntegrationTests.cs" Link="Cli\LlmSummaryCliIntegrationTests.cs" Namespace="Rig.Tests.Cli" TestClass="LlmSummaryCliTests" />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\CoreAllocationIlAuditTests.cs"
+      Link="Analysis\CoreAllocationIlAuditTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="CoreAllocationIlAuditTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\ExtractionStreamingTests.cs"
+      Link="Analysis\ExtractionStreamingTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="ExtractionStreamingTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FailedCompilationDisclosureTests.cs"
+      Link="Analysis\FailedCompilationDisclosureTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="FailedCompilationDisclosureTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FrameworkSelectionIndexingTests.cs"
+      Link="Analysis\FrameworkSelectionIndexingTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="FrameworkSelectionIndexingTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\IncrementalExtractionSpikeTests.cs"
+      Link="Analysis\IncrementalExtractionSpikeTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="IncrementalExtractionSpikeTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\InternerMemoryTrial.cs"
+      Link="Analysis\InternerMemoryTrial.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="InternerMemoryTrial"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\LiveScaleGeneratorTests.cs"
+      Link="Analysis\LiveScaleGeneratorTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="LiveScaleGeneratorTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\ResidentIndexScaleTests.cs"
+      Link="Analysis\ResidentIndexScaleTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="ResidentIndexScaleTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\ResidentWorkspaceTrial.cs"
+      Link="Analysis\ResidentWorkspaceTrial.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="ResidentWorkspaceTrial"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\StrongNameCompilationOptionsTests.cs"
+      Link="Analysis\StrongNameCompilationOptionsTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="StrongNameCompilationOptionsTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CallersAsyncUnderreportTests.cs"
+      Link="Cli\CallersAsyncUnderreportTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="CallersAsyncUnderreportTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CallersFrontierTests.cs"
+      Link="Cli\CallersFrontierTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="CallersFrontierTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CallersReverseOnlyTsvTests.cs"
+      Link="Cli\CallersReverseOnlyTsvTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="CallersReverseOnlyTsvTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CallersUxTests.cs"
+      Link="Cli\CallersUxTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="CallersUxTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CliApplicationTests.cs"
+      Link="Cli\CliApplicationTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="CliApplicationTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CoreAllocationPlaygroundTests.cs"
+      Link="Cli\CoreAllocationPlaygroundTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="CoreAllocationPlaygroundTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\RunsStaleStoreTests.cs"
+      Link="Cli\RunsStaleStoreTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="RunsStaleStoreTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\SeedResolutionDisclosureTests.cs"
+      Link="Cli\SeedResolutionDisclosureTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="SeedResolutionDisclosureTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\EntryPointFqnTests.cs"
+      Link="Cli\EntryPointFqnTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="EntryPointFqnTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveHazardCostTrial.cs"
+      Link="Live\LiveHazardCostTrial.cs"
+      Namespace="Rig.Tests.Live"
+      TestClass="LiveHazardCostTrial"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveTransportTests.cs"
+      Link="Live\LiveTransportTests.cs"
+      Namespace="Rig.Tests.Live"
+      TestClass="LiveTransportTests"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\LiveSnapshotScaleTrialIntegrationTests.cs"
+      Link="Analysis\LiveSnapshotScaleTrialIntegrationTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="LiveSnapshotScaleTrial"
+    />
+    <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\LlmSummaryCliIntegrationTests.cs"
+      Link="Cli\LlmSummaryCliIntegrationTests.cs"
+      Namespace="Rig.Tests.Cli"
+      TestClass="LlmSummaryCliTests"
+    />
 
     <MsBuildIntegrationSupport
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Fixtures\TempPlayground.cs"
