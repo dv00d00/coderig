@@ -139,7 +139,9 @@ The rules that make this produce mergeable code, not plausible diffs:
   ```
 
   The full local gate is these two commands in order; the integration process is deliberately single-worker,
-  and its session hook also pins `SolutionAnalyzer` to one project worker so inner Buildalyzer fan-out cannot
+  and its session hook also pins `SolutionAnalyzer` to one project worker and sets
+  `MSBUILDDISABLENODEREUSE=1`. The latter prevents an MSBuild node evaluated for one temporary playground
+  copy from being reused for another root, so inner Buildalyzer fan-out or cross-root evaluated state cannot
   reappear beneath the serialized test runner:
 
   ```bash
