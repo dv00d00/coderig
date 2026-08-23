@@ -23,6 +23,18 @@ internal enum ExactForwardDebtScope
     WholeResident,
 }
 
+internal interface IExactQueryDemand
+{
+    string Verb { get; }
+}
+
+internal interface IExactDebtPlan
+{
+    ImmutableHashSet<ProjectId> SelectedOrigins { get; }
+    ImmutableHashSet<ProjectId> UnknownOrigins { get; }
+    string? UnavailableReason { get; }
+}
+
 internal sealed record ExactForwardDemand(
     ExactForwardQueryKind QueryKind,
     string FromPattern,
@@ -31,7 +43,7 @@ internal sealed record ExactForwardDemand(
     int MaxDepth,
     FactPathFinder.TraversalMode Mode,
     ExactForwardDebtScope DebtScope = ExactForwardDebtScope.DemandBoundary
-)
+) : IExactQueryDemand
 {
     internal string Verb =>
         QueryKind switch
@@ -41,6 +53,8 @@ internal sealed record ExactForwardDemand(
             ExactForwardQueryKind.Tree => "tree",
             _ => throw new InvalidOperationException($"Unknown exact forward query kind: {QueryKind}"),
         };
+
+    string IExactQueryDemand.Verb => Verb;
 }
 
 internal enum ExactForwardRefinementKind
@@ -71,7 +85,7 @@ internal sealed record ExactForwardPlan(
     bool FromMatched,
     bool ToMatched,
     string? UnavailableReason
-);
+) : IExactDebtPlan;
 
 internal static class ExactForwardRefinement
 {
@@ -203,7 +217,7 @@ internal static class ExactForwardRefinement
             new(ImmutableHashSet<ProjectId>.Empty, ImmutableHashSet<ProjectId>.Empty, false, false, reason);
     }
 
-    private static ImmutableHashSet<ProjectId> ProjectDependencyClosure(Solution solution, IEnumerable<ProjectId> seeds, bool reverse)
+    internal static ImmutableHashSet<ProjectId> ProjectDependencyClosure(Solution solution, IEnumerable<ProjectId> seeds, bool reverse)
     {
         var seen = ImmutableHashSet.CreateBuilder<ProjectId>();
         var queue = new Queue<ProjectId>(seeds);
@@ -229,13 +243,13 @@ internal static class ExactForwardRefinement
         return seen.ToImmutable();
     }
 
-    private static bool DependsOnAny(Solution solution, ProjectId projectId, IEnumerable<ProjectId> candidates)
+    internal static bool DependsOnAny(Solution solution, ProjectId projectId, IEnumerable<ProjectId> candidates)
     {
         var candidateSet = candidates.ToImmutableHashSet();
         return ProjectDependencyClosure(solution, [projectId], reverse: false).Overlaps(candidateSet);
     }
 
-    private static bool CanChangeGeneratedSeeds(FactSnapshot snapshot, ProjectId projectId) =>
+    internal static bool CanChangeGeneratedSeeds(FactSnapshot snapshot, ProjectId projectId) =>
         snapshot.Solution.GetProject(projectId)?.AnalyzerReferences.Count > 0
         || snapshot.Surfaces.Projects.TryGetValue(projectId, out var partition) && partition.GeneratedShards.Length > 0;
 }

@@ -502,14 +502,28 @@ internal sealed class ResidentIndex : IDisposable
         );
     }
 
-    // Demand-driven exactness for live forward queries. Every refresh/extraction below builds private immutable
+    // Demand-driven exactness for live graph queries. Every refresh/extraction below builds private immutable
     // candidates. One final expected-reference CAS publishes the fixed point; cancellation or a concurrent
     // edit leaves the original generation untouched.
-    internal async Task<ExactForwardRefinementOutcome> EnsureExactForwardAsync(
+    internal Task<ExactForwardRefinementOutcome> EnsureExactForwardAsync(
         FactSnapshot basis,
         ExactForwardDemand demand,
         CancellationToken cancellationToken = default
+    ) => EnsureExactAsync(basis, demand, snapshot => ExactForwardRefinement.Plan(snapshot, demand), cancellationToken);
+
+    internal Task<ExactForwardRefinementOutcome> EnsureExactCallersAsync(
+        FactSnapshot basis,
+        ExactCallersDemand demand,
+        CancellationToken cancellationToken = default
+    ) => EnsureExactAsync(basis, demand, snapshot => ExactCallersRefinement.Plan(snapshot, demand), cancellationToken);
+
+    private async Task<ExactForwardRefinementOutcome> EnsureExactAsync<TPlan>(
+        FactSnapshot basis,
+        IExactQueryDemand demand,
+        Func<FactSnapshot, TPlan> planFor,
+        CancellationToken cancellationToken
     )
+        where TPlan : IExactDebtPlan
     {
         if (!ReferenceEquals(CaptureSnapshot(), basis))
         {
@@ -521,7 +535,7 @@ internal sealed class ResidentIndex : IDisposable
         for (var iteration = 0; iteration < MaxIterations; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var plan = ExactForwardRefinement.Plan(candidate, demand);
+            var plan = planFor(candidate);
             if (plan.UnavailableReason is not null)
             {
                 return ExactForwardRefinementOutcome.Unavailable(basis, plan.UnavailableReason);
