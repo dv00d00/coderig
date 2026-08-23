@@ -12,6 +12,8 @@ $solution = Join-Path $repoRoot "RuntimeIntelligenceGraph.slnx"
 $toolProject = Join-Path $repoRoot "src/Rig.Cli/Rig.Cli.csproj"
 $mainTestProject = Join-Path $repoRoot "tests/Rig.Tests/Rig.Tests.csproj"
 $integrationTestProject = Join-Path $repoRoot "tests/Rig.IntegrationTests/Rig.IntegrationTests.csproj"
+$independentIntegrationTestScript = Join-Path $repoRoot "scripts/run-independent-integration-tests.ps1"
+$liveIntegrationTestProject = Join-Path $repoRoot "tests/Rig.LiveIntegrationTests/Rig.LiveIntegrationTests.csproj"
 $packageOutput = Join-Path $repoRoot ".rig-nupkg"
 
 if ([string]::IsNullOrWhiteSpace($ToolVersion)) {
@@ -33,13 +35,19 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE) - not testing/packing." }
 
     if (-not $SkipTests) {
-        # Keep the ordinary suite at its normal parallelism. Tests that launch dotnet or retain/load
-        # MSBuild workspaces run in a separate executable afterward with one outer worker.
+        # Keep the ordinary suite at its normal parallelism. The shared integration lane keeps every
+        # PerTestSession AnalyzedPlaygrounds consumer together so its expensive fixture is built once.
+        # Every other general MSBuild class gets a fresh process, then the resident/live lane gets its own.
         dotnet test $mainTestProject -c $Configuration --no-build --no-restore
         if ($LASTEXITCODE -ne 0) { throw "Main tests failed (exit $LASTEXITCODE) - not packing/installing." }
 
-        dotnet test $integrationTestProject -c $Configuration --no-build --no-restore -- --maximum-parallel-tests 1
-        if ($LASTEXITCODE -ne 0) { throw "Integration tests failed (exit $LASTEXITCODE) - not packing/installing." }
+        dotnet test $integrationTestProject -c $Configuration --no-build --no-restore -- --maximum-parallel-tests 1 --minimum-expected-tests 1
+        if ($LASTEXITCODE -ne 0) { throw "Shared integration tests failed (exit $LASTEXITCODE) - not packing/installing." }
+
+        & $independentIntegrationTestScript -Configuration $Configuration
+
+        dotnet test $liveIntegrationTestProject -c $Configuration --no-build --no-restore -- --maximum-parallel-tests 1 --minimum-expected-tests 1
+        if ($LASTEXITCODE -ne 0) { throw "Live integration tests failed (exit $LASTEXITCODE) - not packing/installing." }
     }
     
     dotnet pack $toolProject `

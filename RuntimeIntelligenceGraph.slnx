@@ -14,6 +14,7 @@
   <Folder Name="/files/scripts/">
     <File Path="scripts/format.ps1" />
     <File Path="scripts/mini-ci.ps1" />
+    <File Path="scripts/run-independent-integration-tests.ps1" />
     <Project Path="scripts/LiveScaleGenerator/LiveScaleGenerator.csproj" />
   </Folder>
   <Folder Name="/src/">
@@ -23,7 +24,9 @@
     <Project Path="src/Rig.Cli/Rig.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Rig.IndependentIntegrationTests/Rig.IndependentIntegrationTests.csproj" />
     <Project Path="tests/Rig.IntegrationTests/Rig.IntegrationTests.csproj" />
+    <Project Path="tests/Rig.LiveIntegrationTests/Rig.LiveIntegrationTests.csproj" />
     <Project Path="tests/Rig.Tests/Rig.Tests.csproj" />
   </Folder>
 </Solution>

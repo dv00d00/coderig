@@ -194,9 +194,19 @@ disposable-clone release workout.
   exact class passed **9/9** in a fresh process and the complete fresh-process rerun passed. After the final
   corrections, the shared process later cascaded two unrelated "zero buildable projects" failures; those exact
   classes passed **6/6** and **2/2** in fresh Release processes, while the corrected live callers/tree classes
-  passed **10/10**. This repeatable process contamination keeps the isolated executable a reliability blocker
-  and profiling target: it is no longer a 17-minute main-suite outlier, but one 10-minute shared process is not
-  a trustworthy gate even with one outer worker.
+  passed **10/10**. Splitting only those seven classes produced a green **29/29** resident/live lane, but the
+  reduced general process still contaminated a previously green `CoreAllocationPlaygroundTests` after 171 other
+  passes; that class passed **1/1** when immediately rerun alone. The release gate therefore uses the manifest as
+  an explicit three-way classification: 17 `AnalyzedPlaygrounds` PerTestSession consumers share one executable
+  so the expensive fixture is created once; 23 independent MSBuild classes each run in a fresh process; and the
+  seven resident/live classes retain their own executable. Every lane pins one outer worker, one
+  `SolutionAnalyzer` project worker, and disabled MSBuild node reuse. The manifest records namespace and actual
+  class name—including four filename/class mismatches—and the independent runner requires at least one discovered
+  test per class, so stale metadata cannot silently pass. Source remains linked from its owning directories and
+  ordinary exclusions are derived from the same three item groups: 47 integration classes run exactly once, with
+  the expected **202 tests including the known skip**. The final classified Release gate built with zero warnings
+  or errors, then passed ordinary **1,126/1,126**, shared **83 + one intentional skip**, independent **89/89**,
+  and resident/live **29/29**: **1,327 passes + one skip, zero failures**.
 - **2026-08-23 controlled agent UX follow-through:** exact open-generic queries now include their concrete
   monomorphized executions; symbol discovery has TSV/JSON; traversal depth accepts `--max-depth`; ambiguous
   `show` fails closed; immutable-store answers disclose current/stale/unverifiable provenance on stderr; CLI
@@ -205,9 +215,8 @@ disposable-clone release workout.
   named columns, existing Tree/Source/Reaches/Callers pivots, and an explicitly selected A/B behavior diff—no
   peer guessing. An independent review then corrected generic effect ownership, persisted-lambda/source-generic
   aggregation, same-directory `.rig/` freshness, merged-repository probe fan-out, and warm impact schema gates.
-  Focused tests gate each slice; the expensive ordinary+isolated integration gate is deliberately deferred
-  until the complete feature set.
-- **Next:** run one final gate and dogfood from the disposable clone. Do not substitute a project-reference
+  Focused tests gate each slice; the final classified gate above covers the complete feature set.
+- **Next:** dogfood the installed build from the disposable clone. Do not substitute a project-reference
   cone for the demand graph.
 
 ## Why — the workflow that makes this the target

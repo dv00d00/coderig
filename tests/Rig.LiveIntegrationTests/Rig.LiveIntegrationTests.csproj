@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="MsBuildIntegrationSources.props" />
+  <Import Project="..\Rig.IntegrationTests\MsBuildIntegrationSources.props" />
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <!-- These linked tests exercise internal live/query seams already granted to this friend assembly. -->
     <AssemblyName>Rig.IntegrationTests</AssemblyName>
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
@@ -20,8 +21,9 @@
     <ProjectReference Include="..\..\src\Rig.Storage\Rig.Storage.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="@(SharedIntegrationSource)" Link="%(SharedIntegrationSource.Link)" />
+    <Compile Include="@(LiveIntegrationSource)" Link="%(LiveIntegrationSource.Link)" />
     <Compile Include="@(MsBuildIntegrationSupport)" Link="%(MsBuildIntegrationSupport.Link)" />
+    <Compile Include="..\Rig.IntegrationTests\IntegrationTestSession.cs" Link="IntegrationTestSession.cs" />
     <Content Include="..\..\src\Rig.Cli\builtin-rules.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
