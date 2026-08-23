@@ -216,7 +216,13 @@ disposable-clone release workout.
   peer guessing. An independent review then corrected generic effect ownership, persisted-lambda/source-generic
   aggregation, same-directory `.rig/` freshness, merged-repository probe fan-out, and warm impact schema gates.
   Focused tests gate each slice; the final classified gate above covers the complete feature set.
-- **Next:** dogfood the installed build from the disposable clone. Do not substitute a project-reference
+- **Installed-tool dogfood:** package `0.1.1-ci.20260823214714+46326f3b` ran only from the disposable clone
+  against its existing `f2b860dbd502` store. Freshness reported the pinned store current; caller-ranked
+  hotspots returned transparent metrics; symbol JSON/TSV preserved exact IDs and six lambda identities;
+  ambiguous `show RunAsync` failed closed with rerunnable candidates; exact signed IDs drove `effects-diff`;
+  the formerly over-budget tree emitted exactly five TSV nodes; and `/api/hotspots` returned the same top-three
+  caller ranking as the CLI. The temporary server was stopped after the smoke check.
+- **Next:** ready for an early-feedback agent workout from the disposable clone. Do not substitute a project-reference
   cone for the demand graph.
 
 ## Why — the workflow that makes this the target
