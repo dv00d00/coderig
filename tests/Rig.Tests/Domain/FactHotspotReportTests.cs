@@ -56,13 +56,7 @@ public sealed class FactHotspotReportTests
     public void Retains_generated_rows_for_presentation_time_filtering()
     {
         var generated = FactHotspotReport
-            .Build(
-                Graph(),
-                [new FactHotspotReport.Method("M:N.Generated.G", "G", "Generated/G.cs", 20, 20, true, false)],
-                [],
-                [],
-                []
-            )
+            .Build(Graph(), [new FactHotspotReport.Method("M:N.Generated.G", "G", "Generated/G.cs", 20, 20, true, false)], [], [], [])
             .Single();
 
         generated.IsGenerated.ShouldBeTrue();

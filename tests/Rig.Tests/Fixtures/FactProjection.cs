@@ -151,7 +151,11 @@ public static class FactProjection
                     Names: r.ArgumentNames
                 ),
                 Loop: new FactLoopContext(Kind: r.EnclosingLoopKind, Detail: r.EnclosingLoopDetail),
-                Nesting: new FactCallSiteNesting(Invocations: r.EnclosingInvocations, CatchTypes: r.EnclosingCatchTypes, Scopes: r.EnclosingScopes),
+                Nesting: new FactCallSiteNesting(
+                    Invocations: r.EnclosingInvocations,
+                    CatchTypes: r.EnclosingCatchTypes,
+                    Scopes: r.EnclosingScopes
+                ),
                 TypeArguments: r.TypeArguments
             ))
             .ToArray();

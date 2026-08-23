@@ -16,10 +16,7 @@ internal static class EffectsDiffEndpoint
             {
                 if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
                 {
-                    return Results.Json(
-                        MissingResponse(a ?? "", b ?? ""),
-                        statusCode: StatusCodes.Status400BadRequest
-                    );
+                    return Results.Json(MissingResponse(a ?? "", b ?? ""), statusCode: StatusCodes.Status400BadRequest);
                 }
 
                 try
@@ -32,17 +29,11 @@ internal static class EffectsDiffEndpoint
                         storeRef: NullIfBlank(store)
                     );
                     var response = ToResponse(result);
-                    return Results.Json(
-                        response,
-                        statusCode: result.Matched ? StatusCodes.Status200OK : StatusCodes.Status400BadRequest
-                    );
+                    return Results.Json(response, statusCode: result.Matched ? StatusCodes.Status200OK : StatusCodes.Status400BadRequest);
                 }
                 catch (Exception ex)
                 {
-                    return Results.Json(
-                        MissingResponse(a, b, ex.Message),
-                        statusCode: StatusCodes.Status400BadRequest
-                    );
+                    return Results.Json(MissingResponse(a, b, ex.Message), statusCode: StatusCodes.Status400BadRequest);
                 }
             }
         );
@@ -73,8 +64,7 @@ internal static class EffectsDiffEndpoint
             Matches: target.Matches
         );
 
-    private static EffectsDiffResourceDto Resource(EffectsDiffQueryService.ResourceSetItem item) =>
-        new(item.ResourceKey, item.Categories);
+    private static EffectsDiffResourceDto Resource(EffectsDiffQueryService.ResourceSetItem item) => new(item.ResourceKey, item.Categories);
 
     private static string? Error(EffectsDiffQueryService.EffectsDiffQueryResult result)
     {

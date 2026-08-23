@@ -106,14 +106,7 @@ public sealed class StoreFreshnessDisclosureTests
         await fixture.MaterializeAsync("pinned000001", new GitProvenance(fixture.Commit, "main", Dirty: false));
         await fixture.MaterializeAsync("latest000001", new GitProvenance(fixture.Commit, "main", Dirty: false), latest: true);
 
-        var (exit, _, stderr) = await fixture.RunAsync(
-            "symbols",
-            "nothing",
-            "--store",
-            "pinned000001",
-            "--format",
-            "tsv"
-        );
+        var (exit, _, stderr) = await fixture.RunAsync("symbols", "nothing", "--store", "pinned000001", "--format", "tsv");
 
         exit.ShouldBe(0, stderr);
         stderr.ShouldContain("store: pinned000001 (pinned)");
@@ -132,12 +125,8 @@ public sealed class StoreFreshnessDisclosureTests
             error,
             async () =>
             {
-                await using var first = await TraversalGraphLoader.OpenReadContextGatedAsync(
-                    new WorkspaceLocation(fixture.AnalysisRoot)
-                );
-                await using var second = await TraversalGraphLoader.OpenReadContextGatedAsync(
-                    new WorkspaceLocation(fixture.AnalysisRoot)
-                );
+                await using var first = await TraversalGraphLoader.OpenReadContextGatedAsync(new WorkspaceLocation(fixture.AnalysisRoot));
+                await using var second = await TraversalGraphLoader.OpenReadContextGatedAsync(new WorkspaceLocation(fixture.AnalysisRoot));
                 return 0;
             }
         );
@@ -180,16 +169,7 @@ public sealed class StoreFreshnessDisclosureTests
         await fixture.MaterializeAsync("impactbase01", new GitProvenance(fixture.Commit, "main", Dirty: false));
         await fixture.MaterializeAsync("impacthead01", new GitProvenance(fixture.Commit, "main", Dirty: false), latest: true);
 
-        var arguments = new[]
-        {
-            "impact",
-            "--base",
-            "impactbase01",
-            "--head",
-            "impacthead01",
-            "--format",
-            "tsv",
-        };
+        var arguments = new[] { "impact", "--base", "impactbase01", "--head", "impacthead01", "--format", "tsv" };
         var cold = await fixture.RunAsync(arguments);
         var warm = await fixture.RunAsync([.. arguments, "--time"]);
 
@@ -249,17 +229,7 @@ public sealed class StoreFreshnessDisclosureTests
         public string CommitAll(string message)
         {
             Git(SourceRoot, "add", "--all");
-            Git(
-                SourceRoot,
-                "-c",
-                "user.name=Rig Tests",
-                "-c",
-                "user.email=rig@example.invalid",
-                "commit",
-                "--quiet",
-                "-m",
-                message
-            );
+            Git(SourceRoot, "-c", "user.name=Rig Tests", "-c", "user.email=rig@example.invalid", "commit", "--quiet", "-m", message);
             Commit = Git(SourceRoot, "rev-parse", "HEAD");
             return Commit;
         }

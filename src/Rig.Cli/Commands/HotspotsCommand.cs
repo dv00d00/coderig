@@ -57,10 +57,7 @@ internal static class HotspotsCommand
                             Format: pr.GetValue(format),
                             Time: pr.GetValue(time)
                         ),
-                        new CommandIo(
-                            new TextOutput(output, error),
-                            new WorkspaceLocation(workingDirectory, pr.GetValue(store))
-                        )
+                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
             )
         );
@@ -128,8 +125,7 @@ internal static class HotspotsCommand
         string sort,
         int top,
         bool noLambdas
-    ) =>
-        Order(rows.Where(r => !r.IsGenerated && (!noLambdas || !r.IsLambda)), sort).Take(Math.Max(0, top)).ToList();
+    ) => Order(rows.Where(r => !r.IsGenerated && (!noLambdas || !r.IsLambda)), sort).Take(Math.Max(0, top)).ToList();
 
     internal static void WriteTsv(TextWriter output, IReadOnlyList<FactHotspotReport.Row> rows)
     {
@@ -178,7 +174,7 @@ internal static class HotspotsCommand
         output.WriteLine("No blended score: counts are distinct methods / static call or effect sites.");
         foreach (var (row, index) in rows.Select((row, index) => (row, index + 1)))
         {
-            output.WriteLine($"{index,3}. {ShortName(row.Id)}  {ShortenPath(row.File)}:{row.Line}  ({row.Lines} lines)");
+            output.WriteLine($"{index, 3}. {ShortName(row.Id)}  {ShortenPath(row.File)}:{row.Line}  ({row.Lines} lines)");
             output.WriteLine(
                 $"     callers {row.CallerMethods}/{row.IncomingCallSites} sites · callees {row.CalleeMethods}/{row.OutgoingCallSites} sites"
                     + $" · effects {row.EffectSites}/{row.EffectKinds} kinds @ {row.EffectSitesPer100Lines.ToString("0.##", CultureInfo.InvariantCulture)}/100 lines"

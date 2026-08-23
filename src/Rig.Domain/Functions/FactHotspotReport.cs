@@ -6,15 +6,7 @@ namespace Rig.Domain.Functions;
 // blended score: every column is an independently explainable count, and callers choose the sort axis.
 public static class FactHotspotReport
 {
-    public sealed record Method(
-        string Id,
-        string Name,
-        string File,
-        int Line,
-        int EndLine,
-        bool IsGenerated,
-        bool IsLambda
-    );
+    public sealed record Method(string Id, string Name, string File, int Line, int EndLine, bool IsGenerated, bool IsLambda);
 
     // Graph-tier hazards are not attached to DerivedEffect, so the query layer flattens them into this
     // domain-neutral site shape before composing the report.
@@ -56,12 +48,8 @@ public static class FactHotspotReport
         // physical source location + canonical endpoint pair is one call site regardless of how many concrete
         // instantiations demanded that edge.
         var sourceGraph = CanonicalSourceGraph(graph);
-        var incoming = sourceGraph.CallEdges
-            .GroupBy(e => e.Callee, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.ToList());
-        var outgoing = sourceGraph.CallEdges
-            .GroupBy(e => e.Caller, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.ToList());
+        var incoming = sourceGraph.CallEdges.GroupBy(e => e.Callee, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToList());
+        var outgoing = sourceGraph.CallEdges.GroupBy(e => e.Caller, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToList());
         var effectsByMethod = effects
             .Where(e => !string.IsNullOrEmpty(e.EnclosingSymbolId))
             .GroupBy(e => MonomorphizedNodeId.BaseOf(e.EnclosingSymbolId!), StringComparer.Ordinal)
@@ -95,10 +83,7 @@ public static class FactHotspotReport
                 .Count();
             var effectKinds = methodEffects.Select(e => (e.Provider, e.Operation)).Distinct().Count();
 
-            var hazardSites = methodHazards
-                .Select(h => (Type: h.Kind, FilePath: h.File, h.Line))
-                .Distinct()
-                .ToList();
+            var hazardSites = methodHazards.Select(h => (Type: h.Kind, FilePath: h.File, h.Line)).Distinct().ToList();
 
             var amplificationSites = methodEffects
                 .Where(e => AmplificationScope.Includes(amplificationScope, e.Provider, e.Operation))
@@ -140,24 +125,18 @@ public static class FactHotspotReport
 
     private static FactGraphData CanonicalSourceGraph(FactGraphData graph)
     {
-        var edges = graph.CallEdges
-            .Select(e =>
-                e with
-                {
-                    Caller = MonomorphizedNodeId.BaseOf(e.Caller),
-                    Callee = MonomorphizedNodeId.BaseOf(e.Callee),
-                }
-            )
+        var edges = graph
+            .CallEdges.Select(e => e with { Caller = MonomorphizedNodeId.BaseOf(e.Caller), Callee = MonomorphizedNodeId.BaseOf(e.Callee) })
             .GroupBy(e => (e.Caller, e.Callee, e.FilePath, e.Line))
             .Select(g => g.First())
             .ToList();
-        var methods = graph.Methods
-            .Select(m => m with { SymbolId = MonomorphizedNodeId.BaseOf(m.SymbolId) })
+        var methods = graph
+            .Methods.Select(m => m with { SymbolId = MonomorphizedNodeId.BaseOf(m.SymbolId) })
             .GroupBy(m => m.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
             .ToList();
-        var dispatch = graph.MinedDispatch
-            ?.Select(d =>
+        var dispatch = graph
+            .MinedDispatch?.Select(d =>
                 d with
                 {
                     SourceMember = MonomorphizedNodeId.BaseOf(d.SourceMember),

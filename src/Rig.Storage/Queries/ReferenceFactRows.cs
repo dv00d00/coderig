@@ -167,8 +167,7 @@ internal static class ReferenceFactRows
     // "" and a null Line as 0, matching the non-nullable ReferenceFact fields.
     internal static ReferenceFact ReadInvocationRow(DbDataReader reader)
     {
-        string? Text(FactInvocationProjection.Column column) =>
-            reader.IsDBNull((int)column) ? null : reader.GetString((int)column);
+        string? Text(FactInvocationProjection.Column column) => reader.IsDBNull((int)column) ? null : reader.GetString((int)column);
 
         return new ReferenceFact(
             TargetSymbolId: reader.GetString((int)FactInvocationProjection.Column.TargetSymbolId),

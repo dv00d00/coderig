@@ -37,11 +37,7 @@ internal sealed class StoreAnswerDisclosure
 
     // Called only after the schema gate succeeds. An explicit path overload also covers the impact engine's
     // direct base-store contexts; dedupe makes its provenance/base-compute opens one logical disclosure.
-    internal static Task DiscloseCurrentAsync(
-        RigDbContext context,
-        string storeDirectoryOrDbPath,
-        string? explicitStoreRef = null
-    ) =>
+    internal static Task DiscloseCurrentAsync(RigDbContext context, string storeDirectoryOrDbPath, string? explicitStoreRef = null) =>
         Ambient.Value is { } current
             ? current.DiscloseAsync(context, StoreDirectory(storeDirectoryOrDbPath), explicitStoreRef)
             : Task.CompletedTask;
@@ -83,10 +79,7 @@ internal sealed class StoreAnswerDisclosure
             return Prefix(storeDirectory, explicitStoreRef, indexedCommit: null) + "freshness unknown: no run provenance";
         }
 
-        var provenance = runs
-            .Select(run => new RunProvenance(NormalizeCommit(run.SourceCommit), run.SourceDirty))
-            .Distinct()
-            .ToList();
+        var provenance = runs.Select(run => new RunProvenance(NormalizeCommit(run.SourceCommit), run.SourceDirty)).Distinct().ToList();
         if (provenance.Count != 1)
         {
             return Prefix(storeDirectory, explicitStoreRef, indexedCommit: null) + "freshness unknown: mixed run provenance";
@@ -160,16 +153,13 @@ internal sealed class StoreAnswerDisclosure
         var directoryName = Path.GetFileName(storeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         var storeId = string.Equals(directoryName, StoreLayout.RigDirName, StringComparison.Ordinal) ? "legacy" : directoryName;
         var selection =
-            explicitStoreRef is not null
-                ? " (pinned)"
-                : string.Equals(storeId, StoreLayout.LatestStoreId(_workingDirectory), StringComparison.OrdinalIgnoreCase)
-                    ? " (LATEST)"
-                    : " (default)";
+            explicitStoreRef is not null ? " (pinned)"
+            : string.Equals(storeId, StoreLayout.LatestStoreId(_workingDirectory), StringComparison.OrdinalIgnoreCase) ? " (LATEST)"
+            : " (default)";
         return $"store: {storeId}{selection} @ {(indexedCommit is null ? "unknown" : Short(indexedCommit))} — ";
     }
 
-    private static string? NormalizeCommit(string? commit) =>
-        string.IsNullOrWhiteSpace(commit) ? null : commit.Trim().ToLowerInvariant();
+    private static string? NormalizeCommit(string? commit) => string.IsNullOrWhiteSpace(commit) ? null : commit.Trim().ToLowerInvariant();
 
     private static string Short(string commit) => commit.Length > 12 ? commit[..12] : commit;
 

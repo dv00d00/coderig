@@ -23,7 +23,8 @@ namespace Rig.Cli.Live;
 //
 // It OWNS the context it opened: DisposeAsync closes it, so the command's `await using` keeps the same
 // lifetime the old `await using var context` had.
-internal sealed class StoreQueryFactSource(RigDbContext context, WorkspaceLocation workspaceLocation, bool ownsContext = true) : IQueryFactSource
+internal sealed class StoreQueryFactSource(RigDbContext context, WorkspaceLocation workspaceLocation, bool ownsContext = true)
+    : IQueryFactSource
 {
     // Resolved once, lazily: the same two values TreeCommand used to compute inline (`ResolveReadStoreDir` +
     // `StoreKey` off rig.db's size/mtime). Lazy because the uncached commands (reaches/path/callers) never ask

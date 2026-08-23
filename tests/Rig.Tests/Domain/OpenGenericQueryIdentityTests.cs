@@ -77,11 +77,7 @@ public sealed class OpenGenericQueryIdentityTests
         var result = DemandReverseCallersGraph.Build(
             view,
             rules,
-            new DemandReverseCallersGraphRequest(
-                GenericWithParameter,
-                int.MaxValue,
-                FactPathFinder.TraversalMode.SyncCut
-            )
+            new DemandReverseCallersGraphRequest(GenericWithParameter, int.MaxValue, FactPathFinder.TraversalMode.SyncCut)
         );
         var reachedBy = FactPathFinder.ReachedBy(result.Graph, GenericWithParameter);
         var exactTargets = reachedBy.Where(item => item.Value == 0).Select(item => item.Key).ToHashSet(StringComparer.Ordinal);

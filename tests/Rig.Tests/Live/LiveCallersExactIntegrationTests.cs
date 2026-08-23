@@ -180,7 +180,7 @@ public sealed class LiveCallersExactIntegrationTests
         store.Out.ShouldContain(ExistingHighLevelCaller);
         live.Exit.ShouldBe(store.Exit);
         WithoutLoadBanner(live.Out).ShouldBe(WithoutLoadBanner(store.Out));
-        live.Err.ShouldBe(store.Err);
+        live.Err.ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(store.Err));
     }
 
     private static void AssertNoWholeGraphBuild(LiveServeResult answer)

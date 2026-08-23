@@ -23,12 +23,7 @@ public static class EffectsDiffQueryService
         Ambiguous,
     }
 
-    public sealed record TargetResolution(
-        string Pattern,
-        TargetStatus Status,
-        IReadOnlyList<string> Matches,
-        string? ResolvedId
-    );
+    public sealed record TargetResolution(string Pattern, TargetStatus Status, IReadOnlyList<string> Matches, string? ResolvedId);
 
     public sealed record ResourceSetItem(string ResourceKey, IReadOnlyList<string> Categories);
 
@@ -58,11 +53,7 @@ public static class EffectsDiffQueryService
         string? storeRef = null
     )
     {
-        var rules = RuleSetLoader.Load(
-            workingDirectory: workingDirectory,
-            extraRules: [],
-            loadedPaths: out var loadedRulePaths
-        );
+        var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: [], loadedPaths: out var loadedRulePaths);
         var (context, storeDirectory) = await OpenReadContextGatedAsync(
             new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef),
             withStoreDir: true
@@ -71,12 +62,7 @@ public static class EffectsDiffQueryService
         var storeKey = StoreKey(Path.Combine(storeDirectory, StoreLayout.DbFileName));
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths);
         var graphWatch = Stopwatch.StartNew();
-        var graph = await WarmStore.GraphAsync(
-            context: context,
-            rules: rules,
-            storeDir: storeDirectory,
-            rulesHash: rulesHash
-        );
+        var graph = await WarmStore.GraphAsync(context: context, rules: rules, storeDir: storeDirectory, rulesHash: rulesHash);
         graphWatch.Stop();
 
         var a = Resolve(graph, aPattern);
@@ -105,17 +91,7 @@ public static class EffectsDiffQueryService
             rules: rules,
             useCache: true
         );
-        var result = ComputeResolved(
-            graph,
-            effects,
-            a.Target,
-            b.Target,
-            a.SeedIds,
-            b.SeedIds,
-            only,
-            label ?? "",
-            graphWatch.Elapsed
-        );
+        var result = ComputeResolved(graph, effects, a.Target, b.Target, a.SeedIds, b.SeedIds, only, label ?? "", graphWatch.Elapsed);
         traversalWatch.Stop();
         return result with { TraversalElapsed = traversalWatch.Elapsed };
     }
@@ -253,10 +229,7 @@ public static class EffectsDiffQueryService
             );
         }
 
-        return new ResolvedTarget(
-            new TargetResolution(pattern, TargetStatus.Matched, conceptualMatches, canonicalTargets[0]),
-            seeds
-        );
+        return new ResolvedTarget(new TargetResolution(pattern, TargetStatus.Matched, conceptualMatches, canonicalTargets[0]), seeds);
     }
 
     private static bool IsContainedLambdaOfMatched(string nodeId, HashSet<string> matched)
@@ -302,18 +275,12 @@ public static class EffectsDiffQueryService
         return candidate;
     }
 
-    private static Dictionary<string, IReadOnlyList<string>> Inventory(
-        IReadOnlyList<EffectSetDiffFinding> findings,
-        string label
-    ) =>
+    private static Dictionary<string, IReadOnlyList<string>> Inventory(IReadOnlyList<EffectSetDiffFinding> findings, string label) =>
         findings
             .Where(f => f.Label == label && f.Direction == EffectDiffSide.AOnly)
             .ToDictionary(f => f.ResourceKey, f => f.Categories, StringComparer.Ordinal);
 
-    private static IReadOnlyList<ResourceSetItem> Resources(
-        IReadOnlyList<EffectSetDiffFinding> findings,
-        EffectDiffSide side
-    ) =>
+    private static IReadOnlyList<ResourceSetItem> Resources(IReadOnlyList<EffectSetDiffFinding> findings, EffectDiffSide side) =>
         findings
             .Where(f => f.Direction == side)
             .Select(f => new ResourceSetItem(f.ResourceKey, f.Categories))

@@ -133,8 +133,7 @@ public static class PathQueryService
             intrinsic
         );
         var effectsBySymbol = selection
-            .Effects
-            .Where(e => e.EnclosingSymbolId is not null)
+            .Effects.Where(e => e.EnclosingSymbolId is not null)
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, IReadOnlyList<DerivedEffect> (g) => g.ToList(), StringComparer.Ordinal);
 

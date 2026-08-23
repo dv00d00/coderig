@@ -11,10 +11,7 @@ public sealed class EffectsDiffQueryServiceTests
     [Test]
     public void Exact_fqn_wins_over_prefix_twin_and_preserves_the_cli_finding_contract()
     {
-        var graph = Graph(
-            ["M:N.A.Save", "M:N.A.SaveFinal", "M:N.B.Run"],
-            Edge("M:N.A.Save", "M:N.A.Helper")
-        );
+        var graph = Graph(["M:N.A.Save", "M:N.A.SaveFinal", "M:N.B.Run"], Edge("M:N.A.Save", "M:N.A.Helper"));
         var effects = new[]
         {
             Effect("db", "write", "N.CommonEntityCollection", "M:N.A.Save"),
@@ -58,14 +55,8 @@ public sealed class EffectsDiffQueryServiceTests
     {
         const string open = "M:N.GenericWorker.Run``1(System.String)";
         var mono = MonomorphizedNodeId.For(open, [], ["System.Int32"]);
-        var graph = Graph(
-            ["M:N.A.Entry", "M:N.B.Entry", open, mono],
-            Edge("M:N.A.Entry", mono)
-        );
-        var effects = new[]
-        {
-            Effect("db", "write", "N.GenericWorkEntityCollection", open),
-        };
+        var graph = Graph(["M:N.A.Entry", "M:N.B.Entry", open, mono], Edge("M:N.A.Entry", mono));
+        var effects = new[] { Effect("db", "write", "N.GenericWorkEntityCollection", open) };
 
         var result = EffectsDiffQueryService.Compute(graph, effects, "N.A.Entry", "N.B.Entry");
 
@@ -165,12 +156,7 @@ public sealed class EffectsDiffQueryServiceTests
     [Test]
     public void Web_contract_carries_ambiguity_candidates_for_a_400_response()
     {
-        var result = EffectsDiffQueryService.Compute(
-            Graph(["M:N.Left.Run", "M:N.Right.Run", "M:N.Other.Stop"]),
-            [],
-            "Run",
-            "Stop"
-        );
+        var result = EffectsDiffQueryService.Compute(Graph(["M:N.Left.Run", "M:N.Right.Run", "M:N.Other.Stop"]), [], "Run", "Stop");
 
         var dto = EffectsDiffEndpoint.ToResponse(result);
 

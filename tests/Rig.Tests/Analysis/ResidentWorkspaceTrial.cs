@@ -182,7 +182,9 @@ public sealed class ResidentWorkspaceTrial
         // DeepChain carries no XML DI descriptors, so every DeepChain gate is structurally blind to a DI
         // regression. MedDBase has real descriptors, so this is the only place the bypass gets tested.
         static HashSet<string> DiSet(AnalysisResult r) =>
-            r.DiRegistrations.Select(d => $"{d.ServiceType}|{d.ImplementationType}|{d.Lifetime}|{d.FilePath}:{d.Line}").ToHashSet(StringComparer.Ordinal);
+            r
+                .DiRegistrations.Select(d => $"{d.ServiceType}|{d.ImplementationType}|{d.Lifetime}|{d.FilePath}:{d.Line}")
+                .ToHashSet(StringComparer.Ordinal);
         var coldDi = DiSet(coldResult);
         var eagerDi = DiSet(eagerFacts);
         Say(
@@ -209,9 +211,7 @@ public sealed class ResidentWorkspaceTrial
                 + $"  ||  disp missing={coldDisp.Except(recDisp).Count()} extra={recDisp.Except(coldDisp).Count()}"
         );
         var recDi = DiSet(reconciledFacts);
-        Say(
-            $"[trial] SET vs cold (DI, recon)  : missing={coldDi.Except(recDi).Count()} extra={recDi.Except(coldDi).Count()}"
-        );
+        Say($"[trial] SET vs cold (DI, recon)  : missing={coldDi.Except(recDi).Count()} extra={recDi.Except(coldDi).Count()}");
         foreach (var sample in coldDi.Except(recDi).Take(3))
         {
             Say($"[trial]   sample MISSING di: {sample}");

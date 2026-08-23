@@ -252,7 +252,14 @@ public sealed class LiveReachesTests
             storeOut.ToString().ShouldContain($"From: {pattern}");
 
             Diff(differences, label, pattern, "stdout", storeOut.ToString(), answer.Out);
-            Diff(differences, label, pattern, "stderr", storeErr.ToString(), answer.Err);
+            Diff(
+                differences,
+                label,
+                pattern,
+                "stderr",
+                AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()),
+                answer.Err
+            );
 
             answer.Exit.ShouldBe(storeExit, $"[{label}] '{pattern}': exit code differs (store={storeExit}, live={answer.Exit}).");
             if (requiredInEveryAnswer is not null)

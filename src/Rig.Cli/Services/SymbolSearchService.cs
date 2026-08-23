@@ -14,15 +14,7 @@ public static class SymbolSearchService
 
     // Full-fidelity query row shared by the CLI's human/TSV/JSON renderers. The web search maps this to its
     // intentionally smaller navigation-picker DTO after applying web-only ranking.
-    public sealed record SymbolRecord(
-        string Id,
-        string Kind,
-        string Name,
-        string Signature,
-        string File,
-        int Line,
-        string Assembly
-    );
+    public sealed record SymbolRecord(string Id, string Kind, string Name, string Signature, string File, int Line, string Assembly);
 
     public sealed record SymbolQueryResult(int Total, IReadOnlyList<SymbolRecord> Symbols);
 

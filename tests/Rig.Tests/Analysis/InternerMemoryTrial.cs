@@ -119,9 +119,7 @@ public sealed class InternerMemoryTrial
             var target = plan[i];
             totalEdits++;
             var text = await target.GetTextAsync();
-            var editedText = SourceText.From(
-                text.ToString() + Environment.NewLine + $"// rig interner trial edit {totalEdits}"
-            );
+            var editedText = SourceText.From(text.ToString() + Environment.NewLine + $"// rig interner trial edit {totalEdits}");
 
             var editWatch = Stopwatch.StartNew();
             await index.ApplyEditAsync(target.FilePath!, editedText);
@@ -136,7 +134,7 @@ public sealed class InternerMemoryTrial
             reconcileWatch.Stop();
             var (genManaged, genWs) = Memory();
             Say(
-                $"[interner-trial] GEN {totalEdits,2}  edit {editWatch.Elapsed.TotalSeconds:F2}s"
+                $"[interner-trial] GEN {totalEdits, 2}  edit {editWatch.Elapsed.TotalSeconds:F2}s"
                     + $" | recon {reconcileWatch.Elapsed.TotalSeconds:F1}s ({unreconciled} proj)"
                     + $" | managed-live {genManaged:F2} GB | workingSet {genWs:F2} GB"
                     + $" | {(reconciled.References ?? []).Count} ref"

@@ -122,9 +122,7 @@ public static class ReachesQueryService
         graphWatch.Stop();
 
         var traversalWatch = Stopwatch.StartNew();
-        var reachable = MonomorphCollapse.CollapseReachInfo(
-            FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode)
-        );
+        var reachable = MonomorphCollapse.CollapseReachInfo(FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode));
         if (reachable.Count == 0)
         {
             traversalWatch.Stop();

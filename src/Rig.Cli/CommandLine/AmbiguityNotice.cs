@@ -43,9 +43,7 @@ internal static class AmbiguityNotice
             return false;
         }
 
-        error.WriteLine(
-            $"Ambiguous symbol pattern '{pattern}' matched {distinctTargets.Count} distinct symbols; source was not rendered."
-        );
+        error.WriteLine($"Ambiguous symbol pattern '{pattern}' matched {distinctTargets.Count} distinct symbols; source was not rendered.");
         foreach (var target in distinctTargets.Take(MaxListed))
         {
             error.WriteLine($"  rig show \"{target}\"");

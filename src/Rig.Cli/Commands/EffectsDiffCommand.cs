@@ -147,12 +147,7 @@ internal static class EffectsDiffCommand
         return 0;
     }
 
-    private static void RenderResolutionFailure(
-        EffectsDiffQueryService.TargetResolution target,
-        string side,
-        CommandIo io,
-        bool tsv
-    )
+    private static void RenderResolutionFailure(EffectsDiffQueryService.TargetResolution target, string side, CommandIo io, bool tsv)
     {
         if (target.Status == EffectsDiffQueryService.TargetStatus.Matched)
         {

@@ -149,7 +149,13 @@ internal static class LiveQueryClient
             );
         }
         catch (Exception exception)
-            when (exception is IOException or UnauthorizedAccessException or ObjectDisposedException or JsonException or NotSupportedException)
+            when (exception
+                    is IOException
+                        or UnauthorizedAccessException
+                        or ObjectDisposedException
+                        or JsonException
+                        or NotSupportedException
+            )
         {
             // IOException covers the pipe breaking mid-request (the host process died); UnauthorizedAccess
             // covers an endpoint owned by another user, which is exactly what the server's ACL produces.

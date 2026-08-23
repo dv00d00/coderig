@@ -266,9 +266,7 @@ internal static class FactCommands
                         output.WriteLine("id\tkind\tname\tsignature\tfile\tline\tassembly");
                         foreach (var hit in shown)
                         {
-                            output.WriteLine(
-                                $"{hit.Id}\t{hit.Kind}\t{hit.Name}\t{hit.Signature}\t{hit.File}\t{hit.Line}\t{hit.Assembly}"
-                            );
+                            output.WriteLine($"{hit.Id}\t{hit.Kind}\t{hit.Name}\t{hit.Signature}\t{hit.File}\t{hit.Line}\t{hit.Assembly}");
                         }
 
                         if (result.Total > shown.Count)

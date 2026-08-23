@@ -232,7 +232,7 @@ public sealed class WatchCommandTests
         repeatedRaw.DeclineReason.ShouldBeNull();
         firstRaw.Answer!.Exit.ShouldBe(storeExit);
         firstRaw.Answer.Out.ShouldBe(storeOut.ToString());
-        firstRaw.Answer.Err.ShouldBe(storeErr.ToString());
+        firstRaw.Answer.Err.ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()));
         repeatedRaw.Answer.ShouldBe(firstRaw.Answer);
 
         var tempDeleteThenRename = Path.Combine(playground.WorkingDirectory, "Business", "BookingService.atomic-two.cs");

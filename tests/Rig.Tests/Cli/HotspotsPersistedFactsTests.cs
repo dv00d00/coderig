@@ -1,5 +1,5 @@
-using Rig.Cli.Services;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Services;
 using Rig.Domain.Data;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;

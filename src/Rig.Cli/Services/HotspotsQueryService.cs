@@ -41,12 +41,7 @@ public static class HotspotsQueryService
             return hit;
         }
 
-        var graph = await Caching.WarmStore.GraphAsync(
-            context: context,
-            rules: rules,
-            storeDir: rigDirectory,
-            rulesHash: rulesHash
-        );
+        var graph = await Caching.WarmStore.GraphAsync(context: context, rules: rules, storeDir: rigDirectory, rulesHash: rulesHash);
         var methodMeta = await Reads.LoadHotspotMethodsAsync(context);
         var endLines = await Reads.LoadHotspotEndLinesAsync(context);
 
@@ -94,13 +89,7 @@ public static class HotspotsQueryService
             .Select(h => new FactHotspotReport.FindingSite(h.Enclosing, h.Type, h.FilePath, h.Line))
             .ToList();
         var artifact = new HotspotArtifact(
-            Rows: FactHotspotReport.Build(
-                graph,
-                methods,
-                selected.Effects,
-                findingSites,
-                rules.Observations.AmplificationOrEmpty
-            ),
+            Rows: FactHotspotReport.Build(graph, methods, selected.Effects, findingSites, rules.Observations.AmplificationOrEmpty),
             HiddenIntrinsic: selected.HiddenIntrinsic
         );
         TryCache(() => cache?.Put(key, HotspotsCodec.Encode(artifact)));

@@ -35,10 +35,7 @@ internal static class HotspotsEndpoint
                 }
                 catch (Exception ex)
                 {
-                    return Results.Json(
-                        Error($"Hotspots query failed: {ex.Message}"),
-                        statusCode: StatusCodes.Status400BadRequest
-                    );
+                    return Results.Json(Error($"Hotspots query failed: {ex.Message}"), statusCode: StatusCodes.Status400BadRequest);
                 }
             }
         );

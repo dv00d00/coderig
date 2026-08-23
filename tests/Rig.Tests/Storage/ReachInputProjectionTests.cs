@@ -51,8 +51,9 @@ public sealed class ReachInputProjectionTests(AnalyzedPlaygrounds playgrounds)
                 var scopedTotal = 0;
                 foreach (var pattern in Patterns)
                 {
-                    var bounded = (await SqlReachability.LoadReachInputsAsync(context, pattern, SqlReachability.Direction.Forward))
-                        .Invocations;
+                    var bounded = (
+                        await SqlReachability.LoadReachInputsAsync(context, pattern, SqlReachability.Direction.Forward)
+                    ).Invocations;
 
                     // The bounded loader selects the refs whose ENCLOSING symbol is in the reach closure, so the
                     // whole-store set restricted to those same enclosing symbols is exactly what it must return.
@@ -82,7 +83,9 @@ public sealed class ReachInputProjectionTests(AnalyzedPlaygrounds playgrounds)
                 // …and the FIX itself, pinned at the loader: the soap call inside `lock (_gate)` must arrive with
                 // its lock scope on the bounded path, because that field is what FactEffectDeriver turns into the
                 // lock_held_across_effect observation.
-                var lockSite = (await SqlReachability.LoadReachInputsAsync(context, "LockZoo.SubmitUnderLock", SqlReachability.Direction.Forward))
+                var lockSite = (
+                    await SqlReachability.LoadReachInputsAsync(context, "LockZoo.SubmitUnderLock", SqlReachability.Direction.Forward)
+                )
                     .Invocations.Where(i => i.Enclosing?.Contains("SubmitUnderLock", StringComparison.Ordinal) == true)
                     .FirstOrDefault(i => i.Nesting.Scopes is not null);
                 lockSite.ShouldNotBeNull("no invocation inside LockZoo.SubmitUnderLock carried EnclosingScopes on the bounded path");
@@ -218,7 +221,8 @@ public sealed class ReachInputProjectionTests(AnalyzedPlaygrounds playgrounds)
 
     // A field GROUP: a non-primitive value type declared in the fact model (FactCallArguments / FactLoopContext
     // / FactCallSiteNesting). Strings, ints and bools are leaves.
-    private static bool IsGroup(Type type) => type is { IsValueType: true, IsPrimitive: false, IsEnum: false } && type.Namespace == "Rig.Domain.Data";
+    private static bool IsGroup(Type type) =>
+        type is { IsValueType: true, IsPrimitive: false, IsEnum: false } && type.Namespace == "Rig.Domain.Data";
 
     // Compared counts to a FILE (RIG_PARITY_REPORT, the same channel LiveFactSourceParityTests uses) — never
     // Console, which TUnit swallows in its default mode. No assertion depends on it; the anti-vacuity guards do

@@ -88,7 +88,10 @@ internal sealed class CompilationHealthCollector
             {
                 _count++;
                 _codes.Add(diagnostic.Id);
-                if (position.CompareTo(_firstPosition) < 0 || (position == _firstPosition && string.CompareOrdinal(message, _firstMessage) < 0))
+                if (
+                    position.CompareTo(_firstPosition) < 0
+                    || (position == _firstPosition && string.CompareOrdinal(message, _firstMessage) < 0)
+                )
                 {
                     _firstPosition = position;
                     _firstMessage = message;
@@ -103,8 +106,7 @@ internal sealed class CompilationHealthCollector
                 var listed = _codes.Take(MaxCodesListed).ToArray();
                 var overflow = _codes.Count - listed.Length;
                 var codes = overflow > 0 ? $"{string.Join(",", listed)},+{overflow}" : string.Join(",", listed);
-                var message =
-                    _firstMessage.Length <= MaxMessageLength ? _firstMessage : _firstMessage[..(MaxMessageLength - 3)] + "...";
+                var message = _firstMessage.Length <= MaxMessageLength ? _firstMessage : _firstMessage[..(MaxMessageLength - 3)] + "...";
                 return new FileCompileHealth(filePath, _count, codes, message);
             }
         }

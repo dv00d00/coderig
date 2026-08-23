@@ -1,8 +1,8 @@
+using System.Text.Json;
 using Rig.Cli.Services;
 using Rig.Cli.Web;
 using Rig.Domain.Functions;
 using Shouldly;
-using System.Text.Json;
 
 namespace Rig.Tests.Cli;
 
@@ -11,14 +11,7 @@ public sealed class WebHotspotsContractTests
     [Test]
     public void Request_defaults_are_stable_and_match_the_cli_report()
     {
-        var valid = HotspotsEndpoint.TryValidate(
-            sort: null,
-            top: null,
-            noLambdas: null,
-            intrinsic: null,
-            out var request,
-            out var error
-        );
+        var valid = HotspotsEndpoint.TryValidate(sort: null, top: null, noLambdas: null, intrinsic: null, out var request, out var error);
 
         valid.ShouldBeTrue();
         error.ShouldBeNull();
@@ -36,9 +29,7 @@ public sealed class WebHotspotsContractTests
 
         foreach (var sort in sorts)
         {
-            HotspotsEndpoint
-                .TryValidate(sort.ToUpperInvariant(), 1, false, false, out var request, out var error)
-                .ShouldBeTrue();
+            HotspotsEndpoint.TryValidate(sort.ToUpperInvariant(), 1, false, false, out var request, out var error).ShouldBeTrue();
             error.ShouldBeNull();
             request.ShouldNotBeNull().Sort.ShouldBe(sort);
         }
@@ -50,14 +41,7 @@ public sealed class WebHotspotsContractTests
     [Arguments("density", 501, "Invalid top '501'.")]
     public void Invalid_arguments_have_a_stable_bounded_400_contract(string sort, int top, string message)
     {
-        var valid = HotspotsEndpoint.TryValidate(
-            sort,
-            top,
-            noLambdas: false,
-            intrinsic: false,
-            out var request,
-            out var error
-        );
+        var valid = HotspotsEndpoint.TryValidate(sort, top, noLambdas: false, intrinsic: false, out var request, out var error);
 
         valid.ShouldBeFalse();
         request.ShouldBeNull();

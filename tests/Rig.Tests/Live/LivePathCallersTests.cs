@@ -82,7 +82,11 @@ public sealed class LivePathCallersTests
     private static readonly Case[] DeepChainCallers =
     [
         new(["callers", "Db.Query"], "callers Db.Query", "Methods that reach 'Db.Query'"),
-        new(["callers", "PatientRepository.GetById"], "callers PatientRepository.GetById", "Methods that reach 'PatientRepository.GetById'"),
+        new(
+            ["callers", "PatientRepository.GetById"],
+            "callers PatientRepository.GetById",
+            "Methods that reach 'PatientRepository.GetById'"
+        ),
         new(["callers", "BookingService.Book"], "callers BookingService.Book", "Methods that reach 'BookingService.Book'"),
         new(["callers", "ChannelBase.Notify"], "callers ChannelBase.Notify", "Methods that reach 'ChannelBase.Notify'"),
         new(["callers", "HomePage.Show"], "callers HomePage.Show", "Methods that reach 'HomePage.Show'"),
@@ -99,7 +103,12 @@ public sealed class LivePathCallersTests
         new(["path", "BookingService.Book", "Db.Query"], "path BookingService.Book Db.Query", "Path 'BookingService.Book' -> 'Db.Query'"),
         // NEGATIVE 1: both endpoints exist, nothing connects them (the chain runs the other way). Exercises the
         // arm where the graph miss triggers the store-wide existence probe and the probe says "yes, it exists".
-        new(["path", "Db.Query", "HomePage.Show"], "path Db.Query HomePage.Show", "No path from 'Db.Query' to 'HomePage.Show'.", ExpectedStoreExit: 1),
+        new(
+            ["path", "Db.Query", "HomePage.Show"],
+            "path Db.Query HomePage.Show",
+            "No path from 'Db.Query' to 'HomePage.Show'.",
+            ExpectedStoreExit: 1
+        ),
         // NEGATIVE 2: the `to` pattern names nothing at all — the probe says "no", so the answer is the
         // no-symbol disclosure rather than a connectivity claim.
         new(
@@ -127,10 +136,18 @@ public sealed class LivePathCallersTests
     private static readonly Case[] EffectRichCallers =
     [
         new(["callers", "TeamRepository.AddAsync"], "callers TeamRepository.AddAsync", "Methods that reach 'TeamRepository.AddAsync'"),
-        new(["callers", "BillingClient.LoadInvoicesAsync"], "callers BillingClient.LoadInvoicesAsync", "Methods that reach 'BillingClient.LoadInvoicesAsync'"),
+        new(
+            ["callers", "BillingClient.LoadInvoicesAsync"],
+            "callers BillingClient.LoadInvoicesAsync",
+            "Methods that reach 'BillingClient.LoadInvoicesAsync'"
+        ),
         new(["callers", "SavePublisher.Raise"], "callers SavePublisher.Raise", "Methods that reach 'SavePublisher.Raise'"),
         new(["callers", "CycleFixture.MutualA"], "callers CycleFixture.MutualA", "Methods that reach 'CycleFixture.MutualA'"),
-        new(["callers", "TeamWorkflow.ProcessBatchAsync"], "callers TeamWorkflow.ProcessBatchAsync", "Methods that reach 'TeamWorkflow.ProcessBatchAsync'"),
+        new(
+            ["callers", "TeamWorkflow.ProcessBatchAsync"],
+            "callers TeamWorkflow.ProcessBatchAsync",
+            "Methods that reach 'TeamWorkflow.ProcessBatchAsync'"
+        ),
     ];
 
     private static readonly Case[] EffectRichPaths =
@@ -152,7 +169,11 @@ public sealed class LivePathCallersTests
             "path TeamsController.Create TeamWorkflow.CreateTeamAsync",
             "Path 'TeamsController.Create' -> 'TeamWorkflow.CreateTeamAsync'"
         ),
-        new(["path", "CycleFixture.MutualA", "CycleFixture.MutualB"], "path CycleFixture.MutualA CycleFixture.MutualB", "Path 'CycleFixture.MutualA' -> 'CycleFixture.MutualB'"),
+        new(
+            ["path", "CycleFixture.MutualA", "CycleFixture.MutualB"],
+            "path CycleFixture.MutualA CycleFixture.MutualB",
+            "Path 'CycleFixture.MutualA' -> 'CycleFixture.MutualB'"
+        ),
     ];
 
     [Test]
@@ -166,7 +187,12 @@ public sealed class LivePathCallersTests
     public async Task Live_callers_equals_the_store_answer_on_the_effect_rich_playground()
     {
         using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
-        await AssertLiveEqualsStoreAsync("EntryPointEffects/callers", playground.WorkingDirectory, playground.SolutionPath, EffectRichCallers);
+        await AssertLiveEqualsStoreAsync(
+            "EntryPointEffects/callers",
+            playground.WorkingDirectory,
+            playground.SolutionPath,
+            EffectRichCallers
+        );
     }
 
     [Test]
@@ -256,10 +282,7 @@ public sealed class LivePathCallersTests
                     Limit: null,
                     Time: false
                 ),
-                new CommandIo(
-                    new TextOutput(Output: liveOut, Error: liveErr),
-                    new WorkspaceLocation(WorkingDirectory: workingDirectory)
-                ),
+                new CommandIo(new TextOutput(Output: liveOut, Error: liveErr), new WorkspaceLocation(WorkingDirectory: workingDirectory)),
                 () => Task.FromResult<IQueryFactSource>(source)
             );
 
@@ -267,10 +290,20 @@ public sealed class LivePathCallersTests
             // Anti-vacuity: the rule-detected EP set must be non-empty on the store side, or "equal" means
             // "both said nothing" — and the target must be reachable from a real entry point, which is the
             // whole thing this lens reports.
-            storeExit.ShouldBe(0, $"'{target}' has no rule-detected entry points on the STORE side — the comparison would be vacuous.{storeOut}{storeErr}");
+            storeExit.ShouldBe(
+                0,
+                $"'{target}' has no rule-detected entry points on the STORE side — the comparison would be vacuous.{storeOut}{storeErr}"
+            );
             storeOut.ToString().ShouldContain($"Rule-detected entry points reaching '{target}'");
             Diff(differences, "callers --entrypoints", target, "stdout", storeOut.ToString(), liveOut.ToString());
-            Diff(differences, "callers --entrypoints", target, "stderr", storeErr.ToString(), liveErr.ToString());
+            Diff(
+                differences,
+                "callers --entrypoints",
+                target,
+                "stderr",
+                AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()),
+                liveErr.ToString()
+            );
             liveExit.ShouldBe(storeExit, $"'{target}': exit code differs (store={storeExit}, live={liveExit}).");
             compared++;
         }
@@ -376,7 +409,14 @@ public sealed class LivePathCallersTests
             // differs (header note 4) — and there the asymmetry is asserted to be one-directional.
             if (query.AmbiguityNoteMayDiffer)
             {
-                Diff(differences, label, query.LiveQuery, "stderr", WithoutAmbiguityNote(storeErr.ToString()), WithoutAmbiguityNote(answer.Err));
+                Diff(
+                    differences,
+                    label,
+                    query.LiveQuery,
+                    "stderr",
+                    WithoutAmbiguityNote(AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString())),
+                    WithoutAmbiguityNote(answer.Err)
+                );
                 if (storeErr.ToString().Contains(AmbiguityNote, StringComparison.Ordinal))
                 {
                     answer
@@ -386,19 +426,30 @@ public sealed class LivePathCallersTests
             }
             else
             {
-                Diff(differences, label, query.LiveQuery, "stderr", storeErr.ToString(), answer.Err);
+                Diff(
+                    differences,
+                    label,
+                    query.LiveQuery,
+                    "stderr",
+                    AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()),
+                    answer.Err
+                );
             }
             // …and the excluded line is the ONLY difference of its kind: both sides must have emitted one
             // (a dropped banner on one side only would otherwise hide inside the exclusion).
-            (storeOut.ToString().Contains(LoadBanner, StringComparison.Ordinal) == answer.Out.Contains(LoadBanner, StringComparison.Ordinal))
-                .ShouldBeTrue($"[{label}] '{query.LiveQuery}': one side emitted the '{LoadBanner}' banner and the other did not.");
+            (
+                storeOut.ToString().Contains(LoadBanner, StringComparison.Ordinal)
+                == answer.Out.Contains(LoadBanner, StringComparison.Ordinal)
+            ).ShouldBeTrue($"[{label}] '{query.LiveQuery}': one side emitted the '{LoadBanner}' banner and the other did not.");
 
             answer.Exit.ShouldBe(storeExit, $"[{label}] '{query.LiveQuery}': exit code differs (store={storeExit}, live={answer.Exit}).");
             if (requiredWhenExitZero is not null && storeExit == 0)
             {
                 answer
                     .Out.Contains(requiredWhenExitZero, StringComparison.Ordinal)
-                    .ShouldBeTrue($"[{label}] '{query.LiveQuery}': the live answer is missing '{requiredWhenExitZero}' — that feature is not being exercised.");
+                    .ShouldBeTrue(
+                        $"[{label}] '{query.LiveQuery}': the live answer is missing '{requiredWhenExitZero}' — that feature is not being exercised."
+                    );
             }
 
             compared++;
@@ -447,7 +498,10 @@ public sealed class LivePathCallersTests
             var l = i < liveLines.Length ? liveLines[i] : "<absent>";
             if (!string.Equals(s, l, StringComparison.Ordinal))
             {
-                into.Append(CultureInfo.InvariantCulture, $"{Environment.NewLine}  line {i + 1} STORE: {s}{Environment.NewLine}  line {i + 1} LIVE : {l}");
+                into.Append(
+                    CultureInfo.InvariantCulture,
+                    $"{Environment.NewLine}  line {i + 1} STORE: {s}{Environment.NewLine}  line {i + 1} LIVE : {l}"
+                );
             }
         }
     }

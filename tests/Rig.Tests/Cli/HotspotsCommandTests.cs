@@ -1,5 +1,5 @@
-using Rig.Cli.Commands;
 using Rig.Cli.Caching;
+using Rig.Cli.Commands;
 using Rig.Domain.Functions;
 using Shouldly;
 
@@ -69,7 +69,8 @@ public sealed class HotspotsCommandTests
     [Test]
     public void Cache_key_distinguishes_intrinsic_effect_scope()
     {
-        QueryCacheKeys.HotspotsCacheKey("store", "rules", intrinsic: false)
+        QueryCacheKeys
+            .HotspotsCacheKey("store", "rules", intrinsic: false)
             .ShouldNotBe(QueryCacheKeys.HotspotsCacheKey("store", "rules", intrinsic: true));
     }
 

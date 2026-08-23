@@ -193,6 +193,10 @@
       Link="Fixtures\FactProjection.cs"
     />
     <MsBuildIntegrationSupport
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Fixtures\AnswerStreamParity.cs"
+      Link="Fixtures\AnswerStreamParity.cs"
+    />
+    <MsBuildIntegrationSupport
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\LiveSnapshotScaleTrial.cs"
       Link="Analysis\LiveSnapshotScaleTrial.cs"
     />

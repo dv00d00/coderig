@@ -106,7 +106,9 @@ public sealed class DemandLivePathTests
         live.DeclineReason.ShouldBeNull();
         live.Exit.ShouldBe(storeExit);
         WithoutBanner(live.Out).ShouldBe(WithoutBanner(storeOut.ToString()));
-        live.Err.ShouldBe(storeErr.ToString());
+        // Store provenance is intentionally absent from a resident answer; every answer-local diagnostic
+        // must still match byte-for-byte.
+        live.Err.ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()));
         live.Err.ShouldNotContain("traversalGraph");
         live.Err.ShouldNotContain("eventSites");
         return live;

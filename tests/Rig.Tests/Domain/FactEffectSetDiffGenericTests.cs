@@ -18,10 +18,7 @@ public sealed class FactEffectSetDiffGenericTests
             [],
             new[] { a, b, open, mono }.Select(id => new MethodRef(id, id, null)).ToList()
         );
-        var effects = new[]
-        {
-            new DerivedEffect("db", "write", "N.WorkEntityCollection", open, "f.cs", 2),
-        };
+        var effects = new[] { new DerivedEffect("db", "write", "N.WorkEntityCollection", open, "f.cs", 2) };
 
         var findings = FactEffectSetDiffDeriver.Derive(
             graph,
@@ -51,10 +48,7 @@ public sealed class FactEffectSetDiffGenericTests
             [],
             new[] { a, b, open, intMono, textMono }.Select(id => new MethodRef(id, id, null)).ToList()
         );
-        var effects = new[]
-        {
-            new DerivedEffect("db", "write", "N.TextOnlyEntityCollection", textMono, "f.cs", 2),
-        };
+        var effects = new[] { new DerivedEffect("db", "write", "N.TextOnlyEntityCollection", textMono, "f.cs", 2) };
 
         var findings = FactEffectSetDiffDeriver.Derive(
             graph,

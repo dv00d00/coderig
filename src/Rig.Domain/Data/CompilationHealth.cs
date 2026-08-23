@@ -78,8 +78,7 @@ public sealed record CompilationHealth(
     // when the printed DETAIL is capped — a silent truncation reads as "that was all of them".
     public int TotalErrorCount => FileErrorCount + UnlocatedErrorCount;
 
-    public IEnumerable<ProjectCompileFailure> NoFactProjects =>
-        PartialProjects.Where(p => p.Reason == ProjectCompileFailure.NoCompilation);
+    public IEnumerable<ProjectCompileFailure> NoFactProjects => PartialProjects.Where(p => p.Reason == ProjectCompileFailure.NoCompilation);
 
     public IEnumerable<ProjectCompileFailure> GeneratorFailures =>
         PartialProjects.Where(p => p.Reason is ProjectCompileFailure.GeneratorEmit or ProjectCompileFailure.GeneratorRun);

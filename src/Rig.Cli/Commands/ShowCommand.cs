@@ -38,8 +38,7 @@ internal static class ShowCommand
         var limit = CommonOptions.Limit(DefaultLimit);
         var all = new Option<bool>("--all")
         {
-            Description =
-                "Render ambiguous matches (subject to --limit) instead of requiring an exact conceptual-symbol selection.",
+            Description = "Render ambiguous matches (subject to --limit) instead of requiring an exact conceptual-symbol selection.",
         };
         // No --rules here, deliberately: `show` renders stored locations and has no rule-driven behaviour,
         // so accepting the flag would be a no-op that silently implies it changed something.

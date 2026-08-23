@@ -256,7 +256,10 @@ public sealed class FactProjectionSharingTests(AnalyzedPlaygrounds playgrounds)
     // Every public property, sorted — neither loader promises an order (mirrors ReachInputProjectionTests).
     private static string[] Rendered<T>(IEnumerable<T> records)
     {
-        var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance).OrderBy(p => p.Name, StringComparer.Ordinal).ToArray();
+        var properties = typeof(T)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .OrderBy(p => p.Name, StringComparer.Ordinal)
+            .ToArray();
         properties.ShouldNotBeEmpty();
         return records
             .Select(record => string.Join('|', properties.Select(p => $"{p.Name}={p.GetValue(record) ?? "<null>"}")))

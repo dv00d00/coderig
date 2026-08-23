@@ -158,7 +158,13 @@ public sealed class LiveFactSourceParityTests(AnalyzedPlaygrounds playgrounds)
             var storeGraph = await Reads.LoadShapedGraphAsync(read, rules);
             var liveGraph = live.ShapedGraph;
             AssertSetEqual(label, "ShapedGraph.CallEdges", liveGraph.CallEdges, storeGraph.CallEdges);
-            AssertSetEqual(label, "ShapedGraph.ImplementsEdges", liveGraph.ImplementsEdges, storeGraph.ImplementsEdges, requireNonEmpty: false);
+            AssertSetEqual(
+                label,
+                "ShapedGraph.ImplementsEdges",
+                liveGraph.ImplementsEdges,
+                storeGraph.ImplementsEdges,
+                requireNonEmpty: false
+            );
             AssertSetEqual(label, "ShapedGraph.BaseEdges", liveGraph.BaseEdges ?? [], storeGraph.BaseEdges ?? [], requireNonEmpty: false);
             AssertSetEqual(label, "ShapedGraph.Methods", liveGraph.Methods, storeGraph.Methods);
             AssertSetEqual(
@@ -229,7 +235,13 @@ public sealed class LiveFactSourceParityTests(AnalyzedPlaygrounds playgrounds)
     // Asserts the live projection and the store projection are SET-EQUAL, reporting the actual differing
     // ELEMENTS (not just counts) on failure, and guarding against a vacuous pass over two empty collections.
     // Total counts are also compared, but strictly on top of set equality — never as a substitute for it.
-    private static void AssertSetEqual<T>(string label, string artifact, IEnumerable<T> liveItems, IEnumerable<T> storeItems, bool requireNonEmpty = true)
+    private static void AssertSetEqual<T>(
+        string label,
+        string artifact,
+        IEnumerable<T> liveItems,
+        IEnumerable<T> storeItems,
+        bool requireNonEmpty = true
+    )
     {
         var live = liveItems.ToList();
         var store = storeItems.ToList();
@@ -332,5 +344,4 @@ public sealed class LiveFactSourceParityTests(AnalyzedPlaygrounds playgrounds)
             }
         }
     }
-
 }

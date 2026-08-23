@@ -88,7 +88,9 @@ internal sealed class LiveQueryServer : IAsyncDisposable
             // and if their rule sets differ so will their answers. Say so rather than let it be a mystery.
             // (This probe consumes one pending accept from the OTHER host — see ServerExists — which is
             // harmless because that host re-arms, and it happens once at boot.)
-            log.WriteLine($"live: an endpoint for this directory already exists ({EndpointPath(name)}) — another `rig watch` may already be serving it.");
+            log.WriteLine(
+                $"live: an endpoint for this directory already exists ({EndpointPath(name)}) — another `rig watch` may already be serving it."
+            );
         }
 
         return new LiveQueryServer(name, workingDirectory, serve, log, CreateServerStream(name));
@@ -110,7 +112,8 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         {
             return Start(workingDirectory, serve, log, pipeName);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or PlatformNotSupportedException)
+        catch (Exception exception)
+            when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or PlatformNotSupportedException)
         {
             log.WriteLine(
                 $"live: could NOT publish a query endpoint for this directory ({exception.Message}) — one-shot `rig reaches/path/callers/tree` "
@@ -186,10 +189,14 @@ internal sealed class LiveQueryServer : IAsyncDisposable
     private static NamedPipeServerStream CreateWindowsServerStream(string pipeName)
     {
         using var identity = WindowsIdentity.GetCurrent();
-        var user = identity.User ?? throw new InvalidOperationException("The current Windows identity has no user SID; cannot secure the live query pipe.");
+        var user =
+            identity.User
+            ?? throw new InvalidOperationException("The current Windows identity has no user SID; cannot secure the live query pipe.");
         var security = new PipeSecurity();
         security.SetOwner(user);
-        security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance, AccessControlType.Allow));
+        security.AddAccessRule(
+            new PipeAccessRule(user, PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance, AccessControlType.Allow)
+        );
         return NamedPipeServerStreamAcl.Create(
             pipeName,
             PipeDirection.InOut,
@@ -330,9 +337,7 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         {
             await RespondAsync(
                 pipe,
-                LiveServeResult.Declined(
-                    $"this resident index is watching '{_workingDirectory}', not '{request.WorkingDirectory}'"
-                ),
+                LiveServeResult.Declined($"this resident index is watching '{_workingDirectory}', not '{request.WorkingDirectory}'"),
                 cancellationToken
             );
             return;

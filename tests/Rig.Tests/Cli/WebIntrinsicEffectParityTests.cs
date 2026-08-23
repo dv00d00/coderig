@@ -44,13 +44,7 @@ public sealed class WebIntrinsicEffectParityTests
     [Test]
     public void Shared_selection_scopes_before_counting_hidden_intrinsics()
     {
-        var selection = EffectDerivation.SelectEffectsForMethods(
-            Effects(),
-            new[] { "M:App.Entry" },
-            Empty,
-            Empty,
-            includeIntrinsic: false
-        );
+        var selection = EffectDerivation.SelectEffectsForMethods(Effects(), new[] { "M:App.Entry" }, Empty, Empty, includeIntrinsic: false);
 
         selection.Effects.Select(e => e.Provider).ShouldBe(["db"]);
         selection.HiddenIntrinsic.ShouldBe(1); // unrelated alloc + Work's throw are outside this answer
@@ -60,13 +54,7 @@ public sealed class WebIntrinsicEffectParityTests
     public void Explicit_intrinsic_only_filter_implies_intrinsic_view()
     {
         var only = new HashSet<string>(["alloc"], StringComparer.OrdinalIgnoreCase);
-        var selection = EffectDerivation.SelectEffectsForMethods(
-            Effects(),
-            new[] { "M:App.Entry" },
-            only,
-            Empty,
-            includeIntrinsic: false
-        );
+        var selection = EffectDerivation.SelectEffectsForMethods(Effects(), new[] { "M:App.Entry" }, only, Empty, includeIntrinsic: false);
 
         selection.Effects.Select(e => e.Provider).ShouldBe(["alloc"]);
         selection.HiddenIntrinsic.ShouldBe(0);

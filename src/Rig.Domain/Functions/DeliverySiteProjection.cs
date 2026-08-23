@@ -41,7 +41,13 @@ public static class DeliverySiteProjection
     // One projected CANDIDATE arg-rule invocation: an `invocation` ref with a captured first-argument name
     // whose target is a method DocID. That is the COARSE filter (such calls are few, so the unrefined set is
     // small); this projection refines it by the declaring-type+method gate.
-    public sealed record ArgInvocation(string? EnclosingSymbolId, string FilePath, int Line, string? FirstArgumentName, string TargetSymbolId);
+    public sealed record ArgInvocation(
+        string? EnclosingSymbolId,
+        string FilePath,
+        int Line,
+        string? FirstArgumentName,
+        string TargetSymbolId
+    );
 
     // The rules whose producer endpoint reads event symbols — non-empty means the caller must supply event
     // reads. Exposed so a store-backed caller can skip the event-read SQL scan entirely when it is empty.
@@ -53,9 +59,10 @@ public static class DeliverySiteProjection
     // Methods×DeclaringTypes map to Role=Registration; the Producer endpoint's to Role=Producer. A method
     // appearing under both (none today) resolves to whichever rule is listed last. Exposed so a store-backed
     // caller can skip the invocation-ref SQL scan entirely when it is empty.
-    public static Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve, string? HandlerDispatcher)> ArgMethods(
-        IReadOnlyList<DeliveryRule> deliveryRules
-    )
+    public static Dictionary<
+        (string Type, string Name),
+        (string Tag, DeliveryRole Role, string Resolve, string? HandlerDispatcher)
+    > ArgMethods(IReadOnlyList<DeliveryRule> deliveryRules)
     {
         var argMethods =
             new Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve, string? HandlerDispatcher)>();
