@@ -1323,17 +1323,27 @@ public static partial class FactPathFinder
         return exact.Count > 0 ? exact : substring;
     }
 
-    // A node matches a pattern EXACTLY when the pattern is its full DocID, or its param-free FQN (DocID with
-    // the leading two-char `X:` kind prefix and any `(…)` parameter list stripped, namespace + generic arity
-    // kept). Case-insensitive, to match Contains. ParamFreeFqn mirrors SymbolNameFormatter.FqnFromDocId; it is
-    // re-derived here because FactPathFinder (Domain) cannot reference the Cli renderer.
-    private static bool IsExactNodeMatch(string node, string pattern) =>
-        string.Equals(node, pattern, StringComparison.OrdinalIgnoreCase)
-        || string.Equals(ParamFreeFqn(node), pattern, StringComparison.OrdinalIgnoreCase);
+    // A node matches a pattern EXACTLY when the pattern is its concrete graph id, its canonical source-member
+    // DocID, or that canonical member's param-free FQN. Static monomorphization redirects concrete generic calls
+    // to `{baseId}~mono<binding>` nodes while retaining the open base body as a sound fallback. A user naming the
+    // open member therefore names BOTH representations: return the actual graph ids so traversal keeps each
+    // concrete binding, but compare through BaseOf so exact-match-wins does not discard every `~mono` execution
+    // into its substring bucket. Direct synthetic-id matching remains exact to one instantiation.
+    private static bool IsExactNodeMatch(string node, string pattern)
+    {
+        var canonical = MonomorphizedNodeId.BaseOf(node);
+        return string.Equals(node, pattern, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(canonical, pattern, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ParamFreeFqn(canonical), pattern, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string ParamFreeFqn(string node)
     {
-        var body = node.Length >= 2 && node[1] == ':' ? node[2..] : node;
+        // Ambiguity disclosure is about source members, not query-local monomorphized executions. Canonicalize
+        // before stripping parameters so a parameterless `M:Repo.Save``1~mono<...>` does not appear as a second
+        // conceptual target and a signature-bearing id cannot depend accidentally on `(` preceding `~mono`.
+        var canonical = MonomorphizedNodeId.BaseOf(node);
+        var body = canonical.Length >= 2 && canonical[1] == ':' ? canonical[2..] : canonical;
         var paren = body.IndexOf('(', StringComparison.Ordinal);
         return paren >= 0 ? body[..paren] : body;
     }
