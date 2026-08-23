@@ -1,12 +1,13 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–7B1 completed locally 2026-08-23: deterministic scale/trial baselines,
+**Status:** PROGRESS — Slices 0–7B2 completed locally 2026-08-23: deterministic scale/trial baselines,
 emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
 watcher batches, the v7 surface-fact substrate, per-origin lazy surface refinement, and independent cascade
 verification with coarse fallback, plus an emitter-aware immutable graph-fact substrate and canonical keyed
 symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggered exact forward refinement for
-`path`/`reaches`/`tree`. Next: give reverse `callers` its own demand shape; delivery-aware forward projection
-then removes the temporary store fallback for `--async`/`--include-delivery`.
+`path`/`reaches`/`tree`, plus keyed reverse topology and query-triggered exact refinement for synchronous
+`callers`. Next: delivery-aware projection removes the temporary store fallback for
+`--async`/`--include-delivery`.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -126,6 +127,18 @@ then removes the temporary store fallback for `--async`/`--include-delivery`.
   exemption. Eleven planner/request tests plus a real watcher edit that adds a new depth-boundary edge, compares
   the refined answer with a freshly indexed store, and repeats against the new generation's cache bring exact
   discovery to **1,172 tests**.
+- **Slice 7B2:** live `callers` now builds a keyed reverse fixed point from normalized incoming-reference
+  partitions, one-hop dispatch predecessors, type relations, redirects/factories, and caller-local forward
+  confirmation without flattening the resident snapshot. Ownership hints widen exact debt through structural
+  emitters and reverse project dependents; missing targets, generator-capable unknown projects, caps, and
+  ambiguous ownership fail closed. Human sync `--entrypoints` discovers the async superset needed for its hint
+  while executing the sync lens; entrypoint and deployment-backed answers pay whole-resident debt. Text and
+  transport preparation share validation, null/malformed requests do no refinement, and async/delivery modes
+  deliberately decline to the store until delivery-site synthesis exists. The WatchHost dispatches forward and
+  reverse exact demands through the same fixed-point/single-final-CAS publication transaction. Thirty-five
+  ordinary tests cover the reverse index, loader, closure, planner, transaction, and request shaping; one new
+  serialized DeepChain gate proves pre/post-edit store parity, exact debt repayment, repeat-query reuse, and no
+  `traversalGraph`/`eventSites` materialization.
 - **macOS suite gate:** canonical temp roots prevent NuGet from seeing `/var` and `/private/var` as two copies of
   one referenced project, and the resident equivalence fixture uses deterministic one-at-a-time project loading.
   All tests that launch `dotnet`, load/retain solutions, drive CLI indexing/watch hosts, or consume the shared
@@ -137,8 +150,8 @@ then removes the temporary store fallback for `--async`/`--include-delivery`.
   passes **200 + one intentional skip in 4m50s**. Exact discovery is **1,172**, with zero failures. The process
   boundary removes nested workspace/MSBuild fan-out risk without throttling unrelated tests and turns the slow
   lane into a deterministic release gate rather than a 17-minute main-suite outlier.
-- **Next:** Slice 7B2, true reverse demand plus forward confirmation for live `callers`; then delivery-aware
-  demand projection for async forward queries. Do not substitute a project-reference cone for either shape.
+- **Next:** delivery-aware demand projection for async live queries. Do not substitute a project-reference cone
+  for the demand graph.
 
 ## Why — the workflow that makes this the target
 
