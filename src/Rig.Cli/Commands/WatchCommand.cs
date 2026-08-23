@@ -308,6 +308,11 @@ internal sealed class WatchHost : IAsyncDisposable
     private readonly bool _verifyCascadeGate;
     private readonly Channel<string> _changes = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    // Serializes every edit publication with foreground exact refinement. Both paths take this BEFORE
+    // _gate, so a query cannot win ResidentIndex's CAS after an edit captured its basis and kill the
+    // single watcher worker. FileSystemWatcher callbacks remain lock-free and keep filling _changes.
+    private readonly SemaphoreSlim _publicationGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly FileSystemWatcher? _watcher;
     private readonly Task _loop;
@@ -320,6 +325,7 @@ internal sealed class WatchHost : IAsyncDisposable
     // knows are dirty. Only a cold boot re-reads everything. So this is a permanent "some edits may be
     // missing" caveat on every subsequent answer, not a transient condition.
     private int _watcherOverflowed;
+    private int _topologyChanged;
     private double _lastEditSeconds = -1;
 
     // The query-ready derived layer for the CURRENT immutable snapshot, built on first query and thrown away
@@ -373,7 +379,12 @@ internal sealed class WatchHost : IAsyncDisposable
         };
         _watcher.Changed += (_, e) => Enqueue(e.FullPath);
         _watcher.Created += (_, e) => Enqueue(e.FullPath);
-        _watcher.Renamed += (_, e) => Enqueue(e.FullPath);
+        _watcher.Deleted += (_, e) => Enqueue(e.FullPath);
+        _watcher.Renamed += (_, e) =>
+        {
+            Enqueue(e.OldFullPath);
+            Enqueue(e.FullPath);
+        };
         // Overflow is a staleness hazard, not a crash: disclose it — rig's contract is never to serve
         // silently-stale facts as current.
         _watcher.Error += (_, e) =>
@@ -510,30 +521,28 @@ internal sealed class WatchHost : IAsyncDisposable
     // block the worker's next apply behind it, which is the one thing the resident loop must never do.
     public async Task<string> AnswerQueryAsync(string query, CancellationToken cancellationToken = default)
     {
-        LiveFactSource facts;
-        string disclosure;
-        await _gate.WaitAsync(cancellationToken);
-        try
+        // Parse/validate before capturing or refining. A malformed/unsupported query follows the normal
+        // rejection path and pays zero resident work.
+        var demand = LiveQueryRunner.PrepareTextPathDemand(query, _rules);
+        var capture = await CaptureForQueryAsync(demand, sourceDisclosure: false, cancellationToken);
+        foreach (var line in capture.Health)
         {
-            var snapshot = _index.CaptureSnapshot();
-            facts = CurrentLiveFacts(snapshot);
-            disclosure = ComposeStatus(snapshot);
-            // The footer rides with the answer, not only with the boot log. Stderr, so the answer on
-            // stdout stays parseable.
-            WriteCompilationHealthNote(snapshot);
+            _error.WriteLine(line);
         }
-        finally
+        if (capture.UnavailableReason is not null)
         {
-            _gate.Release();
+            var refused = LiveQueryRunner.ExactUnavailable(capture.Snapshot.Revision.Value, capture.UnavailableReason);
+            return $"{capture.Disclosure}{Environment.NewLine}{refused.Text.TrimEnd('\r', '\n')}";
         }
 
+        var facts = capture.Facts!;
         var built = facts.BuildTimes.Count; // artifacts already memoized before this query
         var answer = await LiveQueryRunner.AnswerAsync(query, facts, _workingDirectory);
         var costLine =
             facts.BuildTimes.Count == built
                 ? ""
                 : $"{Environment.NewLine}live: derived layer built this generation: {facts.BuildTimeLine()}";
-        return $"{disclosure}{Environment.NewLine}{answer.Text.TrimEnd('\r', '\n')}{costLine}";
+        return $"{capture.Disclosure}{Environment.NewLine}{answer.Text.TrimEnd('\r', '\n')}{costLine}";
     }
 
     // Answer one TRANSPORT request — a one-shot `rig reaches/path/callers/tree` in this working directory,
@@ -547,24 +556,20 @@ internal sealed class WatchHost : IAsyncDisposable
     // rig already puts every disclosure precisely so stdout stays parseable.
     public async Task<LiveServeResult> ServeAsync(LiveQueryRequest request, CancellationToken cancellationToken = default)
     {
-        LiveFactSource facts;
-        string disclosure;
-        IReadOnlyList<string> health;
-        await _gate.WaitAsync(cancellationToken);
-        try
+        var demand = LiveQueryRunner.PrepareTransportPathDemand(request, _rules);
+        var capture = await CaptureForQueryAsync(demand, sourceDisclosure: true, cancellationToken);
+        if (capture.UnavailableReason is not null)
         {
-            var snapshot = _index.CaptureSnapshot();
-            facts = CurrentLiveFacts(snapshot);
-            disclosure = ComposeSourceDisclosure(snapshot);
-            // Captured, NOT written to the host's own stderr: this note belongs to the answer being sent
-            // back, and writing it locally as well would leave the note in the wrong terminal.
-            health = ComposeCompilationHealthNote(snapshot);
-        }
-        finally
-        {
-            _gate.Release();
+            var refused = LiveQueryRunner.ExactUnavailable(capture.Snapshot.Revision.Value, capture.UnavailableReason);
+            return LiveServeResult.Answered(
+                refused.Exit,
+                refused.Out,
+                string.Concat(capture.Health.Select(line => line + Environment.NewLine)) + refused.Err,
+                capture.Disclosure
+            );
         }
 
+        var facts = capture.Facts!;
         var built = facts.BuildTimes.Count; // artifacts already memoized before this query
         var result = await LiveQueryRunner.RunRequestAsync(request, facts, _workingDirectory);
         if (result.DeclineReason is not null)
@@ -574,7 +579,7 @@ internal sealed class WatchHost : IAsyncDisposable
 
         var answer = result.Answer!;
         var notes = new StringBuilder();
-        foreach (var line in health)
+        foreach (var line in capture.Health)
         {
             notes.AppendLine(line);
         }
@@ -597,9 +602,150 @@ internal sealed class WatchHost : IAsyncDisposable
             exit: answer.Exit,
             standardOut: answer.Out,
             standardError: notes.ToString(),
-            disclosure: disclosure
+            disclosure: capture.Disclosure
         );
     }
+
+    // Path is the only command with a keyed demand topology. Capture its planning basis briefly under the
+    // host gate, do all Roslyn work outside that gate, then accept only the exact snapshot reference returned
+    // by ResidentIndex. The publication mutex prevents duplicate refinements and edit-CAS races without
+    // blocking lock-free watcher event capture.
+    private async Task<QueryCapture> CaptureForQueryAsync(
+        ExactPathDemand? demand,
+        bool sourceDisclosure,
+        CancellationToken cancellationToken
+    )
+    {
+        if (demand is null)
+        {
+            return await CaptureCurrentAsync(sourceDisclosure, cancellationToken);
+        }
+
+        await _publicationGate.WaitAsync(cancellationToken);
+        try
+        {
+            const int MaxCaptureAttempts = 4;
+            for (var attempt = 0; attempt < MaxCaptureAttempts; attempt++)
+            {
+                FactSnapshot basis;
+                await _gate.WaitAsync(cancellationToken);
+                try
+                {
+                    basis = _index.CaptureSnapshot();
+                }
+                finally
+                {
+                    _gate.Release();
+                }
+
+                ExactPathRefinementOutcome outcome;
+                if (Volatile.Read(ref _topologyChanged) != 0)
+                {
+                    outcome = ExactPathRefinementOutcome.Unavailable(basis, TopologyStatusSegment);
+                }
+                else if (Volatile.Read(ref _watcherOverflowed) != 0)
+                {
+                    outcome = ExactPathRefinementOutcome.Unavailable(
+                        basis,
+                        "file-watcher overflowed — exactness cannot be established; restart required"
+                    );
+                }
+                else
+                {
+                    outcome = await _index.EnsureExactPathAsync(basis, demand, cancellationToken);
+                }
+
+                await _gate.WaitAsync(cancellationToken);
+                try
+                {
+                    var current = _index.CaptureSnapshot();
+                    // Watcher callbacks are lock-free and can turn either sticky flag on WHILE Roslyn work
+                    // is in flight. Recheck under final capture; snapshot identity alone cannot prove the
+                    // retained workspace still covers the filesystem topology.
+                    if (Volatile.Read(ref _topologyChanged) != 0)
+                    {
+                        return CaptureSnapshot(current, sourceDisclosure, TopologyStatusSegment);
+                    }
+                    if (Volatile.Read(ref _watcherOverflowed) != 0)
+                    {
+                        return CaptureSnapshot(
+                            current,
+                            sourceDisclosure,
+                            "file-watcher overflowed — exactness cannot be established; restart required"
+                        );
+                    }
+                    if (outcome.Kind == ExactPathRefinementKind.Superseded || !ReferenceEquals(current, outcome.Snapshot))
+                    {
+                        continue;
+                    }
+
+                    if (outcome.Kind == ExactPathRefinementKind.ExactPublished)
+                    {
+                        ReleasePublishedSnapshotCaches();
+                    }
+
+                    return CaptureSnapshot(
+                        current,
+                        sourceDisclosure,
+                        outcome.Kind == ExactPathRefinementKind.ExactUnavailable ? outcome.Reason : null
+                    );
+                }
+                finally
+                {
+                    _gate.Release();
+                }
+            }
+
+            await _gate.WaitAsync(cancellationToken);
+            try
+            {
+                return CaptureSnapshot(
+                    _index.CaptureSnapshot(),
+                    sourceDisclosure,
+                    "resident snapshot changed repeatedly while exact path refinement was running"
+                );
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+        finally
+        {
+            _publicationGate.Release();
+        }
+    }
+
+    private async Task<QueryCapture> CaptureCurrentAsync(bool sourceDisclosure, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return CaptureSnapshot(_index.CaptureSnapshot(), sourceDisclosure, unavailableReason: null);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    // Caller holds _gate. Every field derives from the same immutable reference.
+    private QueryCapture CaptureSnapshot(FactSnapshot snapshot, bool sourceDisclosure, string? unavailableReason) =>
+        new(
+            snapshot,
+            unavailableReason is null ? CurrentLiveFacts(snapshot) : null,
+            sourceDisclosure ? ComposeSourceDisclosure(snapshot) : ComposeStatus(snapshot),
+            ComposeCompilationHealthNote(snapshot),
+            unavailableReason
+        );
+
+    private sealed record QueryCapture(
+        FactSnapshot Snapshot,
+        LiveFactSource? Facts,
+        string Disclosure,
+        IReadOnlyList<string> Health,
+        string? UnavailableReason
+    );
 
     // Explicit compatibility/oracle boundary for tests and callers that still require AnalysisResult.
     // The resident query/status path captures and consumes FactSnapshot directly.
@@ -633,6 +779,7 @@ internal sealed class WatchHost : IAsyncDisposable
         catch (OperationCanceledException) { }
 
         _shutdown.Dispose();
+        _publicationGate.Dispose();
         _gate.Dispose();
         _index.Dispose();
     }
@@ -645,6 +792,17 @@ internal sealed class WatchHost : IAsyncDisposable
         }
 
         _changes.Writer.TryWrite(fullPath);
+    }
+
+    private void RecordTopologyChange(string fullPath, string change)
+    {
+        if (!fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || IsBuildArtifactPath(fullPath))
+        {
+            return;
+        }
+
+        Interlocked.Exchange(ref _topologyChanged, 1);
+        _output.WriteLine($"live: source file {change}: {fullPath} — retained solution topology is stale; restart required");
     }
 
     private static bool IsBuildArtifactPath(string fullPath)
@@ -733,15 +891,24 @@ internal sealed class WatchHost : IAsyncDisposable
             var fullPath = Path.GetFullPath(path);
             if (solution.GetDocumentIdsWithFilePath(fullPath).IsEmpty)
             {
-                // A brand-new file is not in the retained workspace; ResidentIndex has no add-file
-                // path yet. Disclose rather than silently skip.
-                _output.WriteLine($"live: {fullPath} is not a workspace document (new file?) — not indexed until the next cold boot");
+                // Classify topology from the FINAL state after the whole watcher burst, not from event order.
+                // A temporary *.cs created during atomic save has disappeared by now and is harmless; a
+                // persistent unretained source really is a new document the retained Solution cannot index.
+                if (File.Exists(fullPath))
+                {
+                    RecordTopologyChange(fullPath, "created");
+                }
                 continue;
             }
 
             var text = await ReadAllTextWithRetryAsync(fullPath, cancellationToken);
             if (text is null)
             {
+                if (!File.Exists(fullPath))
+                {
+                    RecordTopologyChange(fullPath, "deleted");
+                    continue;
+                }
                 _output.WriteLine($"live: FAILED to apply {batch.Count}-file batch: {fullPath} could not be read; no edits published");
                 return 0;
             }
@@ -754,43 +921,51 @@ internal sealed class WatchHost : IAsyncDisposable
             return 0;
         }
 
-        await _gate.WaitAsync(cancellationToken);
+        await _publicationGate.WaitAsync(cancellationToken);
         try
         {
+            await _gate.WaitAsync(cancellationToken);
             try
-            {
-                await _index.ApplyEditsAsync(edits, cancellationToken);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                _output.WriteLine($"live: FAILED to apply {edits.Count}-file batch: {exception.Message}");
-                return 0;
-            }
-
-            if (_verifyCascadeGate)
             {
                 try
                 {
-                    await _index.ReconcileAsync(cancellationToken);
+                    await _index.ApplyEditsAsync(edits, cancellationToken);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
-                    // ApplyEdits already published a sound eager generation with explicit debt. A
-                    // verifier failure must not rewrite that as "no edit" or suppress its status;
-                    // retain the outstanding debt and disclose the failed optional oracle.
-                    _output.WriteLine(
-                        $"live: cascade verification FAILED after applying {edits.Count}-file batch: {exception.Message} — eager facts published; debt retained"
-                    );
+                    _output.WriteLine($"live: FAILED to apply {edits.Count}-file batch: {exception.Message}");
+                    return 0;
                 }
-            }
-            ReleasePublishedSnapshotCaches();
 
-            Interlocked.Add(ref _appliedFiles, edits.Count);
-            _lastEditSeconds = watch.Elapsed.TotalSeconds;
+                if (_verifyCascadeGate)
+                {
+                    try
+                    {
+                        await _index.ReconcileAsync(cancellationToken);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        // ApplyEdits already published a sound eager generation with explicit debt. A
+                        // verifier failure must not rewrite that as "no edit" or suppress its status;
+                        // retain the outstanding debt and disclose the failed optional oracle.
+                        _output.WriteLine(
+                            $"live: cascade verification FAILED after applying {edits.Count}-file batch: {exception.Message} — eager facts published; debt retained"
+                        );
+                    }
+                }
+                ReleasePublishedSnapshotCaches();
+
+                Interlocked.Add(ref _appliedFiles, edits.Count);
+                _lastEditSeconds = watch.Elapsed.TotalSeconds;
+            }
+            finally
+            {
+                _gate.Release();
+            }
         }
         finally
         {
-            _gate.Release();
+            _publicationGate.Release();
         }
 
         return edits.Count;
@@ -880,6 +1055,10 @@ internal sealed class WatchHost : IAsyncDisposable
             // shape of the broken-compilation defect this host already discloses.
             segments.Add("file-watcher overflowed — some edits may be MISSING; restart to be certain");
         }
+        if (Volatile.Read(ref _topologyChanged) != 0)
+        {
+            segments.Add(TopologyStatusSegment);
+        }
 
         if (segments.Count == 0)
         {
@@ -894,6 +1073,8 @@ internal sealed class WatchHost : IAsyncDisposable
         snapshot.Surfaces.GateDisabledCount == 0
             ? null
             : $"cascade gate disabled for {snapshot.Surfaces.GateDisabledCount} project(s) after verification mismatch — coarse fallback active";
+
+    internal const string TopologyStatusSegment = "source topology changed (create/delete/rename) — facts may be MISSING; restart required";
 
     // The population the file count is quoted against: the distinct paths this analysis actually
     // indexed. Memoized per immutable snapshot, because it is rebuilt on every status line and answer and MedDBase has ~10.5k

@@ -269,18 +269,29 @@ internal sealed class ResidentIndex : IDisposable
     )
     {
         var basis = CaptureSnapshot();
+        var built = await BuildSurfaceRefinementCandidateAsync(basis, projects, cancellationToken);
+        if (ReferenceEquals(built.Snapshot, basis))
+        {
+            return false;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, built.Snapshot, basis), basis);
+    }
+
+    private async Task<SurfaceCandidateBuild> BuildSurfaceRefinementCandidateAsync(
+        FactSnapshot basis,
+        IReadOnlySet<ProjectId>? projects,
+        CancellationToken cancellationToken
+    )
+    {
         var requested = basis
-            .Delta.SurfaceStates.Where(pair =>
-                pair.Value == SurfaceState.Unknown
-                && basis.Surfaces.Projects.TryGetValue(pair.Key, out var partition)
-                && partition.IsClassifiable
-                && (projects is null || projects.Contains(pair.Key))
-            )
+            .Delta.SurfaceStates.Where(pair => pair.Value == SurfaceState.Unknown && (projects is null || projects.Contains(pair.Key)))
             .Select(pair => pair.Key)
             .ToArray();
         if (requested.Length == 0)
         {
-            return false;
+            return SurfaceCandidateBuild.Unchanged(basis);
         }
 
         var catalog = basis.Surfaces;
@@ -289,14 +300,22 @@ internal sealed class ResidentIndex : IDisposable
         var states = basis.Delta.SurfaceStates.ToBuilder();
         var debt = basis.Dirty.PendingByOrigin.ToBuilder();
         var wouldBeBodyOnly = new List<ProjectId>();
+        var failed = ImmutableHashSet.CreateBuilder<ProjectId>();
         var classified = false;
         foreach (var projectId in requested)
         {
+            if (!catalog.Projects.TryGetValue(projectId, out var partition) || !partition.IsClassifiable)
+            {
+                failed.Add(projectId);
+                continue;
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             var refresh = await _refreshSurface(basis.Solution, projectId, _rules, cancellationToken, _interner);
             cancellationToken.ThrowIfCancellationRequested();
             if (!catalog.TryApplyRefresh(projectId, refresh, out var refreshedCatalog, out var state))
             {
+                failed.Add(projectId);
                 continue;
             }
 
@@ -320,14 +339,10 @@ internal sealed class ResidentIndex : IDisposable
             states[projectId] = state;
             if (state == SurfaceState.Changed && !debt.ContainsKey(projectId))
             {
-                // The eager edit already covered the entire affected closure, so there is no coarse
-                // work to keep sticky even though the accepted surface fingerprint moved.
                 catalog = catalog.MarkReconciled([projectId]);
             }
             if (state == SurfaceState.BodyOnly && !debt.ContainsKey(projectId))
             {
-                // A later eager batch can pay every document owed by an earlier Changed surface.
-                // Once no contribution remains, the sticky coarse requirement is satisfied too.
                 catalog = catalog.MarkReconciled([projectId]);
             }
             if (
@@ -348,7 +363,7 @@ internal sealed class ResidentIndex : IDisposable
 
         if (!classified)
         {
-            return false;
+            return new SurfaceCandidateBuild(basis, failed.ToImmutable());
         }
 
         if (wouldBeBodyOnly.Count > 0)
@@ -384,9 +399,6 @@ internal sealed class ResidentIndex : IDisposable
 
             if (mismatches.Count > 0)
             {
-                // The extraction was one batch over all would-be skipped debt. Installing all of its
-                // path slices is safe; ownership remains per-origin, so unrelated Unknown/Changed debt
-                // is retained even when it overlaps a freshly paid path.
                 overlay = overlay.SetItems(verifierSlices);
                 graphOverlay = graphOverlay.Replace(verifierSlices);
                 catalog = catalog
@@ -407,40 +419,51 @@ internal sealed class ResidentIndex : IDisposable
             }
         }
 
-        var candidate = new FactSnapshot(
-            basis.Revision.Next(),
-            basis.Solution,
-            _baseResult,
-            overlay,
-            DirtySet.FromContributions(basis.Solution, debt.ToImmutable()),
-            basis.Delta with
-            {
-                SurfaceStates = states.ToImmutable(),
-            },
-            catalog,
-            _graphBase,
-            graphOverlay
+        return new SurfaceCandidateBuild(
+            new FactSnapshot(
+                basis.Revision.Next(),
+                basis.Solution,
+                _baseResult,
+                overlay,
+                DirtySet.FromContributions(basis.Solution, debt.ToImmutable()),
+                basis.Delta with
+                {
+                    SurfaceStates = states.ToImmutable(),
+                },
+                catalog,
+                _graphBase,
+                graphOverlay
+            ),
+            failed.ToImmutable()
         );
-        cancellationToken.ThrowIfCancellationRequested();
-        return ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, candidate, basis), basis);
     }
 
     // Re-extract classified outstanding cascades. Unknown origins remain disclosed: their source-generator
     // facts may be stale, so a source-document-only coarse pass is not allowed to clear their debt.
-    // Returns true only when this exact basis reference was published; false means no payable work or a
-    // newer snapshot superseded the candidate.
     public async Task<bool> ReconcileAsync(CancellationToken cancellationToken = default)
     {
         var refined = await RefineUnknownSurfacesAsync(projects: null, cancellationToken);
         var basis = CaptureSnapshot();
-        if (basis.Dirty.PendingDocuments.Count == 0)
+        var candidate = await BuildReconciliationCandidateAsync(basis, origins: null, cancellationToken);
+        if (ReferenceEquals(candidate, basis))
         {
             return refined;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        return ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, candidate, basis), basis);
+    }
+
+    private async Task<FactSnapshot> BuildReconciliationCandidateAsync(
+        FactSnapshot basis,
+        IReadOnlySet<ProjectId>? origins,
+        CancellationToken cancellationToken
+    )
+    {
         var payableOrigins = basis
             .Dirty.PendingByOrigin.Keys.Where(projectId =>
-                basis.Delta.SurfaceStates.GetValueOrDefault(projectId) != SurfaceState.Unknown
+                (origins is null || origins.Contains(projectId))
+                && basis.Delta.SurfaceStates.GetValueOrDefault(projectId) != SurfaceState.Unknown
                 && basis.Surfaces.Projects.TryGetValue(projectId, out var partition)
                 && partition.IsClassifiable
                 && partition.RequiresCoarseReconciliation
@@ -448,9 +471,11 @@ internal sealed class ResidentIndex : IDisposable
             .ToImmutableHashSet();
         if (payableOrigins.Count == 0)
         {
-            return refined;
+            return basis;
         }
 
+        // Selected Changed origins pay the union of their whole cascade contributions in one extraction.
+        // Overlap is deduplicated, while debt owned by unselected origins remains conservative.
         var pending = payableOrigins.SelectMany(projectId => basis.Dirty.PendingByOrigin[projectId]).ToImmutableHashSet();
         var slices = await ExtractAsync(basis.Solution, pending, cancellationToken);
         var graphOverlay = basis.GraphOverlay.Replace(slices);
@@ -459,7 +484,7 @@ internal sealed class ResidentIndex : IDisposable
             .MarkReconciled(payableOrigins);
         var remainingDebt = basis.Dirty.PendingByOrigin.RemoveRange(payableOrigins);
         var remainingStates = basis.Delta.SurfaceStates.RemoveRange(payableOrigins);
-        var candidate = new FactSnapshot(
+        return new FactSnapshot(
             basis.Revision.Next(),
             basis.Solution,
             _baseResult,
@@ -475,9 +500,116 @@ internal sealed class ResidentIndex : IDisposable
             _graphBase,
             graphOverlay
         );
+    }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        return ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, candidate, basis), basis);
+    // Demand-driven exactness for live path only. Every refresh/extraction below builds private immutable
+    // candidates. One final expected-reference CAS publishes the fixed point; cancellation or a concurrent
+    // edit leaves the original generation untouched.
+    internal async Task<ExactPathRefinementOutcome> EnsureExactPathAsync(
+        FactSnapshot basis,
+        ExactPathDemand demand,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (!ReferenceEquals(CaptureSnapshot(), basis))
+        {
+            return ExactPathRefinementOutcome.Superseded(CaptureSnapshot());
+        }
+
+        var candidate = basis;
+        const int MaxIterations = 12;
+        for (var iteration = 0; iteration < MaxIterations; iteration++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var plan = ExactPathRefinement.Plan(candidate, demand);
+            if (plan.UnavailableReason is not null)
+            {
+                return ExactPathRefinementOutcome.Unavailable(basis, plan.UnavailableReason);
+            }
+
+            if (plan.SelectedOrigins.Count == 0)
+            {
+                if (ReferenceEquals(candidate, basis))
+                {
+                    return ExactPathRefinementOutcome.Unchanged(basis);
+                }
+
+                var final = WithRevision(candidate, basis.Revision.Next());
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, final, basis), basis))
+                {
+                    return ExactPathRefinementOutcome.Superseded(CaptureSnapshot());
+                }
+                return ExactPathRefinementOutcome.Published(final);
+            }
+
+            var before = candidate;
+            if (plan.UnknownOrigins.Count > 0)
+            {
+                SurfaceCandidateBuild refined;
+                try
+                {
+                    refined = await BuildSurfaceRefinementCandidateAsync(candidate, plan.UnknownOrigins, cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    return ExactPathRefinementOutcome.Unavailable(basis, $"surface refresh failed: {exception.Message}");
+                }
+
+                if (refined.FailedOrigins.Overlaps(plan.UnknownOrigins))
+                {
+                    return ExactPathRefinementOutcome.Unavailable(
+                        basis,
+                        "generated/project surface ownership could not be classified exactly"
+                    );
+                }
+
+                candidate = refined.Snapshot;
+                // Replan immediately: generated declarations and dispatch edges may have appeared/retired.
+                if (!ReferenceEquals(candidate, before))
+                {
+                    continue;
+                }
+            }
+
+            try
+            {
+                candidate = await BuildReconciliationCandidateAsync(candidate, plan.SelectedOrigins, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return ExactPathRefinementOutcome.Unavailable(basis, $"coarse reconciliation failed: {exception.Message}");
+            }
+
+            if (ReferenceEquals(candidate, before))
+            {
+                return ExactPathRefinementOutcome.Unavailable(
+                    basis,
+                    "intersecting dirty origin is not exactly payable from the retained project surface"
+                );
+            }
+            // Replan after coarse replacement: rebinding may expand the demand closure.
+        }
+
+        return ExactPathRefinementOutcome.Unavailable(basis, "exact path refinement did not converge");
+    }
+
+    private FactSnapshot WithRevision(FactSnapshot snapshot, FactRevision revision) =>
+        new(
+            revision,
+            snapshot.Solution,
+            _baseResult,
+            snapshot.Overlay,
+            snapshot.Dirty,
+            snapshot.Delta,
+            snapshot.Surfaces,
+            _graphBase,
+            snapshot.GraphOverlay
+        );
+
+    private sealed record SurfaceCandidateBuild(FactSnapshot Snapshot, ImmutableHashSet<ProjectId> FailedOrigins)
+    {
+        internal static SurfaceCandidateBuild Unchanged(FactSnapshot snapshot) => new(snapshot, ImmutableHashSet<ProjectId>.Empty);
     }
 
     public void Dispose() => _workspace.Dispose();

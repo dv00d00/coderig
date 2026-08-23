@@ -1,11 +1,11 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–6B2 completed locally 2026-08-22: deterministic scale/trial baselines,
+**Status:** PROGRESS — Slices 0–7A completed locally 2026-08-23: deterministic scale/trial baselines,
 emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
 watcher batches, the v7 surface-fact substrate, per-origin lazy surface refinement, and independent cascade
 verification with coarse fallback, plus an emitter-aware immutable graph-fact substrate and canonical keyed
-symbol catalog and demand-shaped generic adjacency. Next: wire live `path` over the demand source, then add
-demand-driven refinement.
+symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggered exact refinement for that
+path boundary. Next: give `reaches`/`tree`/`callers` their own demand shapes before widening exact refinement.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -100,17 +100,32 @@ demand-driven refinement.
   delegate-field joins, factory bridges, monomorphized callers, cut/context rules, and max depth are parity-gated.
   Production WatchHost tests prove `path` builds neither `traversalGraph` nor `eventSites` and loads a strict
   partial graph. Eleven tests bring exact discovery to **1,145 tests**.
+- **Slice 7A:** a valid live `path` request now plans against that same keyed forward graph, maps every visited
+  emitter to its exact owning project(s), intersects dirty contributions with forward FROM dependencies,
+  reverse TO dependents, dispatch/factory/handoff boundaries, and generator-capable unknown origins, then pays
+  only the selected debt. Surface refinement plus any coarse cascade form one private fixed point and publish
+  through one final expected-reference CAS; cancellation publishes nothing. Missing/colliding generated
+  ownership, source-topology changes, watcher overflow, and repeatedly superseded snapshots fail closed as an
+  explicit exit-2 answer rather than an authoritative no-path or a silent store fallback. Refinement runs outside
+  the watcher gate but shares a publication mutex with edit batches, then rechecks snapshot identity plus sticky
+  topology/overflow under the final capture gate. Source create/delete/rename is classified from the debounced
+  final filesystem state, so both common atomic-save event orders remain ordinary edits. Text and transport
+  requests share endpoint/rules validation. Other live verbs remain honestly stale-disclosed until they have
+  command-specific demand shapes. Sixteen planner, transaction, and request-shaping tests plus the expanded real
+  watcher gate bring exact discovery to **1,161 tests**.
 - **macOS suite gate:** canonical temp roots prevent NuGet from seeing `/var` and `/private/var` as two copies of
   one referenced project, and the resident equivalence fixture uses deterministic one-at-a-time project loading.
   All tests that launch `dotnet`, load/retain solutions, drive CLI indexing/watch hosts, or consume the shared
   analyzed-playground session now live in a separate `Rig.IntegrationTests` executable. `mini-ci.ps1` runs the
   ordinary suite at normal parallelism, then runs the integration process with one outer worker on every OS.
-  SolutionAnalyzer is also pinned to one project worker for that isolated process. A single source manifest owns
-  the classification. On macOS the ordinary lane passes **944/944 in 15s**; the serialized integration lane
-  passes **200 + one intentional skip in 13m37s**. Exact discovery is **1,145**, with zero failures. The process
+  SolutionAnalyzer is also pinned to one project worker for that isolated process, and MSBuild node reuse is
+  disabled there so evaluated state cannot cross temporary playground roots. A single source manifest owns the
+  classification. On macOS the ordinary lane now passes **960/960 in 10s**; the serialized integration lane
+  passes **200 + one intentional skip in 9m39s**. Exact discovery is **1,161**, with zero failures. The process
   boundary removes nested workspace/MSBuild fan-out risk without throttling unrelated tests and turns the slow
   lane into a deterministic release gate rather than a 17-minute main-suite outlier.
-- **Next:** Slice 7, demand-driven exact refinement of dirty project debt.
+- **Next:** Slice 7B, command-specific demand graphs and exact dirty-debt refinement for live
+  `reaches`/`tree`/`callers`; do not widen from `path` by substituting a project-reference cone.
 
 ## Why — the workflow that makes this the target
 

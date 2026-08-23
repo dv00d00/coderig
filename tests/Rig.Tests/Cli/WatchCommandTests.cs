@@ -181,6 +181,34 @@ public sealed class WatchCommandTests
             r.RefKind == "invocation" && r.TargetSymbolId == QueryTarget && r.EnclosingSymbolId == BookEnclosing
         );
         (await host.GetStatusLineAsync()).ShouldContain("all projects reconciled");
+
+        // Atomic saves are classified from the debounced FINAL filesystem state. Both common macOS event
+        // orders below include an unretained temporary *.cs and a transiently missing retained target; neither
+        // is a topology change once the burst settles, so exact live path must remain available.
+        var tempCreateThenReplace = Path.Combine(playground.WorkingDirectory, "Business", "BookingService.atomic-one.cs");
+        await File.WriteAllTextAsync(tempCreateThenReplace, editedText.Replace("audit: booking attempt", "audit: atomic one"));
+        File.Move(tempCreateThenReplace, editedFilePath, overwrite: true);
+        await WaitUntilAsync(
+            () => Task.FromResult(host.AppliedFileCount >= 3),
+            TimeSpan.FromSeconds(60),
+            "the watcher never applied create-temp then replace-target atomic save"
+        );
+        var firstAtomicAnswer = await host.AnswerQueryAsync("path BookingService.Book Db.Query");
+        firstAtomicAnswer.ShouldNotContain("exact path unavailable");
+        firstAtomicAnswer.ShouldNotContain("source topology changed");
+
+        var tempDeleteThenRename = Path.Combine(playground.WorkingDirectory, "Business", "BookingService.atomic-two.cs");
+        await File.WriteAllTextAsync(tempDeleteThenRename, editedText.Replace("audit: booking attempt", "audit: atomic two"));
+        File.Delete(editedFilePath);
+        File.Move(tempDeleteThenRename, editedFilePath);
+        await WaitUntilAsync(
+            () => Task.FromResult(host.AppliedFileCount >= 4),
+            TimeSpan.FromSeconds(60),
+            "the watcher never applied delete-target then rename-temp atomic save"
+        );
+        var secondAtomicAnswer = await host.AnswerQueryAsync("path BookingService.Book Db.Query");
+        secondAtomicAnswer.ShouldNotContain("exact path unavailable");
+        secondAtomicAnswer.ShouldNotContain("source topology changed");
     }
 
     private static async Task WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout, string reason)

@@ -78,6 +78,70 @@ internal sealed class ProjectSurfaceCatalog
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
+    // Generated emitter ownership is not recoverable from Solution.GetDocumentIdsWithFilePath because
+    // generated documents are not retained as ordinary workspace documents. Resolve against the immutable
+    // surface partitions instead, rejecting every collision rather than selecting an arbitrary project.
+    // Assembly fallback is allowed only when it identifies exactly one partition.
+    internal EmitterOwnership ResolveEmitterOwnership(Solution solution, string? emitterPath, string? assemblyName)
+    {
+        if (!string.IsNullOrWhiteSpace(emitterPath))
+        {
+            var path = Path.GetFullPath(emitterPath);
+            var sourceOwners = solution.GetDocumentIdsWithFilePath(path).Select(id => id.ProjectId).ToImmutableHashSet();
+            if (sourceOwners.Count > 0)
+            {
+                // Linked source legitimately belongs to more than one project.
+                return EmitterOwnership.Exact(sourceOwners);
+            }
+
+            if (_unresolvedEmitterPaths.Contains(path))
+            {
+                return EmitterOwnership.Unavailable($"generated emitter '{path}' has unresolved project ownership");
+            }
+
+            var generatedOwners = _projects
+                .Where(pair =>
+                    pair.Value.GeneratedShards.Any(shard =>
+                        shard.EmitterFilePath.Length > 0
+                        && string.Equals(Path.GetFullPath(shard.EmitterFilePath), path, StringComparison.OrdinalIgnoreCase)
+                    )
+                )
+                .Select(pair => pair.Key)
+                .Distinct()
+                .ToImmutableHashSet();
+            if (generatedOwners.Count == 1)
+            {
+                return EmitterOwnership.Exact(generatedOwners);
+            }
+            if (generatedOwners.Count > 1)
+            {
+                return EmitterOwnership.Unavailable($"generated emitter '{path}' belongs to multiple projects");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(assemblyName))
+        {
+            var byAssembly = _projects
+                .Where(pair => string.Equals(pair.Value.AssemblyName, assemblyName, StringComparison.Ordinal))
+                .Select(pair => pair.Key)
+                .ToImmutableHashSet();
+            if (byAssembly.Count == 1)
+            {
+                return EmitterOwnership.Exact(byAssembly);
+            }
+            if (byAssembly.Count > 1)
+            {
+                return EmitterOwnership.Unavailable($"assembly '{assemblyName}' maps to multiple retained projects");
+            }
+        }
+
+        return EmitterOwnership.Unavailable(
+            string.IsNullOrWhiteSpace(emitterPath)
+                ? "symbol emitter has neither a retained path nor unique assembly ownership"
+                : $"emitter '{emitterPath}' is not owned by the retained solution"
+        );
+    }
+
     internal static ProjectSurfaceCatalog Seed(Solution solution, IReadOnlyList<ProjectSurfaceSnapshot>? surfaces)
     {
         if (surfaces is null || surfaces.Count == 0)
@@ -293,4 +357,13 @@ internal sealed class ProjectSurfaceCatalog
         var byName = solution.Projects.Where(p => p.Name == contribution.ProjectName).Select(p => p.Id).ToArray();
         return byName.Length == 1 ? byName[0] : null;
     }
+}
+
+internal sealed record EmitterOwnership(ImmutableHashSet<ProjectId> ProjectIds, string? UnavailableReason)
+{
+    internal bool IsExact => UnavailableReason is null;
+
+    internal static EmitterOwnership Exact(ImmutableHashSet<ProjectId> projectIds) => new(projectIds, null);
+
+    internal static EmitterOwnership Unavailable(string reason) => new(ImmutableHashSet<ProjectId>.Empty, reason);
 }

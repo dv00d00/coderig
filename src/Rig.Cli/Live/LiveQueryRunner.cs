@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Rig.Analysis.Inventory;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Commands;
+using Rig.Domain.Functions;
 
 namespace Rig.Cli.Live;
 
@@ -30,8 +32,7 @@ internal static class LiveQueryRunner
     // SUBJECT is unchanged: the banner enumerates exactly the verbs that route). Keep doing it that way rather
     // than loosening the assertion to a substring: an inaccurate banner tells a user a feature doesn't exist.
     internal const string Usage =
-        "supported live queries: `reaches <pattern>`, `path <from> <to>`, `callers <to>`, `tree <pattern>`; "
-        + "`quit` (or EOF) exits.";
+        "supported live queries: `reaches <pattern>`, `path <from> <to>`, `callers <to>`, `tree <pattern>`; " + "`quit` (or EOF) exits.";
 
     // One answer, with the command's two streams kept SEPARATE. Splitting them is not fussiness: the CLI puts
     // the answer on stdout and disclosures (ambiguity, seed notes) on stderr, and a test that claims live
@@ -60,16 +61,28 @@ internal static class LiveQueryRunner
         switch (request.Verb)
         {
             case LiveQueryVerbs.Reaches:
-                return await ServeAsync<ReachesCommand.Options>(request, o => o.ExtraRules, o => RunReachesAsync(Normalize(o), facts, workingDirectory));
+                return await ServeAsync<ReachesCommand.Options>(
+                    request,
+                    o => o.ExtraRules,
+                    o => RunReachesAsync(Normalize(o), facts, workingDirectory)
+                );
 
             case LiveQueryVerbs.Path:
-                return await ServeAsync<PathCommand.Options>(request, o => o.ExtraRules, o => RunPathAsync(o, facts, workingDirectory));
+                return await ServePathAsync(request, facts, workingDirectory);
 
             case LiveQueryVerbs.Callers:
-                return await ServeAsync<CallersCommand.Options>(request, o => o.ExtraRules, o => RunCallersAsync(o, facts, workingDirectory));
+                return await ServeAsync<CallersCommand.Options>(
+                    request,
+                    o => o.ExtraRules,
+                    o => RunCallersAsync(o, facts, workingDirectory)
+                );
 
             case LiveQueryVerbs.Tree:
-                return await ServeAsync<TreeCommand.Options>(request, o => o.ExtraRules, o => RunTreeAsync(Normalize(o), facts, workingDirectory));
+                return await ServeAsync<TreeCommand.Options>(
+                    request,
+                    o => o.ExtraRules,
+                    o => RunTreeAsync(Normalize(o), facts, workingDirectory)
+                );
 
             default:
                 return RequestResult.Declined($"`{request.Verb}` is not served from the resident index — {Usage}");
@@ -97,6 +110,88 @@ internal static class LiveQueryRunner
         "--rules is not honoured by the resident index: its facts were extracted, and its derived layer memoized, "
         + "under the rules `rig watch` booted with. Re-boot the host with those rules, or drop --rules";
 
+    // Preparation is intentionally separate from execution: WatchHost calls this before it captures a
+    // snapshot or pays any refinement cost. Null means the normal runner must reject/decline the request
+    // without touching resident debt.
+    internal static ExactPathDemand? PrepareTextPathDemand(string query, Rig.Domain.Data.RuleSet rules)
+    {
+        var trimmed = (query ?? "").Trim();
+        var split = trimmed.IndexOf(' ', StringComparison.Ordinal);
+        var verb = split < 0 ? trimmed : trimmed[..split];
+        if (!string.Equals(verb, LiveQueryVerbs.Path, StringComparison.OrdinalIgnoreCase) || split < 0)
+        {
+            return null;
+        }
+
+        return TrySplitArguments(trimmed[(split + 1)..].Trim(), out var endpoints) && endpoints.Count == 2
+            ? BuildPathDemand(DefaultPathOptions(endpoints[0], endpoints[1]), rules)
+            : null;
+    }
+
+    internal static ExactPathDemand? PrepareTransportPathDemand(LiveQueryRequest request, Rig.Domain.Data.RuleSet rules)
+    {
+        if (
+            !string.Equals(request.Verb, LiveQueryVerbs.Path, StringComparison.Ordinal)
+            || Decode<PathCommand.Options>(request.Options) is not { } options
+        )
+        {
+            return null;
+        }
+
+        return IsValidPathOptions(options) && options.ExtraRules is not { Count: > 0 } ? BuildPathDemand(options, rules) : null;
+    }
+
+    internal static LiveAnswer ExactUnavailable(long revision, string reason) =>
+        new(
+            Exit: 2,
+            Out: "",
+            Err: $"live: exact path unavailable at resident revision {revision}: {reason}; restart the watcher and retry{Environment.NewLine}"
+        );
+
+    private static ExactPathDemand BuildPathDemand(PathCommand.Options options, Rig.Domain.Data.RuleSet rules)
+    {
+        var shaped = options.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        return new ExactPathDemand(
+            options.FromPattern,
+            options.ToPattern,
+            new DemandForwardGraphRules(
+                new ForwardCallProjectionRules(shaped.Handoff, shaped.Redirect, shaped.Factory, ClassifyEventSubscriptions: !options.Raw),
+                shaped.Cut,
+                shaped.Context
+            ),
+            CommonOptions.DepthOrUnbounded(options.Depth),
+            CommonOptions.Mode(options.Async, options.IncludeDelivery)
+        );
+    }
+
+    private static PathCommand.Options DefaultPathOptions(string from, string to) =>
+        new(
+            FromPattern: from,
+            ToPattern: to,
+            Async: false,
+            IncludeDelivery: false,
+            Raw: false,
+            ExtraRules: [],
+            Depth: null,
+            Format: null,
+            Time: false
+        );
+
+    private static async Task<RequestResult> ServePathAsync(LiveQueryRequest request, LiveFactSource facts, string workingDirectory)
+    {
+        if (Decode<PathCommand.Options>(request.Options) is not { } options || !IsValidPathOptions(options))
+        {
+            return RequestResult.Declined($"unreadable options for `{request.Verb}`");
+        }
+
+        return options.ExtraRules is { Count: > 0 }
+            ? RequestResult.Declined(RulesNotHonoured)
+            : new RequestResult(await RunPathAsync(options, facts, workingDirectory), null);
+    }
+
+    private static bool IsValidPathOptions(PathCommand.Options options) =>
+        !string.IsNullOrWhiteSpace(options.FromPattern) && !string.IsNullOrWhiteSpace(options.ToPattern);
+
     private static async Task<RequestResult> ServeAsync<TOptions>(
         LiveQueryRequest request,
         Func<TOptions, IReadOnlyList<string>?> extraRulesOf,
@@ -109,7 +204,9 @@ internal static class LiveQueryRunner
             return RequestResult.Declined($"unreadable options for `{request.Verb}`");
         }
 
-        return extraRulesOf(options) is { Count: > 0 } ? RequestResult.Declined(RulesNotHonoured) : new RequestResult(await run(options), null);
+        return extraRulesOf(options) is { Count: > 0 }
+            ? RequestResult.Declined(RulesNotHonoured)
+            : new RequestResult(await run(options), null);
     }
 
     private static T? Decode<T>(string json)
@@ -170,12 +267,16 @@ internal static class LiveQueryRunner
 
         if (string.Equals(verb, "callers", StringComparison.OrdinalIgnoreCase))
         {
-            return argument.Length == 0 ? Rejected("`callers` needs a target pattern") : await CallersAsync(argument, facts, workingDirectory);
+            return argument.Length == 0
+                ? Rejected("`callers` needs a target pattern")
+                : await CallersAsync(argument, facts, workingDirectory);
         }
 
         if (string.Equals(verb, "tree", StringComparison.OrdinalIgnoreCase))
         {
-            return argument.Length == 0 ? Rejected("`tree` needs an entry-point pattern") : await TreeAsync(argument, facts, workingDirectory);
+            return argument.Length == 0
+                ? Rejected("`tree` needs an entry-point pattern")
+                : await TreeAsync(argument, facts, workingDirectory);
         }
 
         if (string.Equals(verb, "path", StringComparison.OrdinalIgnoreCase))
@@ -190,7 +291,8 @@ internal static class LiveQueryRunner
 
     // A usage rejection: exit 2, the reason, and what IS supported. Exit 2 (not 1) keeps "you asked wrong"
     // distinguishable from "the answer is no results", the same way the CLI's parse errors are.
-    private static LiveAnswer Rejected(string reason) => new LiveAnswer(Exit: 2, Out: $"live: {reason} — {Usage}{Environment.NewLine}", Err: "");
+    private static LiveAnswer Rejected(string reason) =>
+        new LiveAnswer(Exit: 2, Out: $"live: {reason} — {Usage}{Environment.NewLine}", Err: "");
 
     // `reaches <pattern>`, answered off the resident facts. The Options record is the DEFAULT one the CLI
     // builds when only the positional pattern is given — no --async/--raw/--depth/--limit/--format on the live
@@ -320,27 +422,12 @@ internal static class LiveQueryRunner
     // endpoints would answer a question nobody asked.
     private static async Task<LiveAnswer> PathAsync(string remainder, LiveFactSource facts, string workingDirectory)
     {
-        var endpoints = SplitArguments(remainder);
-        if (endpoints.Count != 2)
+        if (!TrySplitArguments(remainder, out var endpoints) || endpoints.Count != 2)
         {
             return Rejected("`path` needs exactly two patterns, a from and a to (quote a pattern containing spaces)");
         }
 
-        return await RunPathAsync(
-            new PathCommand.Options(
-                FromPattern: endpoints[0],
-                ToPattern: endpoints[1],
-                Async: false,
-                IncludeDelivery: false,
-                Raw: false,
-                ExtraRules: [],
-                Depth: null,
-                Format: null,
-                Time: false
-            ),
-            facts,
-            workingDirectory
-        );
+        return await RunPathAsync(DefaultPathOptions(endpoints[0], endpoints[1]), facts, workingDirectory);
     }
 
     private static Task<LiveAnswer> RunPathAsync(PathCommand.Options options, LiveFactSource facts, string workingDirectory) =>
@@ -381,5 +468,11 @@ internal static class LiveQueryRunner
         }
 
         return args;
+    }
+
+    private static bool TrySplitArguments(string remainder, out List<string> arguments)
+    {
+        arguments = SplitArguments(remainder);
+        return remainder.Count(ch => ch == '"') % 2 == 0;
     }
 }
