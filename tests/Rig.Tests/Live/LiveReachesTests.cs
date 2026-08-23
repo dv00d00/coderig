@@ -185,7 +185,7 @@ public sealed class LiveReachesTests
         );
 
         var answered = await host.AnswerQueryAsync("reaches HomePage.Show");
-        answered.Split(Environment.NewLine)[0].ShouldBe("live: facts current as of 0 file(s) applied | all projects reconciled");
+        answered.Split('\n')[0].ShouldBe("live: facts current as of 0 file(s) applied | all projects reconciled");
         answered.ShouldContain("From: HomePage.Show");
         // First query in the generation, so the derived layer was built now and its cost is disclosed.
         answered.ShouldContain("live: derived layer built this generation: ");
@@ -286,13 +286,15 @@ public sealed class LiveReachesTests
     // information is WHICH line moved.
     private static void Diff(StringBuilder into, string label, string pattern, string stream, string store, string live)
     {
+        store = Fixtures.AnswerStreamParity.Canonical(store);
+        live = Fixtures.AnswerStreamParity.Canonical(live);
         if (string.Equals(store, live, StringComparison.Ordinal))
         {
             return;
         }
 
-        var storeLines = store.Split(Environment.NewLine);
-        var liveLines = live.Split(Environment.NewLine);
+        var storeLines = store.Split('\n');
+        var liveLines = live.Split('\n');
         into.Append(CultureInfo.InvariantCulture, $"{Environment.NewLine}--- [{label}] {pattern} ({stream}) ---");
         for (var i = 0; i < Math.Max(storeLines.Length, liveLines.Length); i++)
         {

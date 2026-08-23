@@ -164,7 +164,7 @@ public sealed class WatchCommandTests
         // successor is current and the first query reports the derived factories it actually forced.
         (await host.GetUnreconciledProjectsAsync()).ShouldNotBeEmpty();
         var answer = await host.AnswerQueryAsync("reaches BookingService.Book");
-        answer.Split(Environment.NewLine)[0].ShouldContain("all projects reconciled");
+        answer.Split('\n')[0].ShouldContain("all projects reconciled");
         answer.ShouldContain("live: derived layer built this generation:");
         (await host.GetCurrentRevisionAsync()).ShouldBe(2);
         (await host.GetUnreconciledProjectsAsync()).ShouldBeEmpty();

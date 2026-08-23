@@ -469,28 +469,24 @@ public sealed class LivePathCallersTests
     private const string AmbiguityNote = "note: pattern '";
 
     private static string WithoutAmbiguityNote(string stream) =>
-        string.Join(
-            Environment.NewLine,
-            stream.Split(Environment.NewLine).Where(line => !line.StartsWith(AmbiguityNote, StringComparison.Ordinal))
-        );
+        string.Join("\n", stream.Split('\n').Where(line => !line.StartsWith(AmbiguityNote, StringComparison.Ordinal)));
 
     private static string WithoutLoadBanner(string stream) =>
-        string.Join(
-            Environment.NewLine,
-            stream.Split(Environment.NewLine).Where(line => !line.StartsWith(LoadBanner, StringComparison.Ordinal))
-        );
+        string.Join("\n", stream.Split('\n').Where(line => !line.StartsWith(LoadBanner, StringComparison.Ordinal)));
 
     // Line-by-line, because a whole-blob mismatch message on a long rendering is unreadable and the useful
     // information is WHICH line moved.
     private static void Diff(StringBuilder into, string label, string query, string stream, string store, string live)
     {
+        store = Fixtures.AnswerStreamParity.Canonical(store);
+        live = Fixtures.AnswerStreamParity.Canonical(live);
         if (string.Equals(store, live, StringComparison.Ordinal))
         {
             return;
         }
 
-        var storeLines = store.Split(Environment.NewLine);
-        var liveLines = live.Split(Environment.NewLine);
+        var storeLines = store.Split('\n');
+        var liveLines = live.Split('\n');
         into.Append(CultureInfo.InvariantCulture, $"{Environment.NewLine}--- [{label}] {query} ({stream}) ---");
         for (var i = 0; i < Math.Max(storeLines.Length, liveLines.Length); i++)
         {

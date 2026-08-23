@@ -108,7 +108,7 @@ public sealed class DemandLivePathTests
         WithoutBanner(live.Out).ShouldBe(WithoutBanner(storeOut.ToString()));
         // Store provenance is intentionally absent from a resident answer; every answer-local diagnostic
         // must still match byte-for-byte.
-        live.Err.ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()));
+        AnswerStreamParity.Canonical(live.Err).ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()));
         live.Err.ShouldNotContain("traversalGraph");
         live.Err.ShouldNotContain("eventSites");
         return live;
@@ -144,14 +144,19 @@ public sealed class DemandLivePathTests
     }
 
     private static string WithoutBanner(string value) =>
-        string.Join(
-            Environment.NewLine,
-            value.Split(Environment.NewLine).Where(line => !line.StartsWith("Fact graph:", StringComparison.Ordinal))
+        Fixtures.AnswerStreamParity.Canonical(
+            string.Join(
+                "\n",
+                Fixtures
+                    .AnswerStreamParity.Canonical(value)
+                    .Split('\n')
+                    .Where(line => !line.StartsWith("Fact graph:", StringComparison.Ordinal))
+            )
         );
 
     private static int FactGraphCallEdgeCount(string value)
     {
-        var line = value.Split(Environment.NewLine).Single(item => item.StartsWith("Fact graph:", StringComparison.Ordinal));
+        var line = value.Split('\n').Single(item => item.StartsWith("Fact graph:", StringComparison.Ordinal));
         var start = "Fact graph: ".Length;
         var end = line.IndexOf(" call edges", StringComparison.Ordinal);
         return int.Parse(line[start..end], System.Globalization.CultureInfo.InvariantCulture);

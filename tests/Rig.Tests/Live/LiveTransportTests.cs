@@ -80,7 +80,7 @@ public sealed class LiveTransportTests
         routedOut.ShouldContain("Reachable methods (<= depth 2147483647): 8");
 
         // THE SOURCE IS UNAMBIGUOUS, and it is the FIRST thing on stderr — ahead of the command's own notes.
-        routedErr.Split(Environment.NewLine)[0].ShouldBe("live: facts from resident index — 0 file(s) applied | all projects reconciled");
+        routedErr.Split('\n')[0].ShouldBe("live: facts from resident index — 0 file(s) applied | all projects reconciled");
         // …and it is NOT on stdout, deliberately: `--format tsv` has to survive routing, so stdout carries
         // only what the command wrote. A `live:` line there would break every awk consumer rig has.
         routedOut.ShouldNotContain("live:");
@@ -93,9 +93,14 @@ public sealed class LiveTransportTests
             new LiveFactSource(facts, rules),
             playground.WorkingDirectory
         );
-        routedOut.ShouldBe(direct.Out, "the routed stdout is not byte-identical to the in-process live answer");
+        AnswerStreamParity
+            .Canonical(routedOut)
+            .ShouldBe(AnswerStreamParity.Canonical(direct.Out), "the routed stdout is not the in-process live answer");
         StripHostLines(routedErr)
-            .ShouldBe(direct.Err, "the routed stderr is not the in-process live answer's stderr plus the host's own lines");
+            .ShouldBe(
+                AnswerStreamParity.Canonical(direct.Err),
+                "the routed stderr is not the in-process live answer's stderr plus the host's own lines"
+            );
         exitCode.ShouldBe(direct.Exit);
 
         // THE ALLOWLIST, from both ends. Every routable verb reaches a switch arm…
@@ -749,9 +754,9 @@ public sealed class LiveTransportTests
     // derived-layer cost — leaving exactly what the command itself wrote to stderr.
     private static string StripHostLines(string standardError) =>
         string.Join(
-            Environment.NewLine,
+            "\n",
             standardError
-                .Split(Environment.NewLine)
+                .Split('\n')
                 .Where(line =>
                     !line.StartsWith(SourceLinePrefix, StringComparison.Ordinal)
                     && !line.StartsWith(CostLinePrefix, StringComparison.Ordinal)

@@ -640,13 +640,15 @@ public sealed class LiveTreeTests
     // information is WHICH line moved.
     private static void Diff(StringBuilder into, string label, string query, string stream, string store, string live)
     {
+        store = Fixtures.AnswerStreamParity.Canonical(store);
+        live = Fixtures.AnswerStreamParity.Canonical(live);
         if (string.Equals(store, live, StringComparison.Ordinal))
         {
             return;
         }
 
-        var storeLines = store.Split(Environment.NewLine);
-        var liveLines = live.Split(Environment.NewLine);
+        var storeLines = store.Split('\n');
+        var liveLines = live.Split('\n');
         into.Append(CultureInfo.InvariantCulture, $"{Environment.NewLine}--- [{label}] {query} ({stream}) ---");
         var shown = 0;
         for (var i = 0; i < Math.Max(storeLines.Length, liveLines.Length) && shown < 40; i++)

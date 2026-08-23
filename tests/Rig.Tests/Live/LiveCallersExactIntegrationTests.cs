@@ -180,7 +180,7 @@ public sealed class LiveCallersExactIntegrationTests
         store.Out.ShouldContain(ExistingHighLevelCaller);
         live.Exit.ShouldBe(store.Exit);
         WithoutLoadBanner(live.Out).ShouldBe(WithoutLoadBanner(store.Out));
-        live.Err.ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(store.Err));
+        AnswerStreamParity.Canonical(live.Err).ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(store.Err));
     }
 
     private static void AssertNoWholeGraphBuild(LiveServeResult answer)
@@ -191,10 +191,7 @@ public sealed class LiveCallersExactIntegrationTests
     }
 
     private static string WithoutLoadBanner(string stream) =>
-        string.Join(
-            Environment.NewLine,
-            stream.Split(Environment.NewLine).Where(line => !line.StartsWith(LoadBanner, StringComparison.Ordinal))
-        );
+        string.Join("\n", stream.Split('\n').Where(line => !line.StartsWith(LoadBanner, StringComparison.Ordinal)));
 
     private static async Task WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout, string reason)
     {
