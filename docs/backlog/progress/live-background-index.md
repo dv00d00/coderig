@@ -6,8 +6,9 @@ watcher batches, the v7 surface-fact substrate, per-origin lazy surface refineme
 verification with coarse fallback, plus an emitter-aware immutable graph-fact substrate and canonical keyed
 symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggered exact forward refinement for
 `path`/`reaches`/`tree`, plus keyed reverse topology and query-triggered exact refinement for `callers`, and
-delivery-aware resident projection for all four traversal verbs. Next: controlled agent UX feedback and the
-open generic-identity/CLI-web consistency follow-ups found by adversarial dogfood.
+delivery-aware resident projection for all four traversal verbs, followed by controlled agent dogfood and its
+open-generic, agent-facing CLI, freshness, hotspot, and CLI/web consistency corrections. Next: final gate and
+disposable-clone release workout.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -196,9 +197,18 @@ open generic-identity/CLI-web consistency follow-ups found by adversarial dogfoo
   passed **10/10**. This repeatable process contamination keeps the isolated executable a reliability blocker
   and profiling target: it is no longer a 17-minute main-suite outlier, but one 10-minute shared process is not
   a trustworthy gate even with one outer worker.
-- **Next:** split/reset the contaminated long-lived integration process into trustworthy fresh-process shards;
-  then controlled agent UX feedback, exact open-generic node identity, and CLI/web intrinsic-effect filtering.
-  Do not substitute a project-reference cone for the demand graph.
+- **2026-08-23 controlled agent UX follow-through:** exact open-generic queries now include their concrete
+  monomorphized executions; symbol discovery has TSV/JSON; traversal depth accepts `--max-depth`; ambiguous
+  `show` fails closed; immutable-store answers disclose current/stale/unverifiable provenance on stderr; CLI
+  and web share intrinsic-effect projection and effects-diff computation; and `hotspots` ranks transparent
+  fan/effect/hazard/amplification/dispatch metrics without a blended score. The web report now exposes those
+  named columns, existing Tree/Source/Reaches/Callers pivots, and an explicitly selected A/B behavior diff—no
+  peer guessing. An independent review then corrected generic effect ownership, persisted-lambda/source-generic
+  aggregation, same-directory `.rig/` freshness, merged-repository probe fan-out, and warm impact schema gates.
+  Focused tests gate each slice; the expensive ordinary+isolated integration gate is deliberately deferred
+  until the complete feature set.
+- **Next:** run one final gate and dogfood from the disposable clone. Do not substitute a project-reference
+  cone for the demand graph.
 
 ## Why — the workflow that makes this the target
 

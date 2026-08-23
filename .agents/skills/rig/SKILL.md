@@ -14,7 +14,8 @@ query/rule changes. Tool repo: `C:\git\coderig` (global tool `rig`).
   is the SOLE extraction command; **prefer the bare full-solution form** (sane defaults; the internal build
   cache makes warm re-runs fast). `--from <entry.csproj>` (entry-scoped closure) is a narrowing tool, not the
   default (the old `mine` is superseded).
-- **Query/derive** (`derive` `reaches` `tree` `callers` `path` `refs` `symbols` `impact` `entrypoints`):
+- **Query/derive** (`derive` `reaches` `tree` `callers` `path` `refs` `symbols` `hotspots`
+  `effects-diff` `impact` `entrypoints`):
   read-only over facts. Detectors are JSON rules → new rule = new answer, NO re-extract.
 - **Run every query command from the dir holding `.rig/`** (cwd locates the DB). `--rules <path>`
   (repeatable) cascades extra rule files over the builtins.
@@ -35,8 +36,10 @@ rig callers "Type.Method" [--roots|--entrypoints] [--async [--include-delivery]]
 rig path "From" "To" [--async [--include-delivery]]  # one concrete path
 rig derive [--list-providers] [--exclude-namespace <ns>]   # ALL effects + EPs; --list-providers = the valid --only/--exclude token set
 rig entrypoints                              # rule-detected EPs by kind (--format tsv)
-rig refs "IFoo"  |  rig symbols "Foo" --kind method [--limit n] [--no-lambdas]
-rig show "Type.Method" [--context n] [--limit n]   # the SOURCE of a declaration — use this instead of Read when you have a rig location; it renders the INDEXED revision (marked "(from git <sha>)" when the working tree has moved) and refuses rather than render unattributable lines
+rig refs "IFoo"  |  rig symbols "Foo" --kind method [--limit n] [--no-lambdas] [--format tsv|json]
+rig show "Type.Method" [--context n] [--all [--limit n]]   # the SOURCE of one declaration; ambiguity fails closed with exact candidates unless --all is explicit; indexed-revision attribution is enforced
+rig hotspots --sort density --top 50 [--no-lambdas] [--intrinsic] [--format tsv]  # transparent refactoring metrics; NO blended score
+rig effects-diff "Entry.A" "Entry.B" [--only provider:op]  # EXPLICIT EP-vs-EP behavior comparison; do not guess peers
 rig impact --base <ref> --head <ref> [--structural] [--format tsv]   # blast radius + behavioral delta (both refs REQUIRED; per-EP diff is the default)
 rig reaches "X" --store <id|sha>             # query a SPECIFIC commit's store
 rig watch Sln.slnx                           # resident working-tree index; live reaches/path/callers/tree
@@ -51,6 +54,12 @@ both. Applies to every seed (`tree`/`reaches`/`callers`/`path` roots + the `path
 `callers --entrypoints` / `derive` EP lines print the slash ROUTE (`AI/SmartLetter.Send`) which matches
 NOTHING — but now ALSO print the queryable FQN (`↪ <fqn>` line + tsv `fqn` column); paste THAT (exact-match
 then resolves it precisely). Unexpected empty / "No path" / "0 call edges" → suspect a route-form pattern first.
+
+**Every immutable-store answer discloses its provenance on stderr.** `current` means the indexed clean
+commit equals the source checkout's clean HEAD; `STALE` means HEAD moved or the worktree has unindexed
+changes; `UNVERIFIABLE` means the store itself was indexed dirty; older/non-git stores say `freshness
+unknown`. This never contaminates TSV/JSON stdout. `rig runs` is the all-store provenance inventory and
+does not repeat the generic line.
 
 ## Reading output (don't misread it)
 Effects are emoji-tagged `provider:op` (💾write 🔍read 📥fetch 🌐http 📤queue 📣echo 🗃️cache 📦object-store

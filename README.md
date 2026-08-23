@@ -49,8 +49,9 @@ lower to the same branch shape, so nothing slips past a syntax walk. Cost: ~8% o
 
 **🌐 Web UI — `rig serve`.** The whole store, browsable: entry-point explorer with search, the effect
 tree with hazard overlays, reverse-navigation drawers ("who reaches this", "EPs by service"), pivot
-breadcrumbs, the assembly-reference view, and a full impact-diff dashboard with live SSE progress on
-the cold diff. Client-side IndexedDB cache keyed on the derivation version, so warm loads are instant.
+breadcrumbs, transparent refactoring-hotspot rankings, explicit entry-point behavior comparison, the
+assembly-reference view, and a full impact-diff dashboard with live SSE progress on the cold diff.
+Client-side IndexedDB cache keyed on the derivation version, so warm loads are instant.
 
 **📦 Allocation effects.** Allocations — including compiler-lowered ones (closures, boxing, cached
 delegates) — are first-class effects with shallow size and cardinality, so a `new` inside a `foreach`
@@ -75,16 +76,22 @@ Stores are **per-commit** — `--at <sha>` reads any previously indexed commit. 
 | `rig path <from> <to>` | One concrete call path between two symbols |
 | `rig impact --base <sha> --head <sha>` | Two-store diff: per-EP effect + reach changes. `--structural` for the full ripple · `--expect-no-effect-change` as a CI gate |
 | `rig effects-diff <a> <b>` | Symmetric difference of two entry points' effect sets |
+| `rig hotspots` | Rank first-party methods by a chosen transparent metric: callers, callees, effects, density, hazards, amplification, or residual dispatch fan. No blended score |
 | `rig serve` | The interactive web explorer (`--port`, default 5050) |
 | `rig refs <pat>` | References to a symbol; or `--unused` / `--usage` for declared-but-unused assembly references |
-| `rig symbols <pat>` | FTS-accelerated symbol search |
-| `rig show <pat>` | The **source** of a matched declaration. `--context <n>` for surrounding lines · `--limit <n>` for how many matches. Reads the working tree only when it is provably the indexed revision (clean store, `SourceCommit` == HEAD, that file unmodified); otherwise reads the blob out of git and marks it `(from git <sha>)`. Never renders lines it cannot attribute — it prints the reason instead |
+| `rig symbols <pat>` | FTS-accelerated symbol search. `--format tsv\|json` exposes exact IDs and locations for scripts/agents |
+| `rig show <pat>` | The **source** of one unambiguous declaration. Ambiguity fails closed and prints rerunnable exact names; `--all` opts into rendering matches, capped by `--limit <n>`. `--context <n>` adds surrounding lines. Reads the working tree only when it is provably the indexed revision (clean store, `SourceCommit` == HEAD, that file unmodified); otherwise reads the blob out of git and marks it `(from git <sha>)`. Never renders lines it cannot attribute — it prints the reason instead |
 | `rig di` | MS DI registrations: service → implementation, lifetime, source |
 | `rig dispatch-fans` | Diagnostic: dispatch hubs whose receiver failed to narrow the CHA fan-out, ranked by cause |
 | `rig files --skipped` | Files excluded from analysis, and the rule that excluded them |
 | `rig profile validate` | Validate the `rig.rules.json` profile for the current directory |
 
 Patterns are case-insensitive substring matches over DocIDs (`M:Ns.Type.Method(args)`), exact-match-wins.
+The depth options accept `--max-depth` (preferred), `--maxdepth`, or `--depth`.
+
+Every immutable-store answer identifies the selected store and reports `current`, `STALE`,
+`UNVERIFIABLE`, or `freshness unknown` on stderr. Machine-readable stdout remains pipe-safe. `rig runs`
+already lists all stores and their provenance, so it does not repeat the per-answer disclosure.
 
 ## Effects
 

@@ -1,6 +1,6 @@
 ## CLI Tier-1 global flags — uniform across all query commands
 
-**Status:** PROGRESS — `--format`, `--limit`, and `impact --time` are shipped. Remaining work is
+**Status:** PROGRESS — `--format`, `--limit`, the `--max-depth` alias, and `impact --time` are shipped. Remaining work is
 `--time` on `derive`/`entrypoints` and `--no-cache` on the cached derive/entry-point paths.
 **Source:** extracted from `docs/rig-review-issues.md`, 2026-06-25 (#10 / E2 Tier-1 deferred section)
 
@@ -19,6 +19,10 @@
   the limit is part of `TreeCacheKey` (a capped forest is a different tree, not a rendering). Tests:
   `TreeNodeBudgetTests` (incl. the fencepost: budget N fully expands N−1 nodes — the final unit's
   node is conservatively capped).
+- **agent-facing discovery + depth spelling ✅ SHIPPED (2026-08-23)** — the centralized depth option now
+  accepts preferred `--max-depth` plus compatible `--maxdepth` / `--depth`; `symbols --format tsv|json`
+  exposes exact IDs, signatures and source locations; and ambiguous `show` fails closed unless `--all` is
+  explicit. The remaining raw fact readers (`refs`/`files`/`di`) are still text-only.
 - **`--time` ✅ PARTIAL (`6a713836`, 2026-06-26)** — rich index-style instrumentation (per-phase
   `PhaseTimings` + OS/proc CPU/disk/RAM sampler + `TimingReport`, via a disposable `QueryTiming` helper)
   on `tree`/`callers`/`reaches`/`path`/`dispatch-fans`/`effects-diff`. It paid off immediately —
@@ -50,10 +54,9 @@ Additive per-command plumbing. Each flag can land independently. No breaking cha
 A per-command audit of `--rules` / `--store` / `--format` (for
 [[cli-surface-and-help-refresh-2026-07]] item 1) produced two things for this card:
 
-- **NEXT SLICE: the FACT READERS have no `--format`.** This card's shipped-slice note lists `--format` as on
-  "*every* query command", which is true of the query/derive surface but NOT of `symbols` / `refs` / `files` /
-  `di` — they are text-only, so there is no machine-readable mode for raw fact inspection. That is the natural
-  next increment here, and it is a real gap: tooling that wants the symbol table has to parse human output.
+- **NEXT SLICE: the remaining FACT READERS have no `--format`.** `symbols --format tsv|json` shipped
+  2026-08-23, so exact agent/script discovery no longer parses human output. `refs` / `files` / `di` remain
+  text-only; add formats only when a concrete machine workflow needs them.
   The full matrix is documented in the rig skill's REFERENCE.md § "Which commands accept which global options".
 - **`--rules` is deliberately NOT going global.** Only commands whose OUTPUT IS A FUNCTION OF THE RULES accept
   it; the fact readers ignore rules entirely, so a no-op `--rules` there would be WORSE than the current
