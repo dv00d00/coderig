@@ -523,7 +523,7 @@ internal sealed class WatchHost : IAsyncDisposable
     {
         // Parse/validate before capturing or refining. A malformed/unsupported query follows the normal
         // rejection path and pays zero resident work.
-        var demand = LiveQueryRunner.PrepareTextForwardDemand(query, _rules, DeploymentsConfigured());
+        var demand = LiveQueryRunner.PrepareTextExactDemand(query, _rules, DeploymentsConfigured());
         var capture = await CaptureForQueryAsync(demand, sourceDisclosure: false, cancellationToken);
         foreach (var line in capture.Health)
         {
@@ -556,7 +556,7 @@ internal sealed class WatchHost : IAsyncDisposable
     // rig already puts every disclosure precisely so stdout stays parseable.
     public async Task<LiveServeResult> ServeAsync(LiveQueryRequest request, CancellationToken cancellationToken = default)
     {
-        var demand = LiveQueryRunner.PrepareTransportForwardDemand(request, _rules, DeploymentsConfigured());
+        var demand = LiveQueryRunner.PrepareTransportExactDemand(request, _rules, DeploymentsConfigured());
         var capture = await CaptureForQueryAsync(demand, sourceDisclosure: true, cancellationToken);
         if (capture.UnavailableReason is not null)
         {
@@ -606,12 +606,12 @@ internal sealed class WatchHost : IAsyncDisposable
         );
     }
 
-    // Forward commands with keyed demand topology capture their planning basis briefly under the
+    // Commands with keyed demand topology capture their planning basis briefly under the
     // host gate, do all Roslyn work outside that gate, then accept only the exact snapshot reference returned
     // by ResidentIndex. The publication mutex prevents duplicate refinements and edit-CAS races without
     // blocking lock-free watcher event capture.
     private async Task<QueryCapture> CaptureForQueryAsync(
-        ExactForwardDemand? demand,
+        IExactQueryDemand? demand,
         bool sourceDisclosure,
         CancellationToken cancellationToken
     )
@@ -652,7 +652,12 @@ internal sealed class WatchHost : IAsyncDisposable
                 }
                 else
                 {
-                    outcome = await _index.EnsureExactForwardAsync(basis, demand, cancellationToken);
+                    outcome = demand switch
+                    {
+                        ExactForwardDemand forward => await _index.EnsureExactForwardAsync(basis, forward, cancellationToken),
+                        ExactCallersDemand callers => await _index.EnsureExactCallersAsync(basis, callers, cancellationToken),
+                        _ => ExactForwardRefinementOutcome.Unavailable(basis, $"exact {demand.Verb} refinement is not implemented"),
+                    };
                 }
 
                 await _gate.WaitAsync(cancellationToken);

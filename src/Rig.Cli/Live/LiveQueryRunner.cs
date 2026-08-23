@@ -75,9 +75,9 @@ internal static class LiveQueryRunner
             case LiveQueryVerbs.Callers:
                 return await ServeAsync<CallersCommand.Options>(
                     request,
-                    o => o,
+                    Normalize,
                     o => o.ExtraRules,
-                    _ => true,
+                    IsValidCallersOptions,
                     o => RunCallersAsync(o, facts, workingDirectory)
                 );
 
@@ -119,7 +119,7 @@ internal static class LiveQueryRunner
     // Preparation is intentionally separate from execution: WatchHost calls this before it captures a
     // snapshot or pays any refinement cost. Null means the normal runner must reject/decline the request
     // without touching resident debt.
-    internal static ExactForwardDemand? PrepareTextForwardDemand(string query, Rig.Domain.Data.RuleSet rules, bool deploymentsConfigured)
+    internal static IExactQueryDemand? PrepareTextExactDemand(string query, Rig.Domain.Data.RuleSet rules, bool deploymentsConfigured)
     {
         var trimmed = (query ?? "").Trim();
         var split = trimmed.IndexOf(' ', StringComparison.Ordinal);
@@ -148,9 +148,36 @@ internal static class LiveQueryRunner
             return BuildReachesDemand(DefaultReachesOptions(pattern), rules, deploymentsConfigured);
         }
 
+        if (string.Equals(verb, LiveQueryVerbs.Callers, StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildCallersDemand(DefaultCallersOptions(pattern), rules, deploymentsConfigured);
+        }
+
         return string.Equals(verb, LiveQueryVerbs.Tree, StringComparison.OrdinalIgnoreCase)
             ? BuildTreeDemand(DefaultTreeOptions(pattern), rules, deploymentsConfigured)
             : null;
+    }
+
+    // Kept as the forward-only compatibility seam for focused planner tests and callers that intentionally
+    // do not opt into reverse refinement.
+    internal static ExactForwardDemand? PrepareTextForwardDemand(string query, Rig.Domain.Data.RuleSet rules, bool deploymentsConfigured) =>
+        PrepareTextExactDemand(query, rules, deploymentsConfigured) as ExactForwardDemand;
+
+    internal static IExactQueryDemand? PrepareTransportExactDemand(
+        LiveQueryRequest request,
+        Rig.Domain.Data.RuleSet rules,
+        bool deploymentsConfigured
+    )
+    {
+        if (string.Equals(request.Verb, LiveQueryVerbs.Callers, StringComparison.Ordinal))
+        {
+            var options = Decode<CallersCommand.Options>(request.Options) is { } decoded ? Normalize(decoded) : null;
+            return options is not null && IsValidCallersOptions(options) && options.ExtraRules is not { Count: > 0 }
+                ? BuildCallersDemand(options, rules, deploymentsConfigured)
+                : null;
+        }
+
+        return PrepareTransportForwardDemand(request, rules, deploymentsConfigured);
     }
 
     internal static ExactForwardDemand? PrepareTransportForwardDemand(
@@ -255,6 +282,30 @@ internal static class LiveQueryRunner
         );
     }
 
+    private static ExactCallersDemand BuildCallersDemand(
+        CallersCommand.Options options,
+        Rig.Domain.Data.RuleSet rules,
+        bool deploymentsConfigured
+    )
+    {
+        var shaped = CallersCommand.ShapeRules(options, rules);
+        var executionMode = CommonOptions.Mode(options.Async, options.IncludeDelivery);
+        var discoveryMode = CallersCommand.DiscoveryMode(options, CommonOptions.IsTsv(options.Format));
+        var wholeDebt = options.EntrypointsOnly || deploymentsConfigured;
+        return new ExactCallersDemand(
+            options.ToPattern,
+            new DemandForwardGraphRules(
+                new ForwardCallProjectionRules(shaped.Handoff, shaped.Redirect, shaped.Factory, ClassifyEventSubscriptions: !options.Raw),
+                shaped.Cut,
+                shaped.Context
+            ),
+            CommonOptions.DepthOrUnbounded(options.Depth),
+            executionMode,
+            discoveryMode,
+            wholeDebt ? ExactForwardDebtScope.WholeResident : ExactForwardDebtScope.DemandBoundary
+        );
+    }
+
     private static ExactForwardDemand BuildDemand(
         ExactForwardQueryKind queryKind,
         string fromPattern,
@@ -324,6 +375,13 @@ internal static class LiveQueryRunner
         && IsValidDepth(options.Depth)
         && (options.Limit is null or > 0);
 
+    private static bool IsValidCallersOptions(CallersCommand.Options options) =>
+        !string.IsNullOrWhiteSpace(options.ToPattern)
+        && !(options.RootsOnly && options.EntrypointsOnly)
+        && IsValidExactForwardMode(options.Async, options.IncludeDelivery)
+        && IsValidDepth(options.Depth)
+        && (options.Limit is null or > 0);
+
     private static bool IsValidExactForwardMode(bool asyncMode, bool includeDelivery) => !asyncMode && !includeDelivery;
 
     private static bool IsValidDepth(int? depth) => depth is null or >= 0;
@@ -358,6 +416,11 @@ internal static class LiveQueryRunner
     private static T? Decode<T>(string json)
         where T : class
     {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
         try
         {
             return JsonSerializer.Deserialize<T>(json, LiveQueryTransport.Json);
@@ -391,6 +454,12 @@ internal static class LiveQueryRunner
             ExcludeNamespaces = options.ExcludeNamespaces ?? [],
         };
 
+    private static CallersCommand.Options Normalize(CallersCommand.Options options) =>
+        options with
+        {
+            ExtraRules = options.ExtraRules ?? [],
+        };
+
     internal static async Task<LiveAnswer> AnswerAsync(string query, LiveFactSource facts, string workingDirectory)
     {
         var trimmed = (query ?? "").Trim();
@@ -409,21 +478,21 @@ internal static class LiveQueryRunner
 
         if (string.Equals(verb, "reaches", StringComparison.OrdinalIgnoreCase))
         {
-            return argument.Length == 0
+            return string.IsNullOrWhiteSpace(argument)
                 ? Rejected("`reaches` needs an entry-point pattern")
                 : await ReachesAsync(argument, facts, workingDirectory);
         }
 
         if (string.Equals(verb, "callers", StringComparison.OrdinalIgnoreCase))
         {
-            return argument.Length == 0
+            return string.IsNullOrWhiteSpace(argument)
                 ? Rejected("`callers` needs a target pattern")
                 : await CallersAsync(argument, facts, workingDirectory);
         }
 
         if (string.Equals(verb, "tree", StringComparison.OrdinalIgnoreCase))
         {
-            return argument.Length == 0
+            return string.IsNullOrWhiteSpace(argument)
                 ? Rejected("`tree` needs an entry-point pattern")
                 : await TreeAsync(argument, facts, workingDirectory);
         }
@@ -499,23 +568,22 @@ internal static class LiveQueryRunner
     // DEFAULT options record (no --orphans/--entrypoints/--async/--raw/--limit/--format on the live surface
     // yet), so the rendering is directly comparable to `rig callers <to>` against a store of the same tree.
     private static Task<LiveAnswer> CallersAsync(string pattern, LiveFactSource facts, string workingDirectory) =>
-        RunCallersAsync(
-            new CallersCommand.Options(
-                ToPattern: pattern,
-                RootsOnly: false,
-                EntrypointsOnly: false,
-                IncludeReverseOnly: false,
-                Async: false,
-                IncludeDelivery: false,
-                Raw: false,
-                ExtraRules: [],
-                Depth: null,
-                Format: null,
-                Limit: null,
-                Time: false
-            ),
-            facts,
-            workingDirectory
+        RunCallersAsync(DefaultCallersOptions(pattern), facts, workingDirectory);
+
+    private static CallersCommand.Options DefaultCallersOptions(string pattern) =>
+        new(
+            ToPattern: pattern,
+            RootsOnly: false,
+            EntrypointsOnly: false,
+            IncludeReverseOnly: false,
+            Async: false,
+            IncludeDelivery: false,
+            Raw: false,
+            ExtraRules: [],
+            Depth: null,
+            Format: null,
+            Limit: null,
+            Time: false
         );
 
     private static Task<LiveAnswer> RunCallersAsync(CallersCommand.Options options, LiveFactSource facts, string workingDirectory) =>
