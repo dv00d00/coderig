@@ -132,6 +132,16 @@ internal static class CallersCommand
         bool Time
     );
 
+    // ShortName truncates at the parameter list, which drops the trailing `~λN` marker from a contained
+    // lambda DocID. Preserve that marker in callers' human labels so a method and its lambda (or several
+    // lambdas at different reverse depths) cannot render as duplicate nodes. TSV keeps the exact DocID.
+    internal static string HumanNodeLabel(string symbolId)
+    {
+        var marker = symbolId.IndexOf("~λ", StringComparison.Ordinal);
+        var label = ShortName(symbolId);
+        return marker < 0 || label.Contains("~λ", StringComparison.Ordinal) ? label : label + symbolId[marker..];
+    }
+
     // The graph shape is shared by store and live execution. Raw means "no traversal shaping", while
     // redirect remains load-bearing: it retains/rebinds an otherwise external convenience overload to the
     // first-party virtual hatch and was intentionally never part of raw's bypass.
@@ -415,12 +425,12 @@ internal static class CallersCommand
             io.TextOutput.Output.WriteLine($"{Indent.L1}Matched nodes ({matched.Count}):");
             foreach (var kv in matched)
             {
-                io.TextOutput.Output.WriteLine($"{Indent.L2}{ShortName(kv.Key)}");
+                io.TextOutput.Output.WriteLine($"{Indent.L2}{HumanNodeLabel(kv.Key)}");
             }
         }
         foreach (var kv in confirmedCallers.Take(max))
         {
-            io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
+            io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {HumanNodeLabel(kv.Key)}");
         }
         if (confirmedCallers.Count > max)
         {
@@ -434,7 +444,7 @@ internal static class CallersCommand
             io.TextOutput.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {reverseOnlyCallers.Count}");
             foreach (var kv in reverseOnlyCallers.Take(max))
             {
-                io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {HumanNodeLabel(kv.Key)}");
             }
         }
 
@@ -593,7 +603,7 @@ internal static class CallersCommand
                 foreach (var m in frontier.Take(MaxFrontierListed))
                 {
                     var where = string.IsNullOrEmpty(m.FilePath) ? "" : $"  {m.FilePath}:{m.Line}";
-                    output.WriteLine($"{Indent.L2}{ShortName(m.SymbolId)}{where}");
+                    output.WriteLine($"{Indent.L2}{HumanNodeLabel(m.SymbolId)}{where}");
                 }
 
                 if (frontier.Count > MaxFrontierListed)

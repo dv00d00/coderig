@@ -73,13 +73,7 @@ internal static class LiveQueryRunner
                 return await ServePathAsync(request, facts, workingDirectory);
 
             case LiveQueryVerbs.Callers:
-                return await ServeAsync<CallersCommand.Options>(
-                    request,
-                    Normalize,
-                    o => o.ExtraRules,
-                    IsValidCallersOptions,
-                    o => RunCallersAsync(o, facts, workingDirectory)
-                );
+                return await ServeCallersAsync(request, facts, workingDirectory);
 
             case LiveQueryVerbs.Tree:
                 return await ServeAsync<TreeCommand.Options>(
@@ -356,6 +350,47 @@ internal static class LiveQueryRunner
             : new RequestResult(await RunPathAsync(options, facts, workingDirectory), null);
     }
 
+    private static async Task<RequestResult> ServeCallersAsync(LiveQueryRequest request, LiveFactSource facts, string workingDirectory)
+    {
+        if (Decode<CallersCommand.Options>(request.Options) is not { } decoded)
+        {
+            return RequestResult.Declined($"unreadable options for `{request.Verb}`");
+        }
+
+        var options = Normalize(decoded);
+        if (!IsStructurallyValidCallersOptions(options))
+        {
+            return RequestResult.Declined($"unreadable options for `{request.Verb}`");
+        }
+
+        if (options.ExtraRules is { Count: > 0 })
+        {
+            return RequestResult.Declined(RulesNotHonoured);
+        }
+
+        if (!IsValidExactForwardMode(options.Async, options.IncludeDelivery))
+        {
+            // These are valid store-backed callers modes, not malformed transport options. Naming the
+            // missing resident capability makes the client's disclosed store fallback read as intentional.
+            var unsupported = new List<string>(2);
+            if (options.Async)
+            {
+                unsupported.Add("`--async`");
+            }
+            if (options.IncludeDelivery)
+            {
+                unsupported.Add("`--include-delivery`");
+            }
+
+            var requirement = unsupported.Count == 1 ? "this traversal mode requires" : "these traversal modes require";
+            return RequestResult.Declined(
+                $"resident `callers` does not yet support {string.Join(" and ", unsupported)}; {requirement} the immutable store"
+            );
+        }
+
+        return new RequestResult(await RunCallersAsync(options, facts, workingDirectory), null);
+    }
+
     private static bool IsValidPathOptions(PathCommand.Options options) =>
         !string.IsNullOrWhiteSpace(options.FromPattern)
         && !string.IsNullOrWhiteSpace(options.ToPattern)
@@ -376,9 +411,11 @@ internal static class LiveQueryRunner
         && (options.Limit is null or > 0);
 
     private static bool IsValidCallersOptions(CallersCommand.Options options) =>
+        IsStructurallyValidCallersOptions(options) && IsValidExactForwardMode(options.Async, options.IncludeDelivery);
+
+    private static bool IsStructurallyValidCallersOptions(CallersCommand.Options options) =>
         !string.IsNullOrWhiteSpace(options.ToPattern)
         && !(options.RootsOnly && options.EntrypointsOnly)
-        && IsValidExactForwardMode(options.Async, options.IncludeDelivery)
         && IsValidDepth(options.Depth)
         && (options.Limit is null or > 0);
 
