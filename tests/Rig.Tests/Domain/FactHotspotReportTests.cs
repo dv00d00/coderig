@@ -48,8 +48,8 @@ public sealed class FactHotspotReportTests
         row.HazardKinds.ShouldBe(2);
         row.AmplificationSites.ShouldBe(1);
         row.ResidualDispatchFan.ShouldBe(2);
-        row.DispatchIncomingEdges.ShouldBe(4); // raw un-narrowed graph edges, as DispatchFanReport defines it
-        row.DispatchRank.ShouldBe(8);
+        row.DispatchIncomingEdges.ShouldBe(3); // distinct physical source sites after source-method aggregation
+        row.DispatchRank.ShouldBe(6);
     }
 
     [Test]
@@ -67,6 +67,77 @@ public sealed class FactHotspotReportTests
 
         generated.IsGenerated.ShouldBeTrue();
         generated.Lines.ShouldBe(1);
+    }
+
+    [Test]
+    public void Collapses_monomorphized_executions_into_source_method_metrics_without_phantom_rows()
+    {
+        const string caller = "M:N.Entry.Go";
+        const string open = "M:N.Base.Run``1";
+        const string work = "M:N.Work.Save";
+        const string one = "M:N.One.Run``1";
+        const string two = "M:N.Two.Run``1";
+        var intRun = MonomorphizedNodeId.For(open, [], ["System.Int32"]);
+        var stringRun = MonomorphizedNodeId.For(open, [], ["System.String"]);
+        var graph = new FactGraphData(
+            CallEdges:
+            [
+                new CallEdge(caller, intRun, "invocation", "Entry.cs", 4),
+                new CallEdge(caller, stringRun, "invocation", "Entry.cs", 4),
+                new CallEdge(intRun, work, "invocation", "Base.cs", 8),
+                new CallEdge(stringRun, work, "invocation", "Base.cs", 8),
+            ],
+            ImplementsEdges: [],
+            Methods:
+            [
+                new MethodRef(caller, "Go", "T:N.Entry"),
+                new MethodRef(open, "Run", "T:N.Base"),
+                new MethodRef(work, "Save", "T:N.Work"),
+                new MethodRef(one, "Run", "T:N.One", IsOverride: true),
+                new MethodRef(two, "Run", "T:N.Two", IsOverride: true),
+            ],
+            BaseEdges: [new BaseEdge("T:N.One", "T:N.Base"), new BaseEdge("T:N.Two", "T:N.Base")],
+            MinedDispatch: [new DispatchFact(open, one, "override"), new DispatchFact(open, two, "override")]
+        );
+        var methods = new[]
+        {
+            new FactHotspotReport.Method(caller, "Go", "Entry.cs", 1, 5, false, false),
+            new FactHotspotReport.Method(open, "Run", "Base.cs", 6, 10, false, false),
+            new FactHotspotReport.Method(work, "Save", "Work.cs", 1, 3, false, false),
+        };
+        var effects = new[]
+        {
+            new DerivedEffect("db", "write", "Row", intRun, "Base.cs", 9),
+            new DerivedEffect("db", "write", "Row", stringRun, "Base.cs", 9),
+        };
+        var hazards = new[]
+        {
+            new FactHotspotReport.FindingSite(intRun, "dual_write", "Base.cs", 9),
+            new FactHotspotReport.FindingSite(stringRun, "dual_write", "Base.cs", 9),
+        };
+
+        var rows = FactHotspotReport.Build(graph, methods, effects, hazards, []);
+
+        rows.Count.ShouldBe(3);
+        rows.ShouldAllBe(r => !r.Id.Contains(MonomorphizedNodeId.Marker, StringComparison.Ordinal));
+        var callerRow = rows.Single(r => r.Id == caller);
+        callerRow.CalleeMethods.ShouldBe(1);
+        callerRow.OutgoingCallSites.ShouldBe(1);
+        var openRow = rows.Single(r => r.Id == open);
+        openRow.CallerMethods.ShouldBe(1);
+        openRow.IncomingCallSites.ShouldBe(1);
+        openRow.CalleeMethods.ShouldBe(1);
+        openRow.OutgoingCallSites.ShouldBe(1);
+        openRow.EffectSites.ShouldBe(1);
+        openRow.EffectKinds.ShouldBe(1);
+        openRow.HazardSites.ShouldBe(1);
+        openRow.HazardKinds.ShouldBe(1);
+        openRow.ResidualDispatchFan.ShouldBe(2);
+        openRow.DispatchIncomingEdges.ShouldBe(1);
+        openRow.DispatchRank.ShouldBe(2);
+        var workRow = rows.Single(r => r.Id == work);
+        workRow.CallerMethods.ShouldBe(1);
+        workRow.IncomingCallSites.ShouldBe(1);
     }
 
     private static FactGraphData Graph()

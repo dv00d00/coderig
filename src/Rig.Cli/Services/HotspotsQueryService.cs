@@ -47,8 +47,8 @@ public static class HotspotsQueryService
             storeDir: rigDirectory,
             rulesHash: rulesHash
         );
-        var methodMeta = await Reads.LoadDeadCodeMethodsAsync(context);
-        var endLines = await Reads.LoadMethodEndLinesAsync(context);
+        var methodMeta = await Reads.LoadHotspotMethodsAsync(context);
+        var endLines = await Reads.LoadHotspotEndLinesAsync(context);
 
         // Detectors see the complete effect set. Intrinsic hiding is applied only to the report's effect
         // metrics, after graph-tier hazard derivation has consumed the unfiltered set.

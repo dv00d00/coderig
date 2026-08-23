@@ -647,6 +647,24 @@ public static class Reads
             .ToList();
     }
 
+    // Hotspots ranks executable source bodies, including persisted lambda symbols. Keep this separate from
+    // LoadDeadCodeMethodsAsync: lambdas are useful refactoring rows but are not part of dead-code semantics.
+    public static async Task<IReadOnlyList<DeadCodeFinder.MethodMeta>> LoadHotspotMethodsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var rows = await context
+            .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method || s.Kind == "lambda")
+            .Select(SymbolFactRows.MethodMetaRow)
+            .ToListAsync(cancellationToken);
+
+        return rows.GroupBy(s => s.SymbolId, StringComparer.Ordinal)
+            .Select(g => g.First())
+            .Select(SymbolFactProjections.ToMethodMeta)
+            .ToList();
+    }
+
     // SymbolId -> the declaration's END line, for the method symbols only. Used by `rig impact` to overlap
     // each changed method's source extent [Line, EndLine] against a git diff's changed line ranges. Read
     // via raw ADO and GUARDED by ColumnExists: the EndLine column was added after the original schema, so a
@@ -672,6 +690,36 @@ public static class Reads
             var id = reader.GetString(0);
             var end = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
             // First write wins, mirroring LoadDeadCodeMethodsAsync's GroupBy(SymbolId).First().
+            endLines.TryAdd(id, end);
+        }
+
+        return endLines;
+    }
+
+    // Hotspot source density needs the declaration extent for lambdas as well as ordinary methods. Impact
+    // deliberately continues to call LoadMethodEndLinesAsync and therefore retains its method-only universe.
+    public static async Task<IReadOnlyDictionary<string, int>> LoadHotspotEndLinesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        var endLines = new Dictionary<string, int>(StringComparer.Ordinal);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT SymbolId, EndLine FROM symbol_facts WHERE Kind = $method OR Kind = $lambda;";
+        var method = command.CreateParameter();
+        method.ParameterName = "$method";
+        method.Value = SymbolKinds.Method;
+        command.Parameters.Add(method);
+        var lambda = command.CreateParameter();
+        lambda.ParameterName = "$lambda";
+        lambda.Value = "lambda";
+        command.Parameters.Add(lambda);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetString(0);
+            var end = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
             endLines.TryAdd(id, end);
         }
 
