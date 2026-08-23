@@ -98,9 +98,18 @@ internal static class ImpactEngine
         using var cache = cacheRaw;
 
         // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → return WITHOUT loading the
-        // base store or shaping/walking either graph.
+        // base graph or shaping/walking either graph.
         if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
         {
+            // The cached answer is still backed by BASE as well as the caller-owned HEAD context. This
+            // lightweight open exists only on a cache hit; the cold path discloses during its existing
+            // provenance/base-compute opens.
+            if (StoreAnswerDisclosure.IsActive)
+            {
+                await using var baseContext = new RigDbContext(baseDbPath, readOnly: true);
+                await StoreAnswerDisclosure.DiscloseCurrentAsync(baseContext, baseDbPath, baseRef);
+            }
+
             if (onPhase is not null)
             {
                 await onPhase("cache hit", 0);
@@ -129,6 +138,7 @@ internal static class ImpactEngine
         await Tick("head: reach sets + footprints + hazards");
         var impactDiff = await AssembleImpactDiffAsync(
             baseDbPath: baseDbPath,
+            baseRef: baseRef,
             rules: rules,
             mode: mode,
             headData: headData,
@@ -294,6 +304,7 @@ internal static class ImpactEngine
     // one ImpactDiff. The branch store is represented by headData + branchSide — no second HEAD open needed.
     private static async Task<ImpactDiff> AssembleImpactDiffAsync(
         string baseDbPath,
+        string baseRef,
         RuleSet rules,
         FactPathFinder.TraversalMode mode,
         HeadSideData headData,
@@ -305,6 +316,7 @@ internal static class ImpactEngine
         var headGuarded = GuardConditionDiff.GuardedEdges(headData.Graph);
         var baseSide = await ComputeBaseSideAsync(
             baseDbPath: baseDbPath,
+            baseRef: baseRef,
             rules: rules,
             mode: mode,
             branchEps: branchSide.BranchEps,
@@ -642,6 +654,7 @@ internal static class ImpactEngine
     private static async Task<StoreProvenance> ResolveBaseProvenanceAsync(string baseDbPath, string baseRef)
     {
         await using var baseContext = new RigDbContext(baseDbPath, readOnly: true);
+        await StoreAnswerDisclosure.DiscloseCurrentAsync(baseContext, baseDbPath, baseRef);
         return await ReadProvenanceAsync(baseContext, baseRef);
     }
 
@@ -1128,6 +1141,7 @@ internal static class ImpactEngine
         EpDiff EpDiff
     )> ComputeBaseSideAsync(
         string baseDbPath,
+        string baseRef,
         RuleSet rules,
         FactPathFinder.TraversalMode mode,
         // The branch's entry points, so the EP set-diff is computed HERE from the base EP set this method
@@ -1145,6 +1159,7 @@ internal static class ImpactEngine
     )
     {
         await using var context = new RigDbContext(baseDbPath, readOnly: true);
+        await StoreAnswerDisclosure.DiscloseCurrentAsync(context, baseDbPath, baseRef);
         var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
 
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);

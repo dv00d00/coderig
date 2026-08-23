@@ -9,8 +9,14 @@ namespace Rig.Cli.CommandLine;
 // message shared by runs/di/files/graph.
 internal static class CommandGuard
 {
-    internal static async Task<int> RunGuardedAsync(string workingDirectory, TextWriter error, Func<Task<int>> body)
+    internal static async Task<int> RunGuardedAsync(
+        string workingDirectory,
+        TextWriter error,
+        Func<Task<int>> body,
+        bool discloseStore = true
+    )
     {
+        using var disclosure = StoreAnswerDisclosure.BeginInvocation(workingDirectory, error, discloseStore);
         try
         {
             return await body();

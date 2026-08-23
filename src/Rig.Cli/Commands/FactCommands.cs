@@ -81,7 +81,8 @@ internal static class FactCommands
                     // Exit 0 even with stale stores present: the listing SUCCEEDED and reported them. A
                     // non-zero exit here is what broke the health check.
                     return 0;
-                }
+                },
+                discloseStore: false
             )
         );
         return cmd;

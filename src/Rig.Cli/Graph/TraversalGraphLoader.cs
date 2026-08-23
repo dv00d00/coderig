@@ -47,8 +47,9 @@ internal static class TraversalGraphLoader
     // CREATE the store and must not be gated. On a gate failure the context is disposed before rethrow.
     internal static async Task<RigDbContext> OpenReadContextGatedAsync(WorkspaceLocation workspaceLocation)
     {
-        var context = OpenReadContext(workspaceLocation);
+        var context = OpenReadContext(workspaceLocation, storeDir: out var storeDir);
         await AssertReadableAsync(context);
+        await StoreAnswerDisclosure.DiscloseCurrentAsync(context, storeDir, workspaceLocation.StoreRef);
         return context;
     }
 
@@ -57,6 +58,7 @@ internal static class TraversalGraphLoader
     {
         var context = OpenReadContext(ws, storeDir: out var storeDir);
         await AssertReadableAsync(context);
+        await StoreAnswerDisclosure.DiscloseCurrentAsync(context, storeDir, ws.StoreRef);
         return (context, storeDir);
     }
 

@@ -63,7 +63,9 @@ public sealed class SymbolMachineFormatTests
         );
 
         exit.ShouldBe(0, stderr);
-        stderr.ShouldBeEmpty("JSON carries its own truncation metadata");
+        stderr.ShouldContain("store: symbols000001 (LATEST)");
+        stderr.ShouldContain("freshness unknown: no source commit");
+        stderr.ShouldNotContain("symbol results truncated");
         using var json = JsonDocument.Parse(stdout);
         var root = json.RootElement;
         root.GetProperty("query").GetString().ShouldBe("BuildIndex");
