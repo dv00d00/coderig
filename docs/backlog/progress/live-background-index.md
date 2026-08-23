@@ -139,6 +139,14 @@ symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggere
   ordinary tests cover the reverse index, loader, closure, planner, transaction, and request shaping; one new
   serialized DeepChain gate proves pre/post-edit store parity, exact debt repayment, repeat-query reuse, and no
   `traversalGraph`/`eventSites` materialization.
+- **Agent dogfood gate:** the installed `037b15ef` tool indexed a healthy disposable clone in **17.45s**
+  (`--restore --no-build-cache`), booted the resident host in **13.6s**, answered live callers in **0.36s**,
+  incorporated a new forwarding caller plus exact debt repayment in **3.37s**, then repeated the current answer
+  in **0.23s**. Verdict: ready for controlled agent feedback. Three UX debts remain: a bare fresh-clone index
+  can publish a partial store and poison the design-time-build cache such that `--restore` alone reuses all
+  degraded entries (1,299 diagnostics here; `--no-build-cache` recovered); routed async callers correctly fall
+  back but misleadingly say `unreadable options`; and the immutable callers path duplicated the matched target
+  while the keyed live path did not.
 - **macOS suite gate:** canonical temp roots prevent NuGet from seeing `/var` and `/private/var` as two copies of
   one referenced project, and the resident equivalence fixture uses deterministic one-at-a-time project loading.
   All tests that launch `dotnet`, load/retain solutions, drive CLI indexing/watch hosts, or consume the shared
@@ -146,12 +154,14 @@ symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggere
   ordinary suite at normal parallelism, then runs the integration process with one outer worker on every OS.
   SolutionAnalyzer is also pinned to one project worker for that isolated process, and MSBuild node reuse is
   disabled there so evaluated state cannot cross temporary playground roots. A single source manifest owns the
-  classification. On macOS the ordinary lane now passes **971/971 in 10s**; the serialized integration lane
-  passes **200 + one intentional skip in 4m50s**. Exact discovery is **1,172**, with zero failures. The process
-  boundary removes nested workspace/MSBuild fan-out risk without throttling unrelated tests and turns the slow
-  lane into a deterministic release gate rather than a 17-minute main-suite outlier.
-- **Next:** delivery-aware demand projection for async live queries. Do not substitute a project-reference cone
-  for the demand graph.
+  classification. On the 2026-08-23 macOS release gate the ordinary lane passed **1,006/1,006 in 12s**; the
+  serialized integration lane passed **201 + one intentional skip in 10m12s**. Exact discovery is **1,208**,
+  with zero failures. The process boundary removes nested workspace/MSBuild fan-out risk without throttling
+  unrelated tests, but the isolated release lane has regressed from its earlier 4m50s baseline and remains a
+  profiling/optimization target; it is deterministic, no longer a 17-minute main-suite outlier, but not cheap.
+- **Next:** controlled agent UX feedback; harden degraded design-time-build cache recovery and the live decline
+  message/immutable matched-target presentation; then add delivery-aware demand projection for async live
+  queries. Do not substitute a project-reference cone for the demand graph.
 
 ## Why — the workflow that makes this the target
 
