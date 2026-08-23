@@ -142,11 +142,18 @@ symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggere
 - **Agent dogfood gate:** the installed `037b15ef` tool indexed a healthy disposable clone in **17.45s**
   (`--restore --no-build-cache`), booted the resident host in **13.6s**, answered live callers in **0.36s**,
   incorporated a new forwarding caller plus exact debt repayment in **3.37s**, then repeated the current answer
-  in **0.23s**. Verdict: ready for controlled agent feedback. Three UX debts remain: a bare fresh-clone index
-  can publish a partial store and poison the design-time-build cache such that `--restore` alone reuses all
-  degraded entries (1,299 diagnostics here; `--no-build-cache` recovered); routed async callers correctly fall
-  back but misleadingly say `unreadable options`; and the immutable callers path duplicated the matched target
-  while the keyed live path did not.
+  in **0.23s**. Verdict: ready for controlled agent feedback. That workout exposed three UX defects, now
+  hardened together: design-time-build sidecars are staged unadmitted and only the exact candidate payload
+  that passes a zero-error base Roslyn compilation is atomically promoted (failed/no-compilation projects and
+  later-bad hits are evicted; legacy sidecars fail closed); routed async/delivery callers name the unsupported
+  resident capability before falling back; and human callers labels preserve `~λN` so a matched method and its
+  contained lambda, or generated callers at adjacent depths, no longer render as duplicate rows. Candidate
+  identity tokens plus per-sidecar cross-process locks prevent same-fingerprint writers from cross-admitting.
+  Disposable-clone acceptance: the degraded bare run reported **0 hits / 6 misses**, 1,299 diagnostics, and
+  promoted only **2 clean / rejected 4 bad** projects; one ordinary `--restore` then used **2 hits / 4 misses**,
+  promoted all four rebuilt projects, and produced the healthy **5,606 symbols / 35,322 refs** store; the next
+  bare run used **6 hits / 0 misses** and stayed healthy. Real callers output now shows
+  `EnsureExactCallersAsync~λ0`, `Build~λ0`/`Build~λ1`, and an explicit immutable-store fallback reason.
 - **macOS suite gate:** canonical temp roots prevent NuGet from seeing `/var` and `/private/var` as two copies of
   one referenced project, and the resident equivalence fixture uses deterministic one-at-a-time project loading.
   All tests that launch `dotnet`, load/retain solutions, drive CLI indexing/watch hosts, or consume the shared
@@ -154,14 +161,13 @@ symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggere
   ordinary suite at normal parallelism, then runs the integration process with one outer worker on every OS.
   SolutionAnalyzer is also pinned to one project worker for that isolated process, and MSBuild node reuse is
   disabled there so evaluated state cannot cross temporary playground roots. A single source manifest owns the
-  classification. On the 2026-08-23 macOS release gate the ordinary lane passed **1,006/1,006 in 12s**; the
-  serialized integration lane passed **201 + one intentional skip in 10m12s**. Exact discovery is **1,208**,
+  classification. On the final 2026-08-23 macOS hardening gate the ordinary lane passed **1,029/1,029 in
+  12s**; the serialized integration lane passed **201 + one intentional skip in 10m25s**. Exact discovery is **1,231**,
   with zero failures. The process boundary removes nested workspace/MSBuild fan-out risk without throttling
   unrelated tests, but the isolated release lane has regressed from its earlier 4m50s baseline and remains a
   profiling/optimization target; it is deterministic, no longer a 17-minute main-suite outlier, but not cheap.
-- **Next:** controlled agent UX feedback; harden degraded design-time-build cache recovery and the live decline
-  message/immutable matched-target presentation; then add delivery-aware demand projection for async live
-  queries. Do not substitute a project-reference cone for the demand graph.
+- **Next:** controlled agent UX feedback; then add delivery-aware demand projection for async live queries.
+  Do not substitute a project-reference cone for the demand graph.
 
 ## Why — the workflow that makes this the target
 

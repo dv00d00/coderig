@@ -99,8 +99,8 @@ permits a deliberate second stdin-only host, `--once` exits after boot, `--query
 While the resident host runs, ordinary one-shot `reaches`, `path`, `callers`, and `tree` commands in
 that directory route to it over the local endpoint and disclose fact freshness/reconciliation state.
 Resident exact refinement currently serves the synchronous forms; `--async` / `--include-delivery`
-decline the live route and the one-shot command falls back to the immutable store rather than serving a
-partial live graph.
+decline the live route with an explicit unsupported-capability reason, and the one-shot command falls back
+to the immutable store rather than serving a partial live graph.
 `derive` deliberately remains store-backed and `impact` still requires two immutable commit stores.
 `rig serve` is the store-backed browser explorer; do not assume it is the live host.
 
