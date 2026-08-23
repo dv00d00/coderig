@@ -15,6 +15,11 @@ public interface IFactGraphView
     IReadOnlyList<ReferenceFact> ReferencesFrom(string enclosingSymbolId);
     IReadOnlyList<ReferenceFact> ReferencesTo(string targetSymbolId);
 
+    // Redirect and generic-factory rules match a method family rather than one exact overload.
+    // Resident implementations provide this canonical keyed inverse so callers do not scan the corpus.
+    IReadOnlyList<ReferenceFact> ReferencesToMethodKey(string methodKey) =>
+        throw new NotSupportedException("This fact graph does not expose normalized reference-target lookup.");
+
     // Raw symbol-fact catalogs preserve every emitted row and cover every symbol kind.
     IReadOnlyList<SymbolFact> SymbolsById(string symbolId);
     IReadOnlyList<SymbolFact> SymbolsByContainingSymbol(string containingSymbolId);

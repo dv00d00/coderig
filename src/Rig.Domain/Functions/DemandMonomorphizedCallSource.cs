@@ -408,6 +408,8 @@ public sealed class DemandMonomorphizedCallSource : IForwardCallSource
 
         public IReadOnlyList<ReferenceFact> ReferencesTo(string targetSymbolId) => inner.ReferencesTo(targetSymbolId);
 
+        public IReadOnlyList<ReferenceFact> ReferencesToMethodKey(string methodKey) => inner.ReferencesToMethodKey(methodKey);
+
         public IReadOnlyList<SymbolFact> SymbolsById(string symbolId)
         {
             var rows = inner.SymbolsById(symbolId);

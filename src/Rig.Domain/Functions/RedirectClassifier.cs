@@ -47,3 +47,24 @@ public static class RedirectClassifier
         return paren < 0 ? docId : docId[..paren];
     }
 }
+
+// Canonical inverse-reference key shared by redirect and generic-factory rules. Reference facts carry
+// method DocIDs while factory rules omit the DocID prefix and method generic arity; normalizing both sides
+// keeps this lookup broad, with caller-local projection retaining responsibility for semantic filtering.
+public static class ReferenceTargetMethodKey
+{
+    public static string Normalize(string docIdOrRuleMethod)
+    {
+        ArgumentNullException.ThrowIfNull(docIdOrRuleMethod);
+
+        var key = docIdOrRuleMethod.StartsWith("M:", StringComparison.Ordinal) ? docIdOrRuleMethod[2..] : docIdOrRuleMethod;
+        var paren = key.IndexOf('(', StringComparison.Ordinal);
+        if (paren >= 0)
+        {
+            key = key[..paren];
+        }
+
+        var methodArity = key.LastIndexOf("``", StringComparison.Ordinal);
+        return methodArity < 0 ? key : key[..methodArity];
+    }
+}

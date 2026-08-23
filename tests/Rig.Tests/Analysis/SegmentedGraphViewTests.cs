@@ -130,6 +130,54 @@ public sealed class SegmentedGraphViewTests
     }
 
     [Test]
+    public void Normalized_reference_target_lookup_covers_overloads_and_honors_replacement_and_tombstones()
+    {
+        const string emitterA = "/repo/A.cs";
+        const string emitterB = "/repo/B.cs";
+        const string saveDocId = "M:External.Entity.Save";
+        const string saveKey = "External.Entity.Save";
+        const string factoryKey = "N.Entity.New";
+        var saveNoArgs = Reference("M:App.CallerA", saveDocId, emitterA, 1);
+        var saveBool = Reference("M:App.CallerB", $"{saveDocId}(System.Boolean)", emitterB, 2);
+        var factoryInt = Reference("M:App.FactoryA", "M:N.Entity.New``3(System.Int32)", emitterA, 3);
+        var factoryGuid = Reference("M:App.FactoryB", "M:N.Entity.New``3(System.Guid)", emitterB, 4);
+        var unrelated = Reference("M:App.CallerC", "M:External.Entity.Delete()", emitterA, 3);
+        var baseLayer = SegmentedFactGraphBase.Build(Result(references: [saveNoArgs, saveBool, factoryInt, factoryGuid, unrelated]));
+        var captured = new SegmentedFactGraphView(baseLayer, SegmentedFactGraphOverlay.Empty);
+
+        ReferenceTargetMethodKey.Normalize("M:N.Entity.New``3(System.Int32)").ShouldBe(factoryKey);
+        ReferenceTargetMethodKey.Normalize(factoryKey).ShouldBe(factoryKey);
+        AssertRows(captured.ReferencesToMethodKey(saveKey), [saveNoArgs, saveBool]);
+        AssertRows(captured.ReferencesToMethodKey(factoryKey), [factoryInt, factoryGuid]);
+        captured.ReferencesToMethodKey(saveKey).ShouldNotContain(unrelated);
+        captured
+            .LookupReferencesToMethodKey(saveKey)
+            .Diagnostics.ShouldBe(new GraphLookupDiagnostics(KeyPartitionsExamined: 1, EmitterShardsExamined: 2, RowsExamined: 2));
+
+        var savePredicate = Reference("M:App.CallerB2", $"{saveDocId}(External.IPredicate)", emitterB, 5);
+        var factoryLong = Reference("M:App.FactoryB2", "M:N.Entity.New``3(System.Int64)", emitterB, 6);
+        var replacedOverlay = SegmentedFactGraphOverlay.Empty.Replace(
+            new Dictionary<string, FileFacts> { [emitterB] = Slice(references: [savePredicate, factoryLong]) }
+        );
+        var replaced = new SegmentedFactGraphView(baseLayer, replacedOverlay);
+
+        AssertRows(replaced.ReferencesToMethodKey(saveKey), [saveNoArgs, savePredicate]);
+        AssertRows(replaced.ReferencesToMethodKey(factoryKey), [factoryInt, factoryLong]);
+        replaced.ReferencesToMethodKey(saveKey).ShouldNotContain(saveBool);
+        replaced.ReferencesToMethodKey(factoryKey).ShouldNotContain(factoryGuid);
+
+        var tombstonedOverlay = replacedOverlay
+            .Replace(new Dictionary<string, FileFacts> { [emitterB] = Slice() })
+            .Replace(new Dictionary<string, FileFacts> { [emitterA] = Slice() });
+        var tombstoned = new SegmentedFactGraphView(baseLayer, tombstonedOverlay);
+
+        tombstoned.ReferencesToMethodKey(saveKey).ShouldBeEmpty();
+        tombstoned.ReferencesToMethodKey(factoryKey).ShouldBeEmpty();
+        AssertRows(captured.ReferencesToMethodKey(saveKey), [saveNoArgs, saveBool]);
+        AssertRows(captured.ReferencesToMethodKey(factoryKey), [factoryInt, factoryGuid]);
+    }
+
+    [Test]
     public void Replacement_removes_both_reference_directions_empty_tombstones_and_preserves_captured_view()
     {
         const string emitter = "/repo/Changed.cs";
@@ -305,7 +353,7 @@ public sealed class SegmentedGraphViewTests
         );
         var after = new SegmentedFactGraphView(baseLayer, afterOverlay);
 
-        afterOverlay.Diagnostics.ShouldBe(new GraphPartitionUpdateDiagnostics(EmitterCount: 1, RowCount: 1, PriorShardsRemoved: 2));
+        afterOverlay.Diagnostics.ShouldBe(new GraphPartitionUpdateDiagnostics(EmitterCount: 1, RowCount: 1, PriorShardsRemoved: 3));
         after.BaseLayer.ShouldBeSameAs(before.BaseLayer);
         after.BaseLayer.Diagnostics.ShouldBe(new GraphPartitionBuildDiagnostics(1, unrelatedCount + 1, 2 * (unrelatedCount + 1)));
         after.ReferenceForwardPartitionIdentity(sharedCaller).ShouldBeSameAs(unrelatedPartition);
