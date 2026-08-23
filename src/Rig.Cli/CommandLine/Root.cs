@@ -36,6 +36,7 @@ internal static class Root
             CallersCommand.Build(output, error, workingDirectory),
             ReachesCommand.Build(output, error, workingDirectory),
             DispatchFansCommand.Build(output, error, workingDirectory),
+            HotspotsCommand.Build(output, error, workingDirectory),
             DeriveCommand.Build(output, error, workingDirectory),
             EffectsDiffCommand.Build(output, error, workingDirectory),
             EntryPointsCommand.Build(output, error, workingDirectory),
