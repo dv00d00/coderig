@@ -55,9 +55,14 @@ internal static class QueryCacheKeys
     // warm pre-filter response can never masquerade as the new default-hidden response.
     internal const int EffectViewSchema = 1;
 
-    // v1: transparent whole-store method hotspot metrics (fan-in/out, effects+density, hazards,
-    // amplification, and residual dispatch fan). Sort/top/lambda/generated filters are presentation-only.
-    internal const int HotspotSchema = 1;
+    // v1: effects-diff joins canonical generic-method effects through concrete monomorphized executions and
+    // fails closed on overload unions. The web comparison is client-cached, so its derivation token must move.
+    internal const int EffectsDiffSchema = 1;
+
+    // v1: transparent whole-store method hotspot metrics. v1->v2: persisted lambdas joined the method
+    // universe and monomorphized graph/effect/hazard identities now aggregate onto their source method.
+    // Sort/top/lambda/generated filters are presentation-only.
+    internal const int HotspotSchema = 2;
 
     // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)
@@ -71,7 +76,7 @@ internal static class QueryCacheKeys
     // version — the client can never keep serving an artifact whose server-side schema advanced. This is the
     // desync guard that a single hand-bumped client constant would lack, and it needs no MVID.
     internal static string DerivationSchemaToken() =>
-        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}.{EffectViewSchema}.{HotspotSchema}";
+        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}.{EffectViewSchema}.{EffectsDiffSchema}.{HotspotSchema}";
 
     // Identity of the current store for cache keying + invalidation: rig.db size + last-write time.
     // `rig index` publishes a fresh db (atomic rename → new mtime/size) and `rig graph` rewrites the
