@@ -24,7 +24,10 @@ public sealed class DtbFunctionalCoreTests
     public void Decide_is_a_hit_when_the_stored_fingerprint_matches()
     {
         var info = Pbi();
-        var decision = BuildCacheDecision.Decide(currentFingerprint: "fp1", stored: new StoredBuild(Fingerprint: "fp1", Info: info));
+        var decision = BuildCacheDecision.Decide(
+            currentFingerprint: "fp1",
+            stored: new StoredBuild(Fingerprint: "fp1", Info: info, Admitted: true, CandidateId: "admitted-candidate")
+        );
         decision.ShouldBeOfType<BuildCacheDecision.Hit>().Info.ShouldBeSameAs(info);
     }
 

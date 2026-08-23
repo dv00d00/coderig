@@ -41,6 +41,10 @@ internal static class SolutionSourceLoader
     // How many error lines the end-of-pass summary lists (pre-existing behaviour, kept).
     private const int MaxSummarisedErrors = 10;
 
+    private sealed record CheckedBuild(ProjectBuildInfo Info, bool Succeeded);
+
+    private sealed record PendingCacheAdmission(string ProjectFilePath, string? CandidateId);
+
     public static async Task<SolutionSourceSet> LoadAsync(
         string solutionPath,
         RuleSet rules,
@@ -103,6 +107,10 @@ internal static class SolutionSourceLoader
         // addProjectReferences:false loads project-to-project references from their compiled
         // DLLs rather than re-evaluating the source .csproj files.
         ReportProgress(progress, "Loading solution");
+        var compilationCache = buildCacheDir is null ? null : new BuildResultCache(buildCacheDir, framework);
+        var pendingCacheAdmissions = compilationCache is null
+            ? null
+            : new ConcurrentDictionary<string, PendingCacheAdmission>(StringComparer.OrdinalIgnoreCase);
         var workspace = BuildWorkspace(
             solutionPath,
             rules,
@@ -114,7 +122,8 @@ internal static class SolutionSourceLoader
             timings,
             buildCacheDir,
             verifyBuildCache,
-            restore
+            restore,
+            pendingCacheAdmissions
         );
         // BuildWorkspace records the finer "design-time-builds" (wall-clock) + "workspace-assembly"
         // sub-phases itself; just reset the clock here for the next phase.
@@ -133,7 +142,10 @@ internal static class SolutionSourceLoader
 
         retainWorkspace?.Invoke(workspace);
 
-        return await ReadSolutionSourcesAsync(
+        var roslynPromotedProjects = 0;
+        var roslynRejectedProjects = 0;
+
+        var loaded = await ReadSolutionSourcesAsync(
             solution: workspace.CurrentSolution,
             solutionPath: solutionPath,
             rules: rules,
@@ -142,8 +154,44 @@ internal static class SolutionSourceLoader
             progress: progress,
             parallelism: parallelism,
             timings: timings,
-            health: health
+            health: health,
+            onProjectCompilation: compilationCache is null || pendingCacheAdmissions is null
+                ? null
+                : (projectFilePath, compilationSucceeded) =>
+                {
+                    var key = NormalizeCacheProjectPath(projectFilePath);
+                    if (!pendingCacheAdmissions.TryRemove(key, out var pending))
+                    {
+                        return;
+                    }
+
+                    var promoted = ApplyCompilationCacheAdmission(
+                        compilationCache,
+                        pending.ProjectFilePath,
+                        pending.CandidateId,
+                        compilationSucceeded
+                    );
+                    if (promoted)
+                    {
+                        Interlocked.Increment(ref roslynPromotedProjects);
+                    }
+                    else if (!compilationSucceeded)
+                    {
+                        Interlocked.Increment(ref roslynRejectedProjects);
+                    }
+                }
         );
+
+        if (compilationCache is not null)
+        {
+            ReportProgress(
+                progress,
+                $"build cache Roslyn admission: {roslynPromotedProjects} candidate(s) promoted, "
+                    + $"{roslynRejectedProjects} failed/no-compilation project(s) rejected"
+            );
+        }
+
+        return loaded;
     }
 
     // The compile+read+extract pass over an already-assembled Roslyn Solution: per C# project, get the
@@ -165,7 +213,11 @@ internal static class SolutionSourceLoader
         // phase land in the same record); a direct caller (ExtractFromSolutionAsync) lets this default
         // and gets a fresh one. Both the cold path and the incremental whole-solution path go through
         // here, so there is exactly ONE collection site for located diagnostics.
-        CompilationHealthCollector? health = null
+        CompilationHealthCollector? health = null,
+        // Cold-load cache-admission seam only: true after the BASE Roslyn Compilation reports zero errors;
+        // false for diagnostics/no-compilation. Generator extraction runs later and is deliberately outside
+        // this gate. Cancellation/exception before a verdict leaves an unadmitted candidate unreadable.
+        Action<string, bool>? onProjectCompilation = null
     )
     {
         var collector = health ?? new CompilationHealthCollector();
@@ -289,6 +341,12 @@ internal static class SolutionSourceLoader
                 compilationErrors.Add($"{project.Name}: compilation unavailable");
                 Interlocked.Increment(ref totalCompilationErrors);
                 collector.AddProjectFailure(project.Name, ProjectCompileFailure.NoCompilation);
+                var unavailableProjectFilePath = project.FilePath;
+                if (!string.IsNullOrWhiteSpace(unavailableProjectFilePath))
+                {
+                    onProjectCompilation?.Invoke(unavailableProjectFilePath, false);
+                }
+
                 return; // no semantic model possible — nothing to read for this project
             }
 
@@ -323,6 +381,11 @@ internal static class SolutionSourceLoader
             }
 
             Interlocked.Add(ref totalCompilationErrors, projectErrors);
+            var projectFilePath = project.FilePath;
+            if (!string.IsNullOrWhiteSpace(projectFilePath))
+            {
+                onProjectCompilation?.Invoke(projectFilePath, projectErrors == 0);
+            }
 
             var diagSec = watch?.Elapsed.TotalSeconds ?? 0;
             watch?.Restart();
@@ -367,7 +430,8 @@ internal static class SolutionSourceLoader
         // reporting mismatches. The completeness guardrail; requires buildCacheDir to be set.
         bool verifyBuildCache = false,
         // Run the MSBuild `Restore` target before each design-time build (rig index --restore).
-        bool restore = false
+        bool restore = false,
+        ConcurrentDictionary<string, PendingCacheAdmission>? pendingCacheAdmissions = null
     )
     {
         var logWriter = progress is null ? null : new ProgressLogWriter(progress);
@@ -378,6 +442,7 @@ internal static class SolutionSourceLoader
         var cache = buildCacheDir is null ? null : new BuildResultCache(buildCacheDir, framework);
         var cacheHits = 0;
         var cacheMisses = 0;
+        var cacheRejectedBuilds = 0;
 
         // --verify-build-cache tallies: a project a HIT would have served whose fresh build MATCHED the cached
         // output, one that MISMATCHED (a latent stale-hit — the fingerprint is under-specified), and one with
@@ -386,19 +451,32 @@ internal static class SolutionSourceLoader
         var verifyMismatches = 0;
         var verifyNoBaseline = 0;
 
-        // Per project: fingerprint → cache hit (skip the build) or miss (build, convert, store). With the
+        // Per project: fingerprint → cache hit (skip the build) or miss (build, convert, stage candidate). With the
         // cache off it's just build + convert. The fingerprint reads no file contents (see
         // BuildInputFingerprint), so this is cheap relative to the build it may skip.
         // Functional-core/imperative-shell over the design-time-build cache, per project:
         //   PREPARE (impure): compute the input fingerprint (Gather→Of) + read the sidecar (Load).
         //   DECIDE  (pure):   BuildCacheDecision.Decide — hit (replay) or miss (rebuild under this fingerprint).
-        //   COMMIT  (impure): on hit return the cached output; on miss build (BuildChecked) and Store.
+        //   COMMIT  (impure): on hit return cached output; on miss build and stage an unadmitted candidate.
         // Cache off → straight to BuildChecked, no fingerprint, no sidecar.
+        void TrackCompilationAdmission(string projectFilePath, string? candidateId)
+        {
+            if (pendingCacheAdmissions is null)
+            {
+                return;
+            }
+
+            pendingCacheAdmissions[NormalizeCacheProjectPath(projectFilePath)] = new PendingCacheAdmission(
+                ProjectFilePath: projectFilePath,
+                CandidateId: candidateId
+            );
+        }
+
         ProjectBuildInfo? BuildOrLoad(string projectFilePath, Func<IAnalyzerResult?> build)
         {
             if (cache is null)
             {
-                return BuildChecked(projectFilePath, build);
+                return BuildChecked(projectFilePath, build)?.Info;
             }
 
             // VERIFY: build EVERY project (never trust a hit) and diff fresh vs what a hit would have replayed.
@@ -418,25 +496,37 @@ internal static class SolutionSourceLoader
             // COMMIT
             if (decision is BuildCacheDecision.Hit hit)
             {
+                TrackCompilationAdmission(projectFilePath, candidateId: null);
                 Interlocked.Increment(ref cacheHits);
                 return hit.Info;
             }
 
-            var info = BuildChecked(projectFilePath, build);
-            if (info is null)
+            var checkedBuild = BuildChecked(projectFilePath, build);
+            if (checkedBuild is null)
             {
                 return null;
             }
 
-            cache.Store(projectFilePath: projectFilePath, fingerprint: fingerprint, info: info);
+            var candidateId = cache.StoreCandidate(
+                projectFilePath: projectFilePath,
+                fingerprint: fingerprint,
+                info: checkedBuild.Info,
+                buildalyzerSucceeded: checkedBuild.Succeeded
+            );
+            TrackCompilationAdmission(projectFilePath, candidateId);
             Interlocked.Increment(ref cacheMisses);
-            return info;
+            if (!checkedBuild.Succeeded)
+            {
+                Interlocked.Increment(ref cacheRejectedBuilds);
+            }
+
+            return checkedBuild.Info;
         }
 
         // The build EFFECT (impure): run the design-time build, convert, and retry a degraded (0-source-file)
         // build a bounded number of times before failing the index — a degraded build would drop the project's
         // types and corrupt dependents. Shared by the cache-miss and cache-off paths.
-        ProjectBuildInfo? BuildChecked(string projectFilePath, Func<IAnalyzerResult?> build)
+        CheckedBuild? BuildChecked(string projectFilePath, Func<IAnalyzerResult?> build)
         {
             var built = build();
             if (built is null)
@@ -459,6 +549,7 @@ internal static class SolutionSourceLoader
                     break;
                 }
 
+                built = retried;
                 info = ProjectBuildInfo.FromAnalyzerResult(retried);
             }
 
@@ -472,26 +563,39 @@ internal static class SolutionSourceLoader
                 );
             }
 
-            return info;
+            return new CheckedBuild(Info: info, Succeeded: built.Succeeded);
         }
 
         // --verify-build-cache (impure): build fresh regardless, then — if a hit WOULD have been served — diff
-        // the fresh output against the cached one and tally match / mismatch; refresh the sidecar either way.
+        // the fresh output against the cached one and tally match / mismatch; stage a fresh candidate.
         // A mismatch is the signal that matters: the fingerprint missed a build-affecting input (latent stale).
         ProjectBuildInfo? VerifyAndBuild(string projectFilePath, Func<IAnalyzerResult?> build)
         {
             var fingerprint = BuildInputFingerprint.Compute(projectFilePath);
             var stored = cache!.Load(projectFilePath);
-            var fresh = BuildChecked(projectFilePath, build);
+            CheckedBuild? fresh;
+            try
+            {
+                fresh = BuildChecked(projectFilePath, build);
+            }
+            catch
+            {
+                // VERIFY bypassed an admitted baseline to build fresh. If that build cannot reach the
+                // Roslyn verdict callback, the baseline must not escape this verification run as reusable.
+                cache.Reject(projectFilePath);
+                throw;
+            }
+
             if (fresh is null)
             {
+                cache.Reject(projectFilePath);
                 return null;
             }
 
             var name = Path.GetFileNameWithoutExtension(projectFilePath);
             if (BuildCacheDecision.Decide(currentFingerprint: fingerprint, stored: stored) is BuildCacheDecision.Hit hit)
             {
-                var comparison = BuildInfoEquivalence.Compare(fresh: fresh, cached: hit.Info);
+                var comparison = BuildInfoEquivalence.Compare(fresh: fresh.Info, cached: hit.Info);
                 if (comparison.IsEquivalent)
                 {
                     Interlocked.Increment(ref verifyMatches);
@@ -507,8 +611,19 @@ internal static class SolutionSourceLoader
                 Interlocked.Increment(ref verifyNoBaseline); // no matching sidecar (cold/changed) — nothing to verify
             }
 
-            cache.Store(projectFilePath: projectFilePath, fingerprint: fingerprint, info: fresh);
-            return fresh;
+            var candidateId = cache.StoreCandidate(
+                projectFilePath: projectFilePath,
+                fingerprint: fingerprint,
+                info: fresh.Info,
+                buildalyzerSucceeded: fresh.Succeeded
+            );
+            TrackCompilationAdmission(projectFilePath, candidateId);
+            if (!fresh.Succeeded)
+            {
+                Interlocked.Increment(ref cacheRejectedBuilds);
+            }
+
+            return fresh.Info;
         }
 
         List<ProjectBuildInfo> results;
@@ -542,7 +657,8 @@ internal static class SolutionSourceLoader
             verifyMismatches,
             verifyNoBaseline,
             cacheHits,
-            cacheMisses
+            cacheMisses,
+            cacheRejectedBuilds
         );
 
         ReportProgress(progress, $"Assembling workspace from {results.Count} project(s)");
@@ -760,7 +876,8 @@ internal static class SolutionSourceLoader
         int verifyMismatches,
         int verifyNoBaseline,
         int cacheHits,
-        int cacheMisses
+        int cacheMisses,
+        int cacheRejectedBuilds
     )
     {
         if (cache is not null && verifyBuildCache)
@@ -772,13 +889,36 @@ internal static class SolutionSourceLoader
             ReportProgress(
                 progress,
                 $"build-cache verify: {verifyMatches} match, {verifyMismatches} MISMATCH, {verifyNoBaseline} no-baseline of {results.Count} project(s) — {verdict}"
+                    + $"; {cacheRejectedBuilds} failed Buildalyzer result(s) rejected from cache"
             );
         }
         else if (cache is not null)
         {
-            ReportProgress(progress, $"build cache: {cacheHits} hit(s), {cacheMisses} miss(es) of {results.Count} project(s)");
+            ReportProgress(progress, FormatBuildCacheSummary(cacheHits, cacheMisses, cacheRejectedBuilds, results.Count));
         }
     }
+
+    internal static string FormatBuildCacheSummary(int hits, int misses, int rejectedBuilds, int projects) =>
+        $"build cache: {hits} hit(s), {misses} miss(es), {rejectedBuilds} failed Buildalyzer result(s) rejected of {projects} project(s)";
+
+    internal static bool ApplyCompilationCacheAdmission(
+        BuildResultCache cache,
+        string projectFilePath,
+        string? candidateId,
+        bool compilationSucceeded
+    )
+    {
+        if (!compilationSucceeded)
+        {
+            cache.Reject(projectFilePath);
+            return false;
+        }
+
+        // A clean admitted hit has no candidate token and merely remains admitted.
+        return candidateId is not null && cache.PromoteCandidate(projectFilePath, candidateId);
+    }
+
+    private static string NormalizeCacheProjectPath(string projectFilePath) => Path.GetFullPath(projectFilePath);
 
     // Per-project design-time-build distribution for --time. The wall-clock (the phase metric) is passed
     // in; this reports the SEPARATE work view: Σ build-seconds (≠ wall — builds run in parallel), the
