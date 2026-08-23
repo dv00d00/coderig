@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Rig.Cli;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Git;
 using Rig.Cli.Graph;
 using Rig.Domain.Data;
 using Rig.Storage.Queries;
@@ -25,6 +26,25 @@ public sealed class StoreFreshnessDisclosureTests
         stdout.ShouldBe("id\tkind\tname\tsignature\tfile\tline\tassembly\n");
         stdout.ShouldNotContain("store:");
         stderr.ShouldContain($"store: current000001 (LATEST) @ {fixture.Commit[..12]} — current");
+    }
+
+    [Test]
+    public async Task Unignored_rig_output_is_current_but_another_untracked_file_is_stale()
+    {
+        await using var fixture = await FreshnessFixture.CreateAsync(analysisInsideSource: true);
+        await fixture.MaterializeAsync("samedir000001", new GitProvenance(fixture.Commit, "main", Dirty: false), latest: true);
+
+        var (exit, _, stderr) = await fixture.RunAsync("symbols", "nothing", "--format", "tsv");
+
+        exit.ShouldBe(0, stderr);
+        Directory.Exists(Path.Combine(fixture.AnalysisRoot, StoreLayout.RigDirName)).ShouldBeTrue();
+        stderr.ShouldContain($"@ {fixture.Commit[..12]} — current");
+        stderr.ShouldNotContain("STALE");
+
+        File.WriteAllText(Path.Combine(fixture.SourceRoot, "real-user-edit.tmp"), "not rig output\n");
+        var (dirtyExit, _, dirtyError) = await fixture.RunAsync("symbols", "nothing", "--format", "tsv");
+        dirtyExit.ShouldBe(0, dirtyError);
+        dirtyError.ShouldContain("STALE: working tree has unindexed changes");
     }
 
     [Test]
@@ -131,13 +151,37 @@ public sealed class StoreFreshnessDisclosureTests
     }
 
     [Test]
-    public async Task Impact_discloses_both_pinned_stores_and_keeps_tsv_stdout_pure()
+    public async Task A_merged_store_probes_one_repository_once_for_multiple_solutions()
+    {
+        await using var fixture = await FreshnessFixture.CreateAsync();
+        var secondSolution = Path.Combine(fixture.SourceRoot, "Second.slnx");
+        File.WriteAllText(secondSolution, "<Solution />\n");
+        var commit = fixture.CommitAll("add second solution");
+        var provenance = new GitProvenance(commit, "main", Dirty: false);
+        await fixture.MaterializeAsync("merged000001", provenance, latest: true);
+        await fixture.AppendRunAsync("merged000001", secondSolution, provenance);
+        var probedRepositories = new List<string>();
+
+        using (GitProvenanceProbe.ObserveFreshnessProbes(probedRepositories.Add))
+        {
+            var (exit, _, stderr) = await fixture.RunAsync("symbols", "nothing", "--format", "tsv");
+            exit.ShouldBe(0, stderr);
+            stderr.ShouldContain(" — current");
+        }
+
+        probedRepositories.Count.ShouldBe(1);
+        Path.GetFullPath(probedRepositories[0]).ShouldBe(Path.GetFullPath(fixture.SourceRoot));
+    }
+
+    [Test]
+    public async Task Cold_and_warm_impact_disclose_both_stores_once_and_keep_tsv_stdout_pure()
     {
         await using var fixture = await FreshnessFixture.CreateAsync();
         await fixture.MaterializeAsync("impactbase01", new GitProvenance(fixture.Commit, "main", Dirty: false));
         await fixture.MaterializeAsync("impacthead01", new GitProvenance(fixture.Commit, "main", Dirty: false), latest: true);
 
-        var (exit, stdout, stderr) = await fixture.RunAsync(
+        var arguments = new[]
+        {
             "impact",
             "--base",
             "impactbase01",
@@ -145,19 +189,29 @@ public sealed class StoreFreshnessDisclosureTests
             "impacthead01",
             "--format",
             "tsv",
-            "--no-cache"
-        );
+        };
+        var cold = await fixture.RunAsync(arguments);
+        var warm = await fixture.RunAsync([.. arguments, "--time"]);
 
-        exit.ShouldBe(0, stderr);
-        stdout.ShouldNotContain("store:");
+        cold.Exit.ShouldBe(0, cold.Err);
+        warm.Exit.ShouldBe(0, warm.Err);
+        cold.Out.ShouldNotContain("store:");
+        warm.Out.ShouldNotContain("store:");
+        AssertTwoImpactStores(cold.Err);
+        AssertTwoImpactStores(warm.Err);
+        warm.Err.ShouldContain("cache hit");
+    }
+
+    private static List<string> DisclosureLines(string stderr) =>
+        stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries).Where(line => line.StartsWith("store: ")).ToList();
+
+    private static void AssertTwoImpactStores(string stderr)
+    {
         var lines = DisclosureLines(stderr);
         lines.Count.ShouldBe(2);
         lines.ShouldContain(line => line.Contains("store: impactbase01 (pinned)", StringComparison.Ordinal));
         lines.ShouldContain(line => line.Contains("store: impacthead01 (pinned)", StringComparison.Ordinal));
     }
-
-    private static List<string> DisclosureLines(string stderr) =>
-        stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries).Where(line => line.StartsWith("store: ")).ToList();
 
     private sealed class FreshnessFixture : IAsyncDisposable
     {
@@ -171,16 +225,16 @@ public sealed class StoreFreshnessDisclosureTests
         }
 
         private string Root { get; }
-        private string SourceRoot { get; }
+        public string SourceRoot { get; }
         public string AnalysisRoot { get; }
         public string SolutionPath { get; }
         public string Commit { get; private set; }
 
-        public static Task<FreshnessFixture> CreateAsync()
+        public static Task<FreshnessFixture> CreateAsync(bool analysisInsideSource = false)
         {
             var root = Directory.CreateTempSubdirectory("rig-store-freshness-").FullName;
             var sourceRoot = Path.Combine(root, "source");
-            var analysisRoot = Path.Combine(root, "analysis");
+            var analysisRoot = analysisInsideSource ? sourceRoot : Path.Combine(root, "analysis");
             Directory.CreateDirectory(sourceRoot);
             Directory.CreateDirectory(analysisRoot);
             var solutionPath = Path.Combine(sourceRoot, "Demo.slnx");
@@ -212,26 +266,23 @@ public sealed class StoreFreshnessDisclosureTests
 
         public async Task MaterializeAsync(string storeId, GitProvenance provenance, bool latest = false)
         {
-            var result = new AnalysisResult(
-                SolutionPath: SolutionPath,
-                SourceFiles: [],
-                DiRegistrations: [],
-                Symbols: [],
-                References: [],
-                TypeRelations: [],
-                DispatchFacts: [],
-                AllocationFacts: []
-            );
             var storeDir = StoreLayout.NewStoreDir(AnalysisRoot, storeId);
             await using (var context = new RigDbContext(Path.Combine(storeDir, StoreLayout.DbFileName), pooling: false))
             {
-                await Writes.SaveAsync(context, result, provenance: provenance);
+                await Writes.SaveAsync(context, EmptyResult(SolutionPath), provenance: provenance);
             }
 
             if (latest)
             {
                 StoreLayout.WriteLatestPointer(AnalysisRoot, storeId);
             }
+        }
+
+        public async Task AppendRunAsync(string storeId, string solutionPath, GitProvenance provenance)
+        {
+            var storeDir = StoreLayout.NewStoreDir(AnalysisRoot, storeId);
+            await using var context = new RigDbContext(Path.Combine(storeDir, StoreLayout.DbFileName), pooling: false);
+            await Writes.SaveAsync(context, EmptyResult(solutionPath), provenance: provenance);
         }
 
         public async Task<(int Exit, string Out, string Err)> RunAsync(params string[] args)
@@ -280,5 +331,17 @@ public sealed class StoreFreshnessDisclosureTests
 
             return stdout.Trim();
         }
+
+        private static AnalysisResult EmptyResult(string solutionPath) =>
+            new(
+                SolutionPath: solutionPath,
+                SourceFiles: [],
+                DiRegistrations: [],
+                Symbols: [],
+                References: [],
+                TypeRelations: [],
+                DispatchFacts: [],
+                AllocationFacts: []
+            );
     }
 }

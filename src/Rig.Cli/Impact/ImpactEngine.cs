@@ -107,6 +107,7 @@ internal static class ImpactEngine
             if (StoreAnswerDisclosure.IsActive)
             {
                 await using var baseContext = new RigDbContext(baseDbPath, readOnly: true);
+                await SchemaGate.AssertReadableAsync(baseContext);
                 await StoreAnswerDisclosure.DiscloseCurrentAsync(baseContext, baseDbPath, baseRef);
             }
 
@@ -654,6 +655,7 @@ internal static class ImpactEngine
     private static async Task<StoreProvenance> ResolveBaseProvenanceAsync(string baseDbPath, string baseRef)
     {
         await using var baseContext = new RigDbContext(baseDbPath, readOnly: true);
+        await SchemaGate.AssertReadableAsync(baseContext);
         await StoreAnswerDisclosure.DiscloseCurrentAsync(baseContext, baseDbPath, baseRef);
         return await ReadProvenanceAsync(baseContext, baseRef);
     }
@@ -1159,6 +1161,7 @@ internal static class ImpactEngine
     )
     {
         await using var context = new RigDbContext(baseDbPath, readOnly: true);
+        await SchemaGate.AssertReadableAsync(context);
         await StoreAnswerDisclosure.DiscloseCurrentAsync(context, baseDbPath, baseRef);
         var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
 

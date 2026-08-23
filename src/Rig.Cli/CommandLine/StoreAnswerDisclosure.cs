@@ -103,13 +103,30 @@ internal sealed class StoreAnswerDisclosure
             return Prefix(storeDirectory, explicitStoreRef, indexed.Commit) + "UNVERIFIABLE: indexed from a dirty tree";
         }
 
-        var solutionPaths = runs.Select(run => run.SolutionPath).Distinct(StringComparer.Ordinal).ToList();
-        if (solutionPaths.Count == 0)
+        var repositoryRoots = new HashSet<string>(
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal
+        );
+        foreach (var solutionPath in runs.Select(run => run.SolutionPath))
+        {
+            var repositoryRoot = GitProvenanceProbe.ResolveRepositoryRoot(solutionPath);
+            if (repositoryRoot is null)
+            {
+                return Prefix(storeDirectory, explicitStoreRef, indexed.Commit) + "freshness unknown: source checkout unavailable";
+            }
+
+            repositoryRoots.Add(repositoryRoot);
+        }
+
+        if (repositoryRoots.Count == 0)
         {
             return Prefix(storeDirectory, explicitStoreRef, indexed.Commit) + "freshness unknown: source checkout unavailable";
         }
 
-        var checkouts = solutionPaths.Select(GitProvenanceProbe.Capture).ToList();
+        // A merged store commonly has one run per solution/project identity in the SAME monorepo. Resolve
+        // those paths first, then issue one freshness status probe per distinct repository, not three git
+        // processes per run row.
+        var rigDirectory = StoreLayout.RigDir(_workingDirectory);
+        var checkouts = repositoryRoots.Select(root => GitProvenanceProbe.CaptureFreshness(root, rigDirectory)).ToList();
         if (checkouts.Any(checkout => checkout.Commit is null))
         {
             return Prefix(storeDirectory, explicitStoreRef, indexed.Commit) + "freshness unknown: source checkout unavailable";
