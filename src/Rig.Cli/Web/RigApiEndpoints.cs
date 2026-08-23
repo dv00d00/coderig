@@ -276,11 +276,11 @@ internal static class RigApiEndpoints
         );
 
         // The call tree from an entry-point / symbol pattern. `from` is required; the rest mirror `rig tree`.
-        // NOTE: `view` (paths/full/effects) and `only`/`exclude` effect filters are applied CLIENT-side — the
-        // endpoint returns the one canonical tree + all effects, and the SPA projects/filters without refetch.
+        // NOTE: `view` (paths/full/effects) and ordinary `only`/`exclude` filters stay CLIENT-side. The server
+        // applies only the shared intrinsic default because its hidden-state disclosure belongs to the query.
         app.MapGet(
             "/api/tree",
-            async (string? from, int? depth, bool? async, string? store, bool? raw) =>
+            async (string? from, int? depth, bool? async, string? store, bool? raw, bool? intrinsic) =>
             {
                 if (string.IsNullOrWhiteSpace(from))
                 {
@@ -301,7 +301,8 @@ internal static class RigApiEndpoints
                         storeRef: NullIfBlank(store),
                         depth: depth,
                         async: async ?? false,
-                        raw: raw ?? false
+                        raw: raw ?? false,
+                        intrinsic: intrinsic ?? false
                     );
                     var response = TreeMapper.ToResponse(
                         from: from,
@@ -310,7 +311,10 @@ internal static class RigApiEndpoints
                         locations: result.Locations,
                         emoji: result.EffectEmoji,
                         renderRules: result.Render
-                    );
+                    ) with
+                    {
+                        IntrinsicHidden = result.IntrinsicHidden,
+                    };
                     return Results.Json(response);
                 }
                 catch (Exception ex)

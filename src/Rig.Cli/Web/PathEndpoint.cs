@@ -22,7 +22,7 @@ public static class PathEndpoint
         // equivalent `/api/tree` params and `rig path --store`/`--async`.
         app.MapGet(
             "/api/path",
-            async (string? from, string? to, string? store, bool? async) =>
+            async (string? from, string? to, string? store, bool? async, bool? intrinsic) =>
             {
                 if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
                 {
@@ -36,7 +36,8 @@ public static class PathEndpoint
                         fromPattern: from,
                         toPattern: to,
                         storeRef: NullIfBlank(store),
-                        async: async ?? false
+                        async: async ?? false,
+                        intrinsic: intrinsic ?? false
                     );
 
                     var nodes = result
@@ -63,7 +64,8 @@ public static class PathEndpoint
                         Matched: result.Matched,
                         Nodes: nodes,
                         FromMatches: result.FromMatches,
-                        ToMatches: result.ToMatches
+                        ToMatches: result.ToMatches,
+                        IntrinsicHidden: result.IntrinsicHidden
                     );
                     return Results.Json(response);
                 }

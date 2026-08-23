@@ -1,9 +1,11 @@
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Live;
+using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
+using static Rig.Cli.Effects.EffectDerivation;
 
 namespace Rig.Cli.Services;
 
@@ -28,7 +30,8 @@ public static class TreeQueryService
         IReadOnlyDictionary<string, string> EffectEmoji,
         // Opaque/collapse render rules so the web mapper folds seams the same way the pretty/llm renderers do.
         // Empty under raw=true (the endpoint's ?raw= opt-out) — the tree is then served fully unfolded.
-        FactRenderRules Render
+        FactRenderRules Render,
+        bool IntrinsicHidden
     );
 
     // The richer result of the shared cold compute (ComputeAsync): the forest + effects PLUS the graph and
@@ -53,6 +56,7 @@ public static class TreeQueryService
         bool async = false,
         bool includeDelivery = false,
         bool raw = false,
+        bool intrinsic = false,
         IReadOnlyList<string>? extraRules = null
     )
     {
@@ -81,9 +85,29 @@ public static class TreeQueryService
             .Graph.Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => new SymbolLocation(g.First().FilePath, g.First().Line), StringComparer.Ordinal);
 
+        var treeMethods = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var root in computation.Roots)
+        {
+            TreeRenderer.CollectTreeMethods(root, treeMethods);
+        }
+        var selection = SelectEffectsForMethods(
+            computation.Effects,
+            treeMethods,
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            intrinsic
+        );
+
         // raw parity: no fold rules either, so the web serves the exact unfolded tree (mirrors CLI --raw).
         var renderRules = raw ? FactRenderRules.Empty : rules.Render;
-        return new TreeQueryResult(computation.Roots, computation.Effects, locations, rules.EffectEmoji, renderRules);
+        return new TreeQueryResult(
+            computation.Roots,
+            selection.Effects,
+            locations,
+            rules.EffectEmoji,
+            renderRules,
+            selection.HiddenIntrinsic > 0
+        );
     }
 
     // The COLD tree computation shared by the web host (BuildAsync, above) and `rig tree`'s cold path

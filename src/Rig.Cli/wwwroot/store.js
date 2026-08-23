@@ -13,6 +13,7 @@ export const store = createStore({
   tokens: [], // provider / provider:op filter tokens
   asyncWalk: false, // --async (changes the fetched tree → refetch)
   rawTree: false, // show the raw unfolded tree (bypass opaque/collapse seam folds → ?raw=true, refetch)
+  intrinsic: false, // include language-intrinsic alloc/throw effects (server-side view → refetch)
   collapse: "", // client-side collapse depth ("" = none)
   signatures: false, // render mode: show param signatures
   predicates: false, // render mode: show control-dependence guards
@@ -78,6 +79,7 @@ export const querySlice = (s) => [
   s.mode,
   s.tokens.join(","),
   s.asyncWalk,
+  s.intrinsic,
   s.collapse,
   s.signatures,
   s.predicates,
@@ -97,6 +99,7 @@ export function serializeUrl(s = get()) {
   if (s.mode !== "none") p.set("mode", s.mode);
   if (s.tokens.length) p.set("tokens", s.tokens.join(","));
   if (s.asyncWalk) p.set("async", "1");
+  if (s.intrinsic) p.set("intrinsic", "1");
   if (s.collapse) p.set("collapse", s.collapse);
   if (s.signatures) p.set("sig", "1");
   if (s.predicates) p.set("pred", "1");
@@ -126,13 +129,18 @@ export function serializeUrl(s = get()) {
 export function readUrl(runs, search = location.search) {
   const p = new URLSearchParams(search);
   const s = p.get("store");
+  const mode = p.get("mode") || "none";
+  const tokens = (p.get("tokens") || "").split(",").filter(Boolean);
+  const onlyNamesIntrinsic =
+    mode === "only" && tokens.some((t) => ["alloc", "throw"].includes(t.split(":", 1)[0].toLowerCase()));
   return {
     from: p.get("from") || "",
     storeId: s && runs.some((r) => r.storeId === s) ? s : null,
     view: p.get("view") || "paths",
-    mode: p.get("mode") || "none",
-    tokens: (p.get("tokens") || "").split(",").filter(Boolean),
+    mode,
+    tokens,
     asyncWalk: p.get("async") === "1",
+    intrinsic: p.get("intrinsic") === "1" || onlyNamesIntrinsic,
     collapse: p.get("collapse") || "",
     signatures: p.get("sig") === "1",
     predicates: p.get("pred") === "1",

@@ -108,10 +108,10 @@ export const api = {
   providers: () => cached("providers", "/api/providers"),
   // raw=true bypasses the opaque/collapse seam folds (server returns the full unfolded tree). It changes the
   // payload, so it MUST be in the cache key alongside the async-walk mode.
-  tree: (storeId, explicitStore, from, asyncWalk, raw) =>
+  tree: (storeId, explicitStore, from, asyncWalk, raw, intrinsic) =>
     cached(
-      `tree|${storeId}|${from}|${!!asyncWalk}|${!!raw}`,
-      "/api/tree" + qs({ from, store: explicitStore, async: !!asyncWalk, raw: raw ? true : undefined }),
+      `tree|${storeId}|${from}|${!!asyncWalk}|${!!raw}|${!!intrinsic}`,
+      "/api/tree" + qs({ from, store: explicitStore, async: !!asyncWalk, raw: raw ? true : undefined, intrinsic: intrinsic ? true : undefined }),
     ),
   entrypoints: (storeId, explicitStore) =>
     cached(`eps|${storeId}`, "/api/entrypoints" + qs({ store: explicitStore })),
@@ -123,11 +123,17 @@ export const api = {
       "/api/callers" + qs({ from, store: explicitStore, mode, async: asyncWalk ? true : undefined }),
     ),
   // flat effect inventory reachable from `from` (provider:op tallies + reachable-method count).
-  reaches: (storeId, explicitStore, from) =>
-    cached(`reaches|${storeId}|${from}`, "/api/reaches" + qs({ from, store: explicitStore })),
+  reaches: (storeId, explicitStore, from, intrinsic) =>
+    cached(
+      `reaches|${storeId}|${from}|${!!intrinsic}`,
+      "/api/reaches" + qs({ from, store: explicitStore, intrinsic: intrinsic ? true : undefined }),
+    ),
   // one concrete From->To path.
-  path: (storeId, explicitStore, from, to) =>
-    cached(`path|${storeId}|${from}|${to}`, "/api/path" + qs({ from, to, store: explicitStore })),
+  path: (storeId, explicitStore, from, to, intrinsic) =>
+    cached(
+      `path|${storeId}|${from}|${to}|${!!intrinsic}`,
+      "/api/path" + qs({ from, to, store: explicitStore, intrinsic: intrinsic ? true : undefined }),
+    ),
   hazards: (storeId, explicitStore, from) =>
     cached(
       `haz|${storeId}|${from}`,

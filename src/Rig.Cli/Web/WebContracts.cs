@@ -39,4 +39,4 @@ internal sealed record TreeNodeDto(
     string? Loop = null
 );
 
-internal sealed record TreeResponseDto(string From, bool Matched, IReadOnlyList<TreeNodeDto> Roots);
+internal sealed record TreeResponseDto(string From, bool Matched, IReadOnlyList<TreeNodeDto> Roots, bool IntrinsicHidden = false);

@@ -411,6 +411,22 @@ internal static class EffectDerivation
         static bool InSet(DerivedEffect e, HashSet<string> set) => set.Contains(e.Provider) || set.Contains($"{e.Provider}:{e.Operation}");
     }
 
+    // Reachability-aware selection for query surfaces. Scope FIRST, then apply explicit filters and the
+    // intrinsic default, so HiddenIntrinsic describes only the answer being rendered (never unrelated
+    // effects carried by a whole-generation live source or a wider bounded closure).
+    internal static EffectSelection SelectEffectsForMethods(
+        IReadOnlyList<DerivedEffect> effects,
+        IEnumerable<string> methodIds,
+        HashSet<string> only,
+        HashSet<string> exclude,
+        bool includeIntrinsic
+    )
+    {
+        var scope = methodIds as IReadOnlySet<string> ?? methodIds.ToHashSet(StringComparer.Ordinal);
+        var scoped = effects.Where(e => e.EnclosingSymbolId is not null && scope.Contains(e.EnclosingSymbolId)).ToList();
+        return SelectEffects(scoped, only, exclude, includeIntrinsic);
+    }
+
     // The one-line disclosure for withheld intrinsic effects, or "" when nothing was withheld.
     // Names the providers AND the flag, so the hidden state always teaches its own escape hatch.
     //

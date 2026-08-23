@@ -4,6 +4,7 @@ using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Live;
 using Rig.Cli.Rendering;
+using Rig.Cli.Services;
 using Rig.Cli.Telemetry;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -133,42 +134,25 @@ internal static class ReachesCommand
 
         await using var source = await openSource();
 
-        var graphWatch = Stopwatch.StartNew();
-        DemandForwardReachInputs? demandInputs = null;
-        SqlReachability.ReachInputs inputs;
-        FactGraphData graph;
-        if (mode != FactPathFinder.TraversalMode.SyncCut && source is IDemandForwardPathFactSource demand)
-        {
-            demandInputs = await demand.LoadDemandForwardReachInputsAsync(
-                opts.FromPattern,
-                shaped,
-                maxDepth,
-                mode,
-                classifyEventSubscriptions: !opts.Raw
-            );
-            inputs = demandInputs.Inputs;
-            graph = demandInputs.Demand.Graph;
-        }
-        else
-        {
-            inputs = await source.LoadEffectReachInputsAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
-            graph = inputs.Graph;
-        }
-        if (!opts.Raw && demandInputs?.Demand.EventSubscriptionsClassified != true)
-        {
-            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
-        }
-
-        graphWatch.Stop();
-        timing.Record("graph load", graphWatch.Elapsed);
+        var computation = await ReachesQueryService.ComputeAsync(
+            source,
+            rules,
+            shaped,
+            opts.FromPattern,
+            maxDepth,
+            mode,
+            opts.Raw,
+            opts.Only,
+            opts.Exclude,
+            opts.Intrinsic
+        );
+        var graph = computation.Graph;
+        var reachable = computation.Reachable;
+        var effects = computation.Effects;
+        timing.Record("graph load", computation.GraphLoadElapsed);
 
         // Ambiguity disclosure: a multi-target pattern reports the UNION of every target's reach.
         AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.FromPattern, graph);
-
-        var traversalWatch = Stopwatch.StartNew();
-        var reachable = MonomorphCollapse.CollapseReachInfo(
-            FactPathFinder.ReachesWithFanout(graph, opts.FromPattern, maxDepth, mode: mode)
-        );
 
         // Seed disclosure, before any of the expensive downstream work. The traversal seeds off THIS graph
         // via the SAME FactPathFinder.MatchNodes every other seed site uses, so an EMPTY reach set can only
@@ -178,8 +162,7 @@ internal static class ReachesCommand
         // stderr note naming what it resolved to (SeedResolutionNotice).
         if (reachable.Count == 0)
         {
-            traversalWatch.Stop();
-            timing.Record("traversal", traversalWatch.Elapsed);
+            timing.Record("traversal", computation.TraversalElapsed);
             // Distinguish "nothing by that name" from "a real symbol that can never be a node" (a `P:`
             // property / `F:` field / `E:` event) — the latter is a fair pattern to try and deserves the
             // accessor hint rather than a flat denial.
@@ -189,17 +172,7 @@ internal static class ReachesCommand
 
         SeedResolutionNotice.NoteIfNoOutEdges(io.TextOutput.Error, reachable, maxDepth);
 
-        var effects = demandInputs is null
-            ? await source.DeriveEffectsAsync(inputs, graph, rules)
-            : QueryEffectDerivation.ForReach(rules, inputs, graph);
-        // --only / --exclude (e.g. --exclude throw), plus the default hiding of intrinsic providers
-        // (alloc/throw) restored by --intrinsic. Restrict first so the withheld count describes THIS
-        // reachable answer, not unrelated effects present in a live whole-generation input.
-        var reachableEffects = effects.Where(e => e.EnclosingSymbolId is not null && reachable.ContainsKey(e.EnclosingSymbolId)).ToList();
-        var selection = SelectEffects(reachableEffects, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
-        effects = selection.Effects;
-        traversalWatch.Stop();
-        timing.Record("traversal", traversalWatch.Elapsed);
+        timing.Record("traversal", computation.TraversalElapsed);
 
         // Effects whose enclosing method is reachable from the entry point. Fanout = looped call
         // edges on the path to the enclosing method (ReachInfo.LoopNesting) + 1 if the effect's OWN
@@ -267,7 +240,7 @@ internal static class ReachesCommand
             extraRules: opts.ExtraRules,
             rules: rules,
             deployments: reachDeployments,
-            epData: inputs.EpData
+            epData: computation.EpData
         );
         var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
         io.TextOutput.Output.WriteLine(
@@ -289,7 +262,7 @@ internal static class ReachesCommand
             io.TextOutput.Output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
         }
 
-        WriteIntrinsicNote(selection.HiddenIntrinsic, io.TextOutput.Error);
+        WriteIntrinsicNote(computation.HiddenIntrinsic, io.TextOutput.Error);
 
         io.TextOutput.Output.WriteLine("--- nearest direct effects (depth  provider op  resource  <- method  [loop]) ---");
         foreach (var h in direct.Take(max))

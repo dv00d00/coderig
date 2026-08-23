@@ -9,5 +9,6 @@ internal sealed record ReachesResponseDto(
     bool Matched,
     // Distinct methods reachable from `From` (unbounded depth — this endpoint doesn't expose --depth yet).
     int ReachableCount,
-    IReadOnlyList<EffectDto> Effects
+    IReadOnlyList<EffectDto> Effects,
+    bool IntrinsicHidden
 );

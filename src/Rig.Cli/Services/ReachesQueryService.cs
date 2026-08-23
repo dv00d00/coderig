@@ -1,85 +1,64 @@
+using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Live;
+using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.Effects.EffectDerivation;
-using static Rig.Cli.Graph.TraversalGraphLoader;
 
 namespace Rig.Cli.Services;
 
-// The reusable REACHABLE-EFFECTS computation, lifted out of ReachesCommand.RunAsync so BOTH the CLI and the
-// in-process web host (Web/) run the SAME engine — no shelling out, no re-parsing text. Unlike the CLI (which
-// splits hits into three buckets — direct/scheduled(async-handoff)/dispatch-fanout — for its bucketed text
-// render), this produces a FLAT effect inventory: every effect whose enclosing method is reachable from the
-// pattern, folded together and aggregated by (provider, operation) with a site count and the repo's glyph.
-// That's the "which effects does this reach" summary a caller wants first; the CLI's finer bucketing (sync
-// vs cross-thread vs dispatch-fanout provenance) is left for a later, richer endpoint if the SPA needs it.
-//
-// Deliberately public + primitives-in (workingDirectory/storeRef, not the internal WorkspaceLocation) so the
-// contract survives a later lift to a standalone Rig.Web project — mirrors TreeQueryService.
+// The reusable REACHABLE-EFFECTS computation shared by the CLI, resident live queries, and web host.
 public static class ReachesQueryService
 {
-    // One aggregated (provider, operation) bucket over every effect reachable from the pattern — sync,
-    // async-handoff, and dispatch-fanout reaches folded together (see the type-level note on why this is
-    // flat rather than the CLI's three buckets). Sites = distinct call sites (matches `rig reaches` semantics
-    // — sites in code, not runtime executions).
     public sealed record EffectSummary(string Provider, string Operation, string Glyph, int Sites);
 
     public sealed record ReachesQueryResult(
         string FromPattern,
         bool Matched,
-        // Count of distinct methods reachable from the pattern (<= depth, unbounded here — the flat
-        // inventory doesn't expose a depth knob; see the type-level note).
         int ReachableCount,
-        IReadOnlyList<EffectSummary> Effects
+        IReadOnlyList<EffectSummary> Effects,
+        bool IntrinsicHidden
     );
 
-    // Build the flat effect inventory for `fromPattern` over the store at `workingDirectory` (optionally a
-    // specific `storeRef` commit/id). Mirrors the cold path of ReachesCommand.RunAsync: same shaping rules,
-    // same event-subscription handoff marking, same ReachesWithFanout + monomorph collapse, same DeriveEffects
-    // inputs — so the web reports the same reachable-effect set `rig reaches` would compute (minus the CLI's
-    // depth-ordered, bucketed render, and minus the CLI's --raw/--depth/--only/--exclude/--include-delivery
-    // knobs, which this first cut of the endpoint does not expose).
+    internal sealed record ReachesComputation(
+        IReadOnlyDictionary<string, FactPathFinder.ReachInfo> Reachable,
+        IReadOnlyList<DerivedEffect> Effects,
+        int HiddenIntrinsic,
+        FactGraphData Graph,
+        FactEntryPointDeriver.FactEntryPointData? EpData,
+        TimeSpan GraphLoadElapsed,
+        TimeSpan TraversalElapsed
+    );
+
     public static async Task<ReachesQueryResult> BuildAsync(
         string workingDirectory,
         string fromPattern,
         string? storeRef = null,
-        bool async = false
+        bool async = false,
+        bool intrinsic = false
     )
     {
         var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: [], loadedPaths: out _);
-
-        await using var context = await OpenReadContextGatedAsync(
+        await using var source = await StoreQueryFactSource.OpenAsync(
             new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
         );
-
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, rules);
-        // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls — mark
-        // them as handoffs so a non-async reach doesn't count the handler as directly reachable (mirrors
-        // ReachesCommand/TreeQueryService; this endpoint doesn't expose a --raw opt-out yet).
-        var graph = FactPathFinder.MarkEventSubscriptionHandoffs(inputs.Graph, await Reads.EventSubscriptionSitesAsync(context));
-
-        var mode = CommonOptions.Mode(async: async);
-        var reachable = MonomorphCollapse.CollapseReachInfo(
-            FactPathFinder.ReachesWithFanout(graph, fromPattern, CommonOptions.DepthOrUnbounded(null), mode: mode)
+        var computation = await ComputeAsync(
+            source: source,
+            rules: rules,
+            shaped: rules,
+            fromPattern: fromPattern,
+            maxDepth: CommonOptions.DepthOrUnbounded(null),
+            mode: CommonOptions.Mode(async: async),
+            raw: false,
+            only: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            exclude: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            includeIntrinsic: intrinsic
         );
 
-        var effects = DeriveEffects(
-            rules.Effects,
-            rules.Observations,
-            inputs.Invocations,
-            BaseEdgeTuples(graph),
-            ctorRefs: inputs.CtorRefs,
-            throwRefs: inputs.ThrowRefs,
-            allocationFacts: inputs.AllocationFacts
-        );
-
-        // Effects whose enclosing method is reachable from the entry point — same join ReachesCommand does
-        // (reachable.ContainsKey(e.EnclosingSymbolId)) — then folded into one (provider, operation) inventory
-        // regardless of which of the CLI's three buckets they'd land in.
-        var summaries = effects
-            .Where(e => e.EnclosingSymbolId is not null && reachable.ContainsKey(e.EnclosingSymbolId))
-            .GroupBy(e => (e.Provider, e.Operation))
+        var summaries = computation
+            .Effects.GroupBy(e => (e.Provider, e.Operation))
             .Select(g => new EffectSummary(
                 Provider: g.Key.Provider,
                 Operation: g.Key.Operation,
@@ -93,9 +72,86 @@ public static class ReachesQueryService
 
         return new ReachesQueryResult(
             FromPattern: fromPattern,
-            Matched: reachable.Count > 0,
-            ReachableCount: reachable.Count,
-            Effects: summaries
+            Matched: computation.Reachable.Count > 0,
+            ReachableCount: computation.Reachable.Count,
+            Effects: summaries,
+            IntrinsicHidden: computation.HiddenIntrinsic > 0
+        );
+    }
+
+    // Rich computation used by BOTH ReachesCommand and BuildAsync. It deliberately accepts an already-open
+    // fact source so resident live generations retain their demand-forward loading and effect memoization.
+    internal static async Task<ReachesComputation> ComputeAsync(
+        IQueryFactSource source,
+        RuleSet rules,
+        RuleSet shaped,
+        string fromPattern,
+        int maxDepth,
+        FactPathFinder.TraversalMode mode,
+        bool raw,
+        HashSet<string> only,
+        HashSet<string> exclude,
+        bool includeIntrinsic
+    )
+    {
+        var graphWatch = Stopwatch.StartNew();
+        DemandForwardReachInputs? demandInputs = null;
+        SqlReachability.ReachInputs inputs;
+        FactGraphData graph;
+        if (mode != FactPathFinder.TraversalMode.SyncCut && source is IDemandForwardPathFactSource demand)
+        {
+            demandInputs = await demand.LoadDemandForwardReachInputsAsync(
+                fromPattern,
+                shaped,
+                maxDepth,
+                mode,
+                classifyEventSubscriptions: !raw
+            );
+            inputs = demandInputs.Inputs;
+            graph = demandInputs.Demand.Graph;
+        }
+        else
+        {
+            inputs = await source.LoadEffectReachInputsAsync(fromPattern, SqlReachability.Direction.Forward, shaped);
+            graph = inputs.Graph;
+        }
+        if (!raw && demandInputs?.Demand.EventSubscriptionsClassified != true)
+        {
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
+        }
+        graphWatch.Stop();
+
+        var traversalWatch = Stopwatch.StartNew();
+        var reachable = MonomorphCollapse.CollapseReachInfo(
+            FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode)
+        );
+        if (reachable.Count == 0)
+        {
+            traversalWatch.Stop();
+            return new ReachesComputation(
+                reachable,
+                [],
+                HiddenIntrinsic: 0,
+                graph,
+                inputs.EpData,
+                graphWatch.Elapsed,
+                traversalWatch.Elapsed
+            );
+        }
+
+        var effects = demandInputs is null
+            ? await source.DeriveEffectsAsync(inputs, graph, rules)
+            : QueryEffectDerivation.ForReach(rules, inputs, graph);
+        var selection = SelectEffectsForMethods(effects, reachable.Keys, only, exclude, includeIntrinsic);
+        traversalWatch.Stop();
+        return new ReachesComputation(
+            reachable,
+            selection.Effects,
+            selection.HiddenIntrinsic,
+            graph,
+            inputs.EpData,
+            graphWatch.Elapsed,
+            traversalWatch.Elapsed
         );
     }
 }

@@ -521,12 +521,16 @@ export function TreeView(s, actions) {
   const ctx = ctxOf(s);
   ctx.actions = actions; // threaded so a node's context menu can pivot (re-root / who-reaches / EPs-reaching)
   const banner = DiffBanner(s, actions);
+  const intrinsicNote = s.tree.intrinsicHidden
+    ? h("div", { class: "hint" }, "alloc and throw effects are hidden — enable intrinsic to include them")
+    : null;
   if (s.view === "effects") {
     const out = flatEffectful(s.tree.roots, ctx);
     return h(
       "div",
       { class: "flat" },
       banner,
+      intrinsicNote,
       out.map(([n, fe]) =>
         h(
           "div",
@@ -550,6 +554,7 @@ export function TreeView(s, actions) {
     "div",
     {},
     banner,
+    intrinsicNote,
     roots.map((r) => TreeNode(r, 0, ctx).el),
   );
 }
@@ -1111,7 +1116,10 @@ export function CallersPanel(s, actions) {
             });
           },
         });
-  return h("div", { class: "callers-drawer" }, header, filter, body);
+  const intrinsicNote = c.intrinsicHidden
+    ? h("div", { class: "hint" }, "alloc and throw effects are hidden — enable intrinsic to include them")
+    : null;
+  return h("div", { class: "callers-drawer" }, header, intrinsicNote, filter, body);
 }
 // last dotted segment or two of a DocID/FQN, for a compact drawer title.
 export function shortLabel(id) {
@@ -1290,6 +1298,7 @@ export function Shell(actions) {
     );
   refs.async = toggle("async", "asyncWalk", "walk async handoffs (refetches)");
   refs.raw = toggle("raw", "rawTree", "show the raw unfolded tree — bypass opaque/collapse seam folds (refetches)");
+  refs.intrinsic = toggle("intrinsic", "intrinsic", "include language-intrinsic alloc and throw effects (refetches)");
   refs.sig = toggle("sig", "signatures", "show parameter signatures");
   refs.pred = toggle("pred", "predicates", "show control-dependence guards");
   refs.haz = toggle("haz", "hazards", "overlay hazard marks");
@@ -1308,6 +1317,7 @@ export function Shell(actions) {
     refs.collapse,
     refs.async,
     refs.raw,
+    refs.intrinsic,
     refs.sig,
     refs.pred,
     refs.haz,

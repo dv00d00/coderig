@@ -50,6 +50,11 @@ internal static class QueryCacheKeys
     // DerivationSchemaToken, which is the client's only invalidation signal.
     internal const int FindingViewSchema = 1;
 
+    // v1: tree/reaches/path web effect views hide intrinsic alloc/throw by default and disclose that state.
+    // Query payloads now depend on the intrinsic view flag; move the browser derivation version once so a
+    // warm pre-filter response can never masquerade as the new default-hidden response.
+    internal const int EffectViewSchema = 1;
+
     // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)
     // added to the payload — a warm v4 blob decodes with empty amplification lists and would silently render a
@@ -62,7 +67,7 @@ internal static class QueryCacheKeys
     // version — the client can never keep serving an artifact whose server-side schema advanced. This is the
     // desync guard that a single hand-bumped client constant would lack, and it needs no MVID.
     internal static string DerivationSchemaToken() =>
-        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}";
+        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}.{EffectViewSchema}";
 
     // Identity of the current store for cache keying + invalidation: rig.db size + last-write time.
     // `rig index` publishes a fresh db (atomic rename → new mtime/size) and `rig graph` rewrites the

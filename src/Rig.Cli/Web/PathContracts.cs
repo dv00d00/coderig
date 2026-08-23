@@ -33,5 +33,6 @@ internal sealed record PathResponseDto(
     // pattern resolved to. Count <= 1 = unambiguous; >1 = the path shown is just ONE of several a
     // multi-target pattern could have picked — the client can surface this the way `rig path` warns on stderr.
     IReadOnlyList<string> FromMatches,
-    IReadOnlyList<string> ToMatches
+    IReadOnlyList<string> ToMatches,
+    bool IntrinsicHidden
 );

@@ -32,6 +32,7 @@ import {
 
 const explicit = () => get().storeId; // the id to put on URLs (null => LATEST)
 const resolved = () => activeStoreId(); // the resolved id (for cache keys)
+const namesIntrinsicToken = (token) => ["alloc", "throw"].includes(token.split(":", 1)[0].toLowerCase());
 
 // ---- status + busy (transient DOM) ----------------------------------------------------------------------
 let refs;
@@ -78,6 +79,7 @@ async function openTree(pattern, { recordHistory = true } = {}) {
       pattern,
       get().asyncWalk,
       get().rawTree,
+      get().intrinsic,
     );
     if (!data.matched) {
       set({ tree: null, treeFrom: "" });
@@ -322,8 +324,8 @@ const actions = {
     const from = node.id;
     set({ callers: { target: from, mode: "reaches", loading: true } });
     try {
-      const data = await api.reaches(resolved(), explicit(), from);
-      set({ callers: { target: from, mode: "reaches", matched: data.matched, reachableCount: data.reachableCount, effects: data.effects } });
+      const data = await api.reaches(resolved(), explicit(), from, get().intrinsic);
+      set({ callers: { target: from, mode: "reaches", matched: data.matched, reachableCount: data.reachableCount, effects: data.effects, intrinsicHidden: data.intrinsicHidden } });
       if (recordHistory)
         recordCrumb("reaches", "reaches: " + shortLabel(from), {
           callers: { target: from },
@@ -336,8 +338,8 @@ const actions = {
   async openPath(fromFqn, targetId, { recordHistory = true } = {}) {
     set({ callers: { target: targetId, from: fromFqn, mode: "path", loading: true } });
     try {
-      const data = await api.path(resolved(), explicit(), fromFqn, targetId);
-      set({ callers: { target: targetId, from: fromFqn, mode: "path", matched: data.matched, nodes: data.nodes } });
+      const data = await api.path(resolved(), explicit(), fromFqn, targetId, get().intrinsic);
+      set({ callers: { target: targetId, from: fromFqn, mode: "path", matched: data.matched, nodes: data.nodes, intrinsicHidden: data.intrinsicHidden } });
       if (recordHistory)
         recordCrumb("path", "path → " + shortLabel(targetId), {
           callers: { from: fromFqn, target: targetId },
@@ -361,6 +363,10 @@ const actions = {
   },
   setMode(v) {
     set({ mode: v });
+    if (v === "only" && get().tokens.some(namesIntrinsicToken) && !get().intrinsic) {
+      set({ intrinsic: true });
+      if (get().treeFrom) openTree(get().treeFrom);
+    }
   },
   setCollapse(v) {
     set({ collapse: v });
@@ -371,12 +377,22 @@ const actions = {
         ? s.tokens.filter((x) => x !== t)
         : [...s.tokens, t],
     }));
+    if (get().mode === "only" && namesIntrinsicToken(t) && get().tokens.includes(t) && !get().intrinsic) {
+      set({ intrinsic: true });
+      if (get().treeFrom) openTree(get().treeFrom);
+    }
   },
   renderMsList,
   setFlag(key, val) {
     set({ [key]: val });
     if (key === "asyncWalk" && get().treeFrom) openTree(get().treeFrom); // async changes the fetched tree
     if (key === "rawTree" && get().treeFrom) openTree(get().treeFrom); // raw/folded changes the fetched tree
+    if (key === "intrinsic") {
+      if (get().treeFrom) openTree(get().treeFrom); // intrinsic changes server effect selection
+      const c = get().callers;
+      if (c?.mode === "reaches") actions.openReaches({ id: c.target }, { recordHistory: false });
+      if (c?.mode === "path") actions.openPath(c.from, c.target, { recordHistory: false });
+    }
     if (key === "impactAsync" && get().impactBase && get().impactHead)
       loadImpact(); // async changes the diff
     if (key === "hazards" && val) loadHazards();
@@ -687,6 +703,7 @@ function syncControls(s) {
   refs.collapse.value = s.collapse;
   refs.async.querySelector("input").checked = s.asyncWalk;
   refs.raw.querySelector("input").checked = s.rawTree;
+  refs.intrinsic.querySelector("input").checked = s.intrinsic;
   refs.sig.querySelector("input").checked = s.signatures;
   refs.pred.querySelector("input").checked = s.predicates;
   refs.haz.querySelector("input").checked = s.hazards;

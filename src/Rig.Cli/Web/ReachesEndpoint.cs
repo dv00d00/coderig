@@ -18,7 +18,7 @@ internal static class ReachesEndpoint
         // `rig reaches --async` (async-handoff-reached effects included; delivery fan-out excluded).
         app.MapGet(
             "/api/reaches",
-            async (string? from, string? store, bool? async) =>
+            async (string? from, string? store, bool? async, bool? intrinsic) =>
             {
                 if (string.IsNullOrWhiteSpace(from))
                 {
@@ -35,7 +35,8 @@ internal static class ReachesEndpoint
                         workingDirectory: workingDirectory,
                         fromPattern: from,
                         storeRef: NullIfBlank(store),
-                        async: async ?? false
+                        async: async ?? false,
+                        intrinsic: intrinsic ?? false
                     );
                     var response = new ReachesResponseDto(
                         From: result.FromPattern,
@@ -48,7 +49,8 @@ internal static class ReachesEndpoint
                                 Glyph: e.Glyph,
                                 Sites: e.Sites
                             ))
-                            .ToList()
+                            .ToList(),
+                        IntrinsicHidden: result.IntrinsicHidden
                     );
                     return Results.Json(response);
                 }

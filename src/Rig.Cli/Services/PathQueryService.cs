@@ -36,7 +36,8 @@ public static class PathQueryService
         IReadOnlyDictionary<string, IReadOnlyList<DerivedEffect>> EffectsBySymbol,
         IReadOnlyDictionary<string, string> EffectEmoji,
         IReadOnlyList<string> FromMatches,
-        IReadOnlyList<string> ToMatches
+        IReadOnlyList<string> ToMatches,
+        bool IntrinsicHidden
     );
 
     // Find the first concrete call path from `fromPattern` to `toPattern` over the store at
@@ -53,6 +54,7 @@ public static class PathQueryService
         bool async = false,
         bool includeDelivery = false,
         bool raw = false,
+        bool intrinsic = false,
         IReadOnlyList<string>? extraRules = null
     )
     {
@@ -105,7 +107,8 @@ public static class PathQueryService
                 EffectsBySymbol: new Dictionary<string, IReadOnlyList<DerivedEffect>>(StringComparer.Ordinal),
                 EffectEmoji: rules.EffectEmoji,
                 FromMatches: fromMatches,
-                ToMatches: toMatches
+                ToMatches: toMatches,
+                IntrinsicHidden: false
             );
         }
 
@@ -121,7 +124,16 @@ public static class PathQueryService
             throwRefs: inputs.ThrowRefs,
             allocationFacts: inputs.AllocationFacts
         );
-        var effectsBySymbol = effects
+        var pathMethods = path.Select(step => step.SymbolId).ToHashSet(StringComparer.Ordinal);
+        var selection = SelectEffectsForMethods(
+            effects,
+            pathMethods,
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            intrinsic
+        );
+        var effectsBySymbol = selection
+            .Effects
             .Where(e => e.EnclosingSymbolId is not null)
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, IReadOnlyList<DerivedEffect> (g) => g.ToList(), StringComparer.Ordinal);
@@ -132,7 +144,8 @@ public static class PathQueryService
             EffectsBySymbol: effectsBySymbol,
             EffectEmoji: rules.EffectEmoji,
             FromMatches: fromMatches,
-            ToMatches: toMatches
+            ToMatches: toMatches,
+            IntrinsicHidden: selection.HiddenIntrinsic > 0
         );
     }
 }
