@@ -256,7 +256,7 @@ internal static class LiveQueryRunner
         new(
             Exit: 2,
             Out: "",
-            Err: $"live: exact {verb} unavailable at resident revision {revision}: {reason}; restart the watcher and retry{Environment.NewLine}"
+            Err: $"live: exact {verb} unavailable at resident revision {revision}: {reason}; restart the watcher and retry\n"
         );
 
     private static ExactForwardDemand BuildPathDemand(
@@ -519,7 +519,7 @@ internal static class LiveQueryRunner
         var trimmed = (query ?? "").Trim();
         if (trimmed.Length == 0)
         {
-            return new LiveAnswer(Exit: 2, Out: $"live: empty query — {Usage}{Environment.NewLine}", Err: "");
+            return new LiveAnswer(Exit: 2, Out: $"live: empty query — {Usage}\n", Err: "");
         }
 
         var split = trimmed.IndexOf(' ', StringComparison.Ordinal);
@@ -588,7 +588,7 @@ internal static class LiveQueryRunner
                 return await PathAsync(queryText, facts, workingDirectory, asyncMode, includeDelivery);
             }
 
-            return new LiveAnswer(Exit: 2, Out: $"live: unsupported query '{verb}' — {Usage}{Environment.NewLine}", Err: "");
+            return new LiveAnswer(Exit: 2, Out: $"live: unsupported query '{verb}' — {Usage}\n", Err: "");
         }
         catch (Exception exception)
             when (exception is DemandForwardGraphUnavailableException or DemandReverseCallersGraphUnavailableException)
@@ -599,8 +599,7 @@ internal static class LiveQueryRunner
 
     // A usage rejection: exit 2, the reason, and what IS supported. Exit 2 (not 1) keeps "you asked wrong"
     // distinguishable from "the answer is no results", the same way the CLI's parse errors are.
-    private static LiveAnswer Rejected(string reason) =>
-        new LiveAnswer(Exit: 2, Out: $"live: {reason} — {Usage}{Environment.NewLine}", Err: "");
+    private static LiveAnswer Rejected(string reason) => new LiveAnswer(Exit: 2, Out: $"live: {reason} — {Usage}\n", Err: "");
 
     // `reaches <pattern>`, answered off the resident facts. The Options record is the DEFAULT one the CLI
     // builds when only the positional pattern is given. The text surface additionally accepts the two
@@ -639,8 +638,10 @@ internal static class LiveQueryRunner
         Func<TOptions, CommandIo, Func<Task<IQueryFactSource>>, Task<int>> run
     )
     {
-        var output = new StringWriter();
-        var error = new StringWriter();
+        // Same LF contract as CliApplication.RunAsync — a live answer must be byte-comparable with the
+        // store-backed answer for the same tree, on any host.
+        var output = new StringWriter { NewLine = "\n" };
+        var error = new StringWriter { NewLine = "\n" };
         var source = new LiveQueryFactSource(facts);
         var exit = await run(
             options,

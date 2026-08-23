@@ -14,6 +14,12 @@ public static class CliApplication
 
     public static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
+        // rig answers are LF on every platform. The machine formats (--format tsv/json) are consumed by
+        // agents, scripts and the web layer, so a byte-identical answer must not depend on the host's
+        // Environment.NewLine — a Windows run would otherwise emit \r\n and silently differ from CI.
+        output.NewLine = "\n";
+        error.NewLine = "\n";
+
         var root = Root.Build(output, error, workingDirectory);
         var configuration = new InvocationConfiguration { Output = output, Error = error };
         return await root.Parse(args).InvokeAsync(configuration);

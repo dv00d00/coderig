@@ -532,17 +532,14 @@ internal sealed class WatchHost : IAsyncDisposable
         if (capture.UnavailableReason is not null)
         {
             var refused = LiveQueryRunner.ExactUnavailable(demand!.Verb, capture.Snapshot.Revision.Value, capture.UnavailableReason);
-            return $"{capture.Disclosure}{Environment.NewLine}{refused.Text.TrimEnd('\r', '\n')}";
+            return $"{capture.Disclosure}\n{refused.Text.TrimEnd('\r', '\n')}";
         }
 
         var facts = capture.Facts!;
         var built = facts.BuildTimes.Count; // artifacts already memoized before this query
         var answer = await LiveQueryRunner.AnswerAsync(query, facts, _workingDirectory);
-        var costLine =
-            facts.BuildTimes.Count == built
-                ? ""
-                : $"{Environment.NewLine}live: derived layer built this generation: {facts.BuildTimeLine()}";
-        return $"{capture.Disclosure}{Environment.NewLine}{answer.Text.TrimEnd('\r', '\n')}{costLine}";
+        var costLine = facts.BuildTimes.Count == built ? "" : $"\nlive: derived layer built this generation: {facts.BuildTimeLine()}";
+        return $"{capture.Disclosure}\n{answer.Text.TrimEnd('\r', '\n')}{costLine}";
     }
 
     // Answer one TRANSPORT request — a one-shot `rig reaches/path/callers/tree` in this working directory,
@@ -564,7 +561,7 @@ internal sealed class WatchHost : IAsyncDisposable
             return LiveServeResult.Answered(
                 refused.Exit,
                 refused.Out,
-                string.Concat(capture.Health.Select(line => line + Environment.NewLine)) + refused.Err,
+                string.Concat(capture.Health.Select(line => line + "\n")) + refused.Err,
                 capture.Disclosure
             );
         }
@@ -581,7 +578,7 @@ internal sealed class WatchHost : IAsyncDisposable
         var notes = new StringBuilder();
         foreach (var line in capture.Health)
         {
-            notes.AppendLine(line);
+            notes.Append(line).Append('\n');
         }
 
         if (answer.Err.Length > 0)
@@ -589,13 +586,13 @@ internal sealed class WatchHost : IAsyncDisposable
             notes.Append(answer.Err);
             if (!answer.Err.EndsWith('\n'))
             {
-                notes.AppendLine();
+                notes.Append('\n');
             }
         }
 
         if (facts.BuildTimes.Count != built)
         {
-            notes.AppendLine($"live: derived layer built this generation: {facts.BuildTimeLine()}");
+            notes.Append($"live: derived layer built this generation: {facts.BuildTimeLine()}").Append('\n');
         }
 
         return LiveServeResult.Answered(
