@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Commands;
 using Rig.Cli.Deployments;
@@ -21,14 +22,17 @@ namespace Rig.Cli.Live;
 // Two honest asymmetries vs the store path, both disclosed rather than papered over:
 //
 //  1. MOST INPUTS ARE NOT SQL-BOUNDED. The store path narrows the effect-derivation inputs to the pattern's
-//     SQL reach closure (SqlReachability); live reaches/tree and reverse callers still use the whole resident
-//     graph and let traversal narrow that sound superset. Forward path is the exception: the optional demand
-//     capability below walks keyed caller partitions to a fixed point and never forces TraversalGraph.
+//     SQL reach closure (SqlReachability); live reaches/tree still use the whole resident graph and let
+//     traversal narrow that sound superset. Forward path and reverse callers are the exceptions: their
+//     optional demand capabilities walk keyed partitions to a fixed point and never force TraversalGraph.
 //  2. NO QUERY CACHE. The store path memoizes the (expensive, pattern-independent) EP-site map in
 //     .rig/cache.db keyed by store identity; live facts change per edit, so a disk cache keyed on them would
 //     be a liability. The equivalent here is per-GENERATION memoization: derive once, reuse for every query
 //     against the same facts, discard when the facts move.
-internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSource, IDemandForwardPathFactSource
+internal sealed class LiveQueryFactSource(LiveFactSource live)
+    : IQueryFactSource,
+        IDemandForwardPathFactSource,
+        IDemandReverseCallersFactSource
 {
     private readonly object _gate = new();
 
@@ -64,8 +68,8 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
     // LoadEffectReachInputsAsync is that nothing but the graph is wanted, so nothing but the graph is touched
     // (on the live path that also means the effect derivation is never forced by a `path`/`callers` query).
     //
-    // `direction` is intentionally unused here: reverse callers still takes the WHOLE shaped graph and
-    // FactPathFinder narrows it at traversal time. Indexed forward path does not call this member.
+    // `direction` is intentionally unused here. Indexed forward path and reverse callers use their keyed
+    // demand capabilities instead; this remains the store-parity seam and flattened-fixture fallback.
     public Task<FactGraphData> LoadShapedTraversalGraphAsync(string pattern, SqlReachability.Direction direction, RuleSet shapedRules) =>
         Task.FromResult(
             SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules)
@@ -109,6 +113,47 @@ internal sealed class LiveQueryFactSource(LiveFactSource live) : IQueryFactSourc
                     Context: shapedRules.Context
                 ),
                 new DemandForwardGraphRequest(fromPattern, maxDepth, mode)
+            )
+        );
+    }
+
+    public Task<DemandReverseCallersGraphResult> LoadDemandReverseCallersGraphAsync(
+        DemandForwardGraphRules rules,
+        DemandReverseCallersGraphRequest request
+    )
+    {
+        if (Source.Facts is IIndexedFactSnapshotView indexed)
+        {
+            // Caps and unsupported projections fail closed in the keyed builder. Do not turn either into an
+            // undisclosed whole-graph answer: WatchHost owns the decision to decline an exact live query.
+            return Task.FromResult(DemandReverseCallersGraph.Build(indexed.GraphView, rules, request));
+        }
+
+        // Compatibility only for tests/callers that supplied a flattened AnalysisResult. WatchHost publishes
+        // an indexed FactSnapshot and never takes this arm. This is the one deliberate whole-graph fallback;
+        // its diagnostics and empty ownership hints make the loss of keyed provenance explicit.
+        var shapedRules = Source.Rules with
+        {
+            Handoff = rules.Projection.Handoff ?? [],
+            Redirect = rules.Projection.Redirect ?? [],
+            Factory = rules.Projection.Factory ?? [],
+            Cut = rules.Cut,
+            Context = rules.Context,
+        };
+        var graph = SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules);
+        var targetIds = FactPathFinder
+            .ReachedBy(graph, request.ToPattern, maxDepth: 0, maxNodes: int.MaxValue, mode: request.DiscoveryMode)
+            .Where(pair => pair.Value == 0)
+            .Select(pair => pair.Key)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToImmutableArray();
+        return Task.FromResult(
+            new DemandReverseCallersGraphResult(
+                graph,
+                DemandReverseCallersGraphDiagnostics.LegacyFallback(),
+                targetIds,
+                new DemandReverseOwnershipHints([], []),
+                EventSubscriptionsClassified: false
             )
         );
     }

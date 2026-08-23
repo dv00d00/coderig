@@ -106,7 +106,8 @@ internal static class CallersCommand
                         new TextOutput(Output: output, Error: error),
                         new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
                     );
-                    return await LiveRoute.TryAnswerAsync(LiveQueryVerbs.Callers, opts, io, pr.GetValue(noLive)) ?? await RunAsync(opts, io);
+                    return await LiveRoute.TryAnswerAsync(LiveQueryVerbs.Callers, opts, io, pr.GetValue(noLive))
+                        ?? await RunAsync(opts, io);
                 }
             )
         );
@@ -131,6 +132,23 @@ internal static class CallersCommand
         bool Time
     );
 
+    // The graph shape is shared by store and live execution. Raw means "no traversal shaping", while
+    // redirect remains load-bearing: it retains/rebinds an otherwise external convenience overload to the
+    // first-party virtual hatch and was intentionally never part of raw's bypass.
+    internal static RuleSet ShapeRules(Options opts, RuleSet rules) =>
+        opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+
+    // Human --entrypoints output contains a sync-only hint that probes the async reverse set. Discover that
+    // superset once, while execution below still uses the user's original mode. TSV has no hint and ordinary
+    // callers/roots need only their execution lens.
+    internal static FactPathFinder.TraversalMode DiscoveryMode(Options opts, bool tsv)
+    {
+        var executionMode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
+        return executionMode == FactPathFinder.TraversalMode.SyncCut && opts.EntrypointsOnly && !tsv
+            ? FactPathFinder.TraversalMode.AsyncExact
+            : executionMode;
+    }
+
     // The CLI entry: answer off the .rig store, which is what every `rig callers` invocation does. The source
     // is passed as a FACTORY, not an already-open source, purely to preserve ORDERING: the schema gate must
     // still fire where the old `await using var context = …` sat (after the rules load), not before it.
@@ -153,15 +171,37 @@ internal static class CallersCommand
         // context, honoured symmetrically by the reverse traversal (a cut node yields no successors forward,
         // so it is never a predecessor in reverse).
         var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
-        var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var shaped = ShapeRules(opts, rules);
 
         await using var source = await openSource();
 
-        // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph; the whole
-        // in-memory graph on the live path, which has no SQL to bound with) drives all three callers modes —
-        // the set, the no-predecessor roots, and the rule-detected entrypoints.
+        // One shaped reverse subgraph (SQL-bounded/full-EF on the store path; keyed fixed-point on an indexed
+        // resident source) drives all three callers modes — the set, no-predecessor roots and rule-detected
+        // entrypoints. A flattened live fixture alone retains the explicit whole-graph compatibility path.
         var graphWatch = Stopwatch.StartNew();
-        var graph = await source.LoadShapedTraversalGraphAsync(opts.ToPattern, SqlReachability.Direction.Reverse, shaped);
+        DemandReverseCallersGraphResult? demandResult = null;
+        FactGraphData graph;
+        if (source is IDemandReverseCallersFactSource demand)
+        {
+            demandResult = await demand.LoadDemandReverseCallersGraphAsync(
+                new DemandForwardGraphRules(
+                    new ForwardCallProjectionRules(
+                        Handoff: shaped.Handoff,
+                        Redirect: shaped.Redirect,
+                        Factory: shaped.Factory,
+                        ClassifyEventSubscriptions: !opts.Raw
+                    ),
+                    shaped.Cut,
+                    shaped.Context
+                ),
+                new DemandReverseCallersGraphRequest(opts.ToPattern, maxDepth, DiscoveryMode(opts, tsv))
+            );
+            graph = demandResult.Graph;
+        }
+        else
+        {
+            graph = await source.LoadShapedTraversalGraphAsync(opts.ToPattern, SqlReachability.Direction.Reverse, shaped);
+        }
 
         // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
         // (and now path). The handler runs LATER via the event, not synchronously at the `+=` site, so it
@@ -169,7 +209,7 @@ internal static class CallersCommand
         // which is direction-agnostic, so it applies to this REVERSE subgraph the same way. Consequence
         // (intended, matches reaches/tree): a `+=` handler is no longer a synchronous reverse caller, so
         // event handlers surface under --roots/--entrypoints only via --async. `--raw` bypasses shaping.
-        if (!opts.Raw)
+        if (!opts.Raw && demandResult?.EventSubscriptionsClassified != true)
         {
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
         }
