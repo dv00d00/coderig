@@ -102,7 +102,14 @@ public sealed class LiveScalePlayground : IDisposable
     {
         var manifestNode = JsonNode.Parse(File.ReadAllText(ManifestPath))!.AsObject();
         manifestNode.Remove("corpusSha256");
-        var provisionalManifest = manifestNode.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n";
+        // The corpus hash is defined over LF content (CorpusGenerator.NormalizeLf, and the manifest's own
+        // HashAlgorithm line says "+ LF"). Indented System.Text.Json writes Environment.NewLine, so this
+        // re-serialization must be normalized the same way or the recomputed hash differs on Windows only.
+        var provisionalManifest =
+            manifestNode
+                .ToJsonString(new JsonSerializerOptions { WriteIndented = true })
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace('\r', '\n') + "\n";
 
         using var aggregate = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var (relative, bytes) in FileInventory().OrderBy(pair => pair.Key, StringComparer.Ordinal))
