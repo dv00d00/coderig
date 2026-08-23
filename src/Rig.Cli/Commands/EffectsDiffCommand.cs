@@ -1,14 +1,9 @@
 using System.CommandLine;
-using System.Diagnostics;
-using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
+using Rig.Cli.Services;
 using Rig.Cli.Telemetry;
-using Rig.Domain.Data;
 using Rig.Domain.Functions;
-using Rig.Storage.Queries;
-using static Rig.Cli.Effects.EffectDerivation;
-using static Rig.Cli.Graph.TraversalGraphLoader;
 using static Rig.Cli.Rendering.SymbolNameFormatter;
 
 namespace Rig.Cli.Commands;
@@ -82,60 +77,36 @@ internal static class EffectsDiffCommand
     private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
-        var label = opts.Label ?? "";
 
         using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
-
-        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory);
-
-        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
-
-        var graphWatch = Stopwatch.StartNew();
-        var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
-        graphWatch.Stop();
-        timing.Record("graph load", graphWatch.Elapsed);
-
-        // Resolve each pattern to exactly one node id (substring, OrdinalIgnoreCase). 0 = no symbol; >1 =
-        // ambiguous (list candidates + error — never silently pick).
-        var aId = ResolvePattern(pattern: opts.APattern, graph: graph, side: "a", io: io, tsv: tsv);
-        if (aId is null)
-        {
-            return 1;
-        }
-
-        var bId = ResolvePattern(pattern: opts.BPattern, graph: graph, side: "b", io: io, tsv: tsv);
-        if (bId is null)
-        {
-            return 1;
-        }
-
-        var traversalWatch = Stopwatch.StartNew();
-        // --only filter. EMPTY = match every effect (the generic default). Resource normalization collapses
-        // ORM type variants (Entity/Collection/DAO) to one logical key; the suffix list is a sensible
-        // LLBLGen-friendly default (harmless elsewhere) — a future `--strip-suffix` knob can override it.
-        var filter = ParseFilter(opts.Only);
-        var normalize = new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["EntityCollection", "Collection", "DAO"]);
-        var spec = new EffectSetDiffSpec(
-            Pairs: [new EffectSetDiffPair(Label: label, AId: aId, BId: bId)],
-            Filter: filter,
-            Normalize: normalize
+        var result = await EffectsDiffQueryService.BuildAsync(
+            workingDirectory: io.WorkspaceLocation.WorkingDirectory,
+            aPattern: opts.APattern,
+            bPattern: opts.BPattern,
+            only: opts.Only,
+            label: opts.Label,
+            storeRef: io.WorkspaceLocation.StoreRef
         );
+        timing.Record("graph load", result.GraphLoadElapsed);
+        timing.Record("traversal", result.TraversalElapsed);
 
-        // Whole-store effect derivation (same source `rig derive` uses) — unfiltered, so nothing is hidden
-        // before the per-EP filter is applied.
-        var effects = await DeriveHazardEffectsAsync(context: context, rules: rules);
+        if (!result.Matched)
+        {
+            RenderResolutionFailure(result.A, side: "a", io, tsv);
+            if (result.A.Status == EffectsDiffQueryService.TargetStatus.Matched)
+            {
+                RenderResolutionFailure(result.B, side: "b", io, tsv);
+            }
+            return 1;
+        }
 
-        var findings = FactEffectSetDiffDeriver.Derive(graph: graph, effects: effects, spec: spec);
-        traversalWatch.Stop();
-        timing.Record("traversal", traversalWatch.Elapsed);
-
-        var renderWatch = Stopwatch.StartNew();
+        var renderWatch = System.Diagnostics.Stopwatch.StartNew();
         if (tsv)
         {
             // columns: label, category, resource_key, side, present_ep, absent_ep
             // category = the present EP's provider:op(s) for this resource (comma-joined) — labels the row's
             // KIND (e.g. permission:assert = a guard; llblgen:write = a durable write).
-            foreach (var f in findings)
+            foreach (var f in result.Findings)
             {
                 io.TextOutput.Output.WriteLine(
                     $"{f.Label}\t{string.Join(",", f.Categories)}\t{f.ResourceKey}\t{f.Direction}\t{f.PresentEpId}\t{f.AbsentEpId}"
@@ -148,7 +119,7 @@ internal static class EffectsDiffCommand
             return 0;
         }
 
-        if (findings.Count == 0)
+        if (result.Findings.Count == 0)
         {
             io.TextOutput.Output.WriteLine($"No effect-set difference between '{opts.APattern}' and '{opts.BPattern}'.");
 
@@ -159,9 +130,9 @@ internal static class EffectsDiffCommand
         }
 
         io.TextOutput.Output.WriteLine(
-            $"Effect-set difference: {findings.Count} resource(s) differ between A='{opts.APattern}' and B='{opts.BPattern}'."
+            $"Effect-set difference: {result.Findings.Count} resource(s) differ between A='{opts.APattern}' and B='{opts.BPattern}'."
         );
-        foreach (var f in findings)
+        foreach (var f in result.Findings)
         {
             var side = f.Direction == EffectDiffSide.AOnly ? "A-only" : "B-only";
             var category = f.Categories.Count > 0 ? string.Join(",", f.Categories) : "?";
@@ -176,67 +147,40 @@ internal static class EffectsDiffCommand
         return 0;
     }
 
-    // Resolve a pattern to exactly one node DocID. Returns null + writes a diagnostic on 0 or >1 matches.
-    // >1 lists the candidates and tells the user to narrow it (never silently pick one).
-    private static string? ResolvePattern(string pattern, FactGraphData graph, string side, CommandIo io, bool tsv)
+    private static void RenderResolutionFailure(
+        EffectsDiffQueryService.TargetResolution target,
+        string side,
+        CommandIo io,
+        bool tsv
+    )
     {
-        var matches = graph
-            .Methods.Select(m => m.SymbolId)
-            .Where(id => id.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        if (matches.Count == 0)
+        if (target.Status == EffectsDiffQueryService.TargetStatus.Matched)
         {
-            var line = $"No symbol matches '{pattern}'.";
-            (tsv ? io.TextOutput.Error : io.TextOutput.Output).WriteLine(line);
-            return null;
+            return;
         }
 
-        if (matches.Count > 1)
+        if (target.Status == EffectsDiffQueryService.TargetStatus.NoMatch)
         {
-            var line = $"Ambiguous: '{pattern}' ({side}) matched {matches.Count} nodes — narrow it.";
-            if (tsv)
-            {
-                io.TextOutput.Error.WriteLine(line);
-            }
-            else
-            {
-                io.TextOutput.Output.WriteLine(line);
-                foreach (var candidate in matches.Take(10))
-                {
-                    io.TextOutput.Output.WriteLine($"{Indent.L1}{candidate}");
-                }
-
-                if (matches.Count > 10)
-                {
-                    io.TextOutput.Output.WriteLine($"{Indent.L1}… and {matches.Count - 10} more");
-                }
-            }
-
-            return null;
+            (tsv ? io.TextOutput.Error : io.TextOutput.Output).WriteLine($"No symbol matches '{target.Pattern}'.");
+            return;
         }
 
-        return matches[0];
-    }
-
-    // Parse --only tokens into effect predicates. EMPTY (no --only) = empty list = match ALL effects.
-    // A "provider:operation" token pins both; a bare "provider" token matches any operation of that provider.
-    private static IReadOnlyList<EffectPredicate> ParseFilter(string[]? tokens)
-    {
-        if (tokens is null || tokens.Length == 0)
+        var line = $"Ambiguous: '{target.Pattern}' ({side}) matched {target.Matches.Count} nodes — narrow it.";
+        if (tsv)
         {
-            return [];
+            io.TextOutput.Error.WriteLine(line);
+            return;
         }
 
-        return tokens
-            .Select(t =>
-            {
-                var colon = t.IndexOf(':');
-                return colon < 0
-                    ? new EffectPredicate(Provider: t, Operation: null)
-                    : new EffectPredicate(Provider: t[..colon], Operation: t[(colon + 1)..]);
-            })
-            .ToList();
+        io.TextOutput.Output.WriteLine(line);
+        foreach (var candidate in target.Matches.Take(10))
+        {
+            io.TextOutput.Output.WriteLine($"{Indent.L1}{candidate}");
+        }
+
+        if (target.Matches.Count > 10)
+        {
+            io.TextOutput.Output.WriteLine($"{Indent.L1}… and {target.Matches.Count - 10} more");
+        }
     }
 }
