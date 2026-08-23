@@ -36,8 +36,10 @@ internal static class CommonOptions
 
     internal static Option<bool> Raw() => new("--raw") { Description = "Bypass graph shaping (factory/cut/context rules)." };
 
-    // --maxdepth / --depth (alias): unbounded when absent (the action substitutes int.MaxValue).
-    internal static Option<int?> Depth() => new("--maxdepth", "--depth") { Description = "Max traversal depth (default: unbounded)." };
+    // --max-depth / --maxdepth / --depth (aliases): unbounded when absent (the action substitutes int.MaxValue).
+    // Keep both historical spellings; --max-depth is the conventional long-option form agents expect.
+    internal static Option<int?> Depth() =>
+        new("--max-depth", "--maxdepth", "--depth") { Description = "Max traversal depth (default: unbounded)." };
 
     internal static Option<string[]> Only() =>
         FilterList(name: "--only", description: "Keep only these effects (provider or provider:operation).");
@@ -170,7 +172,7 @@ internal static class CommonOptions
             ? (includeDelivery ? FactPathFinder.TraversalMode.AsyncInclude : FactPathFinder.TraversalMode.AsyncExact)
             : FactPathFinder.TraversalMode.SyncCut;
 
-    // --maxdepth/--depth absent => unbounded (int.MaxValue); the closure + node cap + cycle dedup still terminate.
+    // --max-depth/--maxdepth/--depth absent => unbounded (int.MaxValue); the closure + node cap + cycle dedup still terminate.
     internal static int DepthOrUnbounded(int? depth) => depth ?? int.MaxValue;
 
     // --format token readers: matched case-insensitively. These replace the hand-rolled

@@ -12,6 +12,51 @@ public static class SymbolSearchService
 {
     public sealed record SymbolHit(string Id, string Kind, string Name, string? File, int Line);
 
+    // Full-fidelity query row shared by the CLI's human/TSV/JSON renderers. The web search maps this to its
+    // intentionally smaller navigation-picker DTO after applying web-only ranking.
+    public sealed record SymbolRecord(
+        string Id,
+        string Kind,
+        string Name,
+        string Signature,
+        string File,
+        int Line,
+        string Assembly
+    );
+
+    public sealed record SymbolQueryResult(int Total, IReadOnlyList<SymbolRecord> Symbols);
+
+    // The one raw store query + lambda filter behind both CLI and web. It deliberately does NOT rank or cap:
+    // the CLI preserves the store's ordinal SymbolId order, while the web picker applies navigation ranking.
+    public static async Task<SymbolQueryResult> QueryAsync(
+        string workingDirectory,
+        string query,
+        string? kind = null,
+        bool noLambdas = false,
+        string? storeRef = null
+    )
+    {
+        await using var context = await OpenReadContextGatedAsync(
+            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
+        );
+        // Fetch beyond any presentation cap so Total is the true post-filter total. The LIKE fallback is
+        // itself bounded to 5000 unique rows; the FTS path returns the full match set.
+        var hits = await Reads.SearchSymbolsAsync(context, pattern: query, kind: kind, limit: int.MaxValue);
+        var filtered = noLambdas ? hits.Where(h => !h.SymbolId.Contains("~λ", StringComparison.Ordinal)) : hits;
+        var rows = filtered
+            .Select(h => new SymbolRecord(
+                Id: h.SymbolId,
+                Kind: h.Kind,
+                Name: SymbolNameFormatter.ShortName(h.SymbolId),
+                Signature: h.Signature,
+                File: h.FilePath,
+                Line: h.Line,
+                Assembly: h.DefiningAssembly
+            ))
+            .ToList();
+        return new SymbolQueryResult(Total: rows.Count, Symbols: rows);
+    }
+
     public static async Task<IReadOnlyList<SymbolHit>> SearchAsync(
         string workingDirectory,
         string query,
@@ -21,13 +66,7 @@ public static class SymbolSearchService
         string? storeRef = null
     )
     {
-        await using var context = await OpenReadContextGatedAsync(
-            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
-        );
-        // Fetch unbounded then trim after the lambda filter, matching `rig symbols` (the display cap applies
-        // post-filter). Compiler-generated lambdas (~λ) are dropped by default — they're noise in a picker.
-        var hits = await Reads.SearchSymbolsAsync(context, pattern: query, kind: kind, limit: int.MaxValue);
-        var filtered = noLambdas ? hits.Where(h => !h.SymbolId.Contains("~λ", StringComparison.Ordinal)) : hits;
+        var result = await QueryAsync(workingDirectory, query, kind, noLambdas, storeRef);
 
         // Rank for a NAVIGATION picker before applying the cap. The shared query orders by symbolid
         // (alphabetical), which puts DocID prefixes E:/F: (events/fields) ahead of M:/T: (methods/types) — so a
@@ -35,14 +74,13 @@ public static class SymbolSearchService
         // user actually navigates to. Re-rank: best name match first, then navigable kinds, then shorter (more
         // specific) names. Web-only — the CLI's alphabetical `rig symbols` order is unchanged.
         var q = query.Trim();
-        return filtered
-            .Select(h => (h, name: SymbolNameFormatter.ShortName(h.SymbolId)))
-            .OrderBy(x => NameRank(x.name, q))
-            .ThenBy(x => KindRank(x.h.Kind))
-            .ThenBy(x => x.name.Length)
-            .ThenBy(x => x.h.SymbolId, StringComparer.Ordinal)
+        return result
+            .Symbols.OrderBy(h => NameRank(h.Name, q))
+            .ThenBy(h => KindRank(h.Kind))
+            .ThenBy(h => h.Name.Length)
+            .ThenBy(h => h.Id, StringComparer.Ordinal)
             .Take(limit)
-            .Select(x => new SymbolHit(Id: x.h.SymbolId, Kind: x.h.Kind, Name: x.name, File: x.h.FilePath, Line: x.h.Line))
+            .Select(h => new SymbolHit(Id: h.Id, Kind: h.Kind, Name: h.Name, File: h.File, Line: h.Line))
             .ToList();
     }
 

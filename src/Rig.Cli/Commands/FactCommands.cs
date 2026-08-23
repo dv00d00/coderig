@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
@@ -226,6 +227,10 @@ internal static class FactCommands
         var pattern = CommonOptions.Pattern(name: "pattern", description: "Symbol name pattern to search for.");
         var kind = CommonOptions.Kind();
         var limit = CommonOptions.Limit(50);
+        var format = CommonOptions.Format(
+            description: "Output format: tsv or json. Machine formats contain no human headings or footers.",
+            allowedValues: ["tsv", "json"]
+        );
         var noLambdas = new Option<bool>("--no-lambdas")
         {
             Description = "Exclude compiler-generated lambdas (symbols containing ~λ in their DocID).",
@@ -236,6 +241,7 @@ internal static class FactCommands
             pattern,
             kind,
             limit,
+            format,
             noLambdas,
             storeRef,
         };
@@ -248,32 +254,60 @@ internal static class FactCommands
                     var p = pr.GetValue(pattern)!;
                     var k = pr.GetValue(kind);
                     var cap = pr.GetValue(limit);
+                    var outputFormat = pr.GetValue(format);
                     var filterLambdas = pr.GetValue(noLambdas);
                     var sr = pr.GetValue(storeRef);
-                    var ws = new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: sr);
-                    await using var context = await OpenReadContextGatedAsync(ws);
-                    // Fetch beyond the display cap so we can compute the true post-filter total: the LIKE
-                    // fallback hard-caps at 5000 unique rows, and the FTS path returns all matches.
-                    var allHits = await Reads.SearchSymbolsAsync(context, pattern: p, kind: k, limit: int.MaxValue);
-                    var filtered = filterLambdas
-                        ? allHits.Where(h => !h.SymbolId.Contains("~λ", StringComparison.Ordinal)).ToList()
-                        : allHits.ToList();
+                    var result = await SymbolSearchService.QueryAsync(workingDirectory, p, k, filterLambdas, sr);
+                    var shown = result.Symbols.Take(cap).ToList();
 
-                    var total = filtered.Count;
-                    var shown = filtered.Take(cap).ToList();
+                    if (string.Equals(outputFormat, "tsv", StringComparison.OrdinalIgnoreCase))
+                    {
+                        output.WriteLine("id\tkind\tname\tsignature\tfile\tline\tassembly");
+                        foreach (var hit in shown)
+                        {
+                            output.WriteLine(
+                                $"{hit.Id}\t{hit.Kind}\t{hit.Name}\t{hit.Signature}\t{hit.File}\t{hit.Line}\t{hit.Assembly}"
+                            );
+                        }
+
+                        if (result.Total > shown.Count)
+                        {
+                            error.WriteLine(
+                                $"note: symbol results truncated — showing {shown.Count} of {result.Total}; use --limit to raise."
+                            );
+                        }
+
+                        return 0;
+                    }
+
+                    if (string.Equals(outputFormat, "json", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var envelope = new
+                        {
+                            Query = p,
+                            Kind = k,
+                            Shown = shown.Count,
+                            Total = result.Total,
+                            Truncated = result.Total > shown.Count,
+                            Symbols = shown,
+                        };
+                        output.WriteLine(JsonSerializer.Serialize(envelope, SymbolJson));
+                        return 0;
+                    }
+
                     output.WriteLine($"Symbols matching '{p}'{(k is null ? "" : $" kind={k}")}");
                     foreach (var hit in shown)
                     {
-                        output.WriteLine($"{Indent.L1}{hit.Kind, -8} {hit.SymbolId}  {ShortenPath(hit.FilePath)}:{hit.Line}");
+                        output.WriteLine($"{Indent.L1}{hit.Kind, -8} {hit.Id}  {ShortenPath(hit.File)}:{hit.Line}");
                     }
 
-                    if (total > cap)
+                    if (result.Total > cap)
                     {
-                        output.WriteLine($"{Indent.L1}(showing {cap} of {total} — use --limit to raise)");
+                        output.WriteLine($"{Indent.L1}(showing {cap} of {result.Total} — use --limit to raise)");
                     }
                     else
                     {
-                        output.WriteLine($"{Indent.L1}({total} shown)");
+                        output.WriteLine($"{Indent.L1}({result.Total} shown)");
                     }
 
                     return 0;
@@ -282,6 +316,8 @@ internal static class FactCommands
         );
         return cmd;
     }
+
+    private static readonly JsonSerializerOptions SymbolJson = new(JsonSerializerDefaults.Web);
 
     internal static Command BuildRefs(TextWriter output, TextWriter error, string workingDirectory)
     {

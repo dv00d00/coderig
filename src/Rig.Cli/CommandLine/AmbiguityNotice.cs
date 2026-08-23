@@ -32,4 +32,31 @@ internal static class AmbiguityNotice
             $"note: pattern '{pattern}' matched {distinctTargets.Count} distinct symbols ({listed}{more}) — results span ALL of them; qualify the pattern (e.g. 'DeclaringType.Method') to narrow."
         );
     }
+
+    // `show` is different from a traversal union: dumping several unrelated declarations is not a useful
+    // answer and can flood the terminal. List exact, pasteable follow-up commands and let --all opt back into
+    // the old union behavior. Returns true when the caller must stop without rendering.
+    internal static bool RequireSelection(TextWriter error, string pattern, IReadOnlyList<string> distinctTargets)
+    {
+        if (distinctTargets.Count <= 1)
+        {
+            return false;
+        }
+
+        error.WriteLine(
+            $"Ambiguous symbol pattern '{pattern}' matched {distinctTargets.Count} distinct symbols; source was not rendered."
+        );
+        foreach (var target in distinctTargets.Take(MaxListed))
+        {
+            error.WriteLine($"  rig show \"{target}\"");
+        }
+
+        if (distinctTargets.Count > MaxListed)
+        {
+            error.WriteLine($"  … +{distinctTargets.Count - MaxListed} more; use `rig symbols \"{pattern}\" --format tsv` to list them.");
+        }
+
+        error.WriteLine("Choose an exact name above, or pass --all to render the matches (subject to --limit).");
+        return true;
+    }
 }
