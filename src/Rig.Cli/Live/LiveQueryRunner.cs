@@ -63,8 +63,10 @@ internal static class LiveQueryRunner
             case LiveQueryVerbs.Reaches:
                 return await ServeAsync<ReachesCommand.Options>(
                     request,
+                    Normalize,
                     o => o.ExtraRules,
-                    o => RunReachesAsync(Normalize(o), facts, workingDirectory)
+                    IsValidReachesOptions,
+                    o => RunReachesAsync(o, facts, workingDirectory)
                 );
 
             case LiveQueryVerbs.Path:
@@ -73,15 +75,19 @@ internal static class LiveQueryRunner
             case LiveQueryVerbs.Callers:
                 return await ServeAsync<CallersCommand.Options>(
                     request,
+                    o => o,
                     o => o.ExtraRules,
+                    _ => true,
                     o => RunCallersAsync(o, facts, workingDirectory)
                 );
 
             case LiveQueryVerbs.Tree:
                 return await ServeAsync<TreeCommand.Options>(
                     request,
+                    Normalize,
                     o => o.ExtraRules,
-                    o => RunTreeAsync(Normalize(o), facts, workingDirectory)
+                    IsValidTreeOptions,
+                    o => RunTreeAsync(o, facts, workingDirectory)
                 );
 
             default:
@@ -113,56 +119,166 @@ internal static class LiveQueryRunner
     // Preparation is intentionally separate from execution: WatchHost calls this before it captures a
     // snapshot or pays any refinement cost. Null means the normal runner must reject/decline the request
     // without touching resident debt.
-    internal static ExactPathDemand? PrepareTextPathDemand(string query, Rig.Domain.Data.RuleSet rules)
+    internal static ExactForwardDemand? PrepareTextForwardDemand(string query, Rig.Domain.Data.RuleSet rules, bool deploymentsConfigured)
     {
         var trimmed = (query ?? "").Trim();
         var split = trimmed.IndexOf(' ', StringComparison.Ordinal);
         var verb = split < 0 ? trimmed : trimmed[..split];
-        if (!string.Equals(verb, LiveQueryVerbs.Path, StringComparison.OrdinalIgnoreCase) || split < 0)
+        if (split < 0)
         {
             return null;
         }
 
-        return TrySplitArguments(trimmed[(split + 1)..].Trim(), out var endpoints) && endpoints.Count == 2
-            ? BuildPathDemand(DefaultPathOptions(endpoints[0], endpoints[1]), rules)
+        var remainder = trimmed[(split + 1)..].Trim();
+        if (string.Equals(verb, LiveQueryVerbs.Path, StringComparison.OrdinalIgnoreCase))
+        {
+            return TrySplitArguments(remainder, out var endpoints) && endpoints.Count == 2
+                ? BuildPathDemand(DefaultPathOptions(endpoints[0], endpoints[1]), rules, deploymentsConfigured)
+                : null;
+        }
+
+        var pattern = remainder.Trim('"');
+        if (string.IsNullOrWhiteSpace(pattern))
+        {
+            return null;
+        }
+
+        if (string.Equals(verb, LiveQueryVerbs.Reaches, StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildReachesDemand(DefaultReachesOptions(pattern), rules, deploymentsConfigured);
+        }
+
+        return string.Equals(verb, LiveQueryVerbs.Tree, StringComparison.OrdinalIgnoreCase)
+            ? BuildTreeDemand(DefaultTreeOptions(pattern), rules, deploymentsConfigured)
             : null;
     }
 
-    internal static ExactPathDemand? PrepareTransportPathDemand(LiveQueryRequest request, Rig.Domain.Data.RuleSet rules)
+    internal static ExactForwardDemand? PrepareTransportForwardDemand(
+        LiveQueryRequest request,
+        Rig.Domain.Data.RuleSet rules,
+        bool deploymentsConfigured
+    )
     {
-        if (
-            !string.Equals(request.Verb, LiveQueryVerbs.Path, StringComparison.Ordinal)
-            || Decode<PathCommand.Options>(request.Options) is not { } options
-        )
+        if (string.Equals(request.Verb, LiveQueryVerbs.Path, StringComparison.Ordinal))
         {
-            return null;
+            var options = Decode<PathCommand.Options>(request.Options);
+            return options is not null && IsValidPathOptions(options) && options.ExtraRules is not { Count: > 0 }
+                ? BuildPathDemand(options, rules, deploymentsConfigured)
+                : null;
         }
 
-        return IsValidPathOptions(options) && options.ExtraRules is not { Count: > 0 } ? BuildPathDemand(options, rules) : null;
+        if (string.Equals(request.Verb, LiveQueryVerbs.Reaches, StringComparison.Ordinal))
+        {
+            var options = Decode<ReachesCommand.Options>(request.Options) is { } decoded ? Normalize(decoded) : null;
+            return options is not null && IsValidReachesOptions(options) && options.ExtraRules is not { Count: > 0 }
+                ? BuildReachesDemand(options, rules, deploymentsConfigured)
+                : null;
+        }
+
+        if (string.Equals(request.Verb, LiveQueryVerbs.Tree, StringComparison.Ordinal))
+        {
+            var options = Decode<TreeCommand.Options>(request.Options) is { } decoded ? Normalize(decoded) : null;
+            return options is not null && IsValidTreeOptions(options) && options.ExtraRules is not { Count: > 0 }
+                ? BuildTreeDemand(options, rules, deploymentsConfigured)
+                : null;
+        }
+
+        return null;
     }
 
-    internal static LiveAnswer ExactUnavailable(long revision, string reason) =>
+    internal static LiveAnswer ExactUnavailable(string verb, long revision, string reason) =>
         new(
             Exit: 2,
             Out: "",
-            Err: $"live: exact path unavailable at resident revision {revision}: {reason}; restart the watcher and retry{Environment.NewLine}"
+            Err: $"live: exact {verb} unavailable at resident revision {revision}: {reason}; restart the watcher and retry{Environment.NewLine}"
         );
 
-    private static ExactPathDemand BuildPathDemand(PathCommand.Options options, Rig.Domain.Data.RuleSet rules)
+    private static ExactForwardDemand BuildPathDemand(
+        PathCommand.Options options,
+        Rig.Domain.Data.RuleSet rules,
+        bool deploymentsConfigured
+    )
     {
         var shaped = options.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
-        return new ExactPathDemand(
+        return BuildDemand(
+            ExactForwardQueryKind.Path,
             options.FromPattern,
             options.ToPattern,
+            options.Raw,
+            options.Depth,
+            options.Async,
+            options.IncludeDelivery,
+            shaped,
+            deploymentsConfigured ? ExactForwardDebtScope.WholeResident : ExactForwardDebtScope.DemandBoundary
+        );
+    }
+
+    private static ExactForwardDemand BuildReachesDemand(
+        ReachesCommand.Options options,
+        Rig.Domain.Data.RuleSet rules,
+        bool deploymentsConfigured
+    )
+    {
+        // Reaches raw retains generic-factory projection; only cut/context and event classification are off.
+        var shaped = options.Raw ? rules with { Cut = [], Context = [] } : rules;
+        return BuildDemand(
+            ExactForwardQueryKind.Reaches,
+            options.FromPattern,
+            null,
+            options.Raw,
+            options.Depth,
+            options.Async,
+            options.IncludeDelivery,
+            shaped,
+            deploymentsConfigured ? ExactForwardDebtScope.WholeResident : ExactForwardDebtScope.DemandBoundary
+        );
+    }
+
+    private static ExactForwardDemand BuildTreeDemand(
+        TreeCommand.Options options,
+        Rig.Domain.Data.RuleSet rules,
+        bool deploymentsConfigured
+    )
+    {
+        var shaped = options.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var wholeDebt = deploymentsConfigured || string.Equals(options.View, "hazards", StringComparison.OrdinalIgnoreCase);
+        return BuildDemand(
+            ExactForwardQueryKind.Tree,
+            options.FromPattern,
+            null,
+            options.Raw,
+            options.Depth,
+            options.Async,
+            options.IncludeDelivery,
+            shaped,
+            wholeDebt ? ExactForwardDebtScope.WholeResident : ExactForwardDebtScope.DemandBoundary
+        );
+    }
+
+    private static ExactForwardDemand BuildDemand(
+        ExactForwardQueryKind queryKind,
+        string fromPattern,
+        string? toPattern,
+        bool raw,
+        int? depth,
+        bool asyncMode,
+        bool includeDelivery,
+        Rig.Domain.Data.RuleSet shaped,
+        ExactForwardDebtScope debtScope
+    ) =>
+        new(
+            queryKind,
+            fromPattern,
+            toPattern,
             new DemandForwardGraphRules(
-                new ForwardCallProjectionRules(shaped.Handoff, shaped.Redirect, shaped.Factory, ClassifyEventSubscriptions: !options.Raw),
+                new ForwardCallProjectionRules(shaped.Handoff, shaped.Redirect, shaped.Factory, ClassifyEventSubscriptions: !raw),
                 shaped.Cut,
                 shaped.Context
             ),
-            CommonOptions.DepthOrUnbounded(options.Depth),
-            CommonOptions.Mode(options.Async, options.IncludeDelivery)
+            CommonOptions.DepthOrUnbounded(depth),
+            CommonOptions.Mode(asyncMode, includeDelivery),
+            debtScope
         );
-    }
 
     private static PathCommand.Options DefaultPathOptions(string from, string to) =>
         new(
@@ -190,16 +306,46 @@ internal static class LiveQueryRunner
     }
 
     private static bool IsValidPathOptions(PathCommand.Options options) =>
-        !string.IsNullOrWhiteSpace(options.FromPattern) && !string.IsNullOrWhiteSpace(options.ToPattern);
+        !string.IsNullOrWhiteSpace(options.FromPattern)
+        && !string.IsNullOrWhiteSpace(options.ToPattern)
+        && IsValidExactForwardMode(options.Async, options.IncludeDelivery)
+        && IsValidDepth(options.Depth);
+
+    private static bool IsValidReachesOptions(ReachesCommand.Options options) =>
+        !string.IsNullOrWhiteSpace(options.FromPattern)
+        && IsValidExactForwardMode(options.Async, options.IncludeDelivery)
+        && IsValidDepth(options.Depth)
+        && (options.Limit is null or > 0);
+
+    private static bool IsValidTreeOptions(TreeCommand.Options options) =>
+        !string.IsNullOrWhiteSpace(options.FromPattern)
+        && IsValidTreeView(options.View)
+        && IsValidExactForwardMode(options.Async, options.IncludeDelivery)
+        && IsValidDepth(options.Depth)
+        && (options.Limit is null or > 0);
+
+    private static bool IsValidExactForwardMode(bool asyncMode, bool includeDelivery) => !asyncMode && !includeDelivery;
+
+    private static bool IsValidDepth(int? depth) => depth is null or >= 0;
+
+    private static bool IsValidTreeView(string? view) =>
+        view is not null && new[] { "paths", "full", "effects", "summary", "hazards" }.Contains(view, StringComparer.OrdinalIgnoreCase);
 
     private static async Task<RequestResult> ServeAsync<TOptions>(
         LiveQueryRequest request,
+        Func<TOptions, TOptions> normalize,
         Func<TOptions, IReadOnlyList<string>?> extraRulesOf,
+        Func<TOptions, bool> isValid,
         Func<TOptions, Task<LiveAnswer>> run
     )
         where TOptions : class
     {
-        if (Decode<TOptions>(request.Options) is not { } options)
+        if (Decode<TOptions>(request.Options) is not { } decoded)
+        {
+            return RequestResult.Declined($"unreadable options for `{request.Verb}`");
+        }
+        var options = normalize(decoded);
+        if (!isValid(options))
         {
             return RequestResult.Declined($"unreadable options for `{request.Verb}`");
         }
@@ -231,6 +377,7 @@ internal static class LiveQueryRunner
     private static ReachesCommand.Options Normalize(ReachesCommand.Options options) =>
         options with
         {
+            ExtraRules = options.ExtraRules ?? [],
             Only = CommonOptions.FilterSet([.. options.Only ?? []]),
             Exclude = CommonOptions.FilterSet([.. options.Exclude ?? []]),
         };
@@ -238,8 +385,10 @@ internal static class LiveQueryRunner
     private static TreeCommand.Options Normalize(TreeCommand.Options options) =>
         options with
         {
+            ExtraRules = options.ExtraRules ?? [],
             Only = CommonOptions.FilterSet([.. options.Only ?? []]),
             Exclude = CommonOptions.FilterSet([.. options.Exclude ?? []]),
+            ExcludeNamespaces = options.ExcludeNamespaces ?? [],
         };
 
     internal static async Task<LiveAnswer> AnswerAsync(string query, LiveFactSource facts, string workingDirectory)
@@ -299,23 +448,22 @@ internal static class LiveQueryRunner
     // surface yet, so the output is the default human rendering and is directly comparable to
     // `rig reaches <pattern>` against a store of the same tree (which is exactly what LiveReachesTests does).
     private static Task<LiveAnswer> ReachesAsync(string pattern, LiveFactSource facts, string workingDirectory) =>
-        RunReachesAsync(
-            new ReachesCommand.Options(
-                FromPattern: pattern,
-                Async: false,
-                IncludeDelivery: false,
-                Raw: false,
-                ExtraRules: [],
-                Depth: null,
-                Format: null,
-                Only: CommonOptions.FilterSet(null),
-                Exclude: CommonOptions.FilterSet(null),
-                Intrinsic: false,
-                Limit: null,
-                Time: false
-            ),
-            facts,
-            workingDirectory
+        RunReachesAsync(DefaultReachesOptions(pattern), facts, workingDirectory);
+
+    private static ReachesCommand.Options DefaultReachesOptions(string pattern) =>
+        new(
+            FromPattern: pattern,
+            Async: false,
+            IncludeDelivery: false,
+            Raw: false,
+            ExtraRules: [],
+            Depth: null,
+            Format: null,
+            Only: CommonOptions.FilterSet(null),
+            Exclude: CommonOptions.FilterSet(null),
+            Intrinsic: false,
+            Limit: null,
+            Time: false
         );
 
     private static Task<LiveAnswer> RunReachesAsync(ReachesCommand.Options options, LiveFactSource facts, string workingDirectory) =>
@@ -383,33 +531,32 @@ internal static class LiveQueryRunner
     // "safe" choice: it would recompute the forest for every repeat question, which is precisely the cost a
     // resident host exists to avoid.
     private static Task<LiveAnswer> TreeAsync(string pattern, LiveFactSource facts, string workingDirectory) =>
-        RunTreeAsync(
-            new TreeCommand.Options(
-                FromPattern: pattern,
-                View: "paths",
-                Async: false,
-                IncludeDelivery: false,
-                Raw: false,
-                Files: false,
-                Signatures: false,
-                Plain: false,
-                Guards: false,
-                ExtraRules: [],
-                Depth: null,
-                Limit: null,
-                Only: CommonOptions.FilterSet(null),
-                Exclude: CommonOptions.FilterSet(null),
-                Intrinsic: false,
-                ExcludeNamespaces: CommonOptions.NamespacePrefixes(null),
-                NoCache: false,
-                Gate: true,
-                Amplification: true,
-                Time: false,
-                Format: null,
-                Suppress: null
-            ),
-            facts,
-            workingDirectory
+        RunTreeAsync(DefaultTreeOptions(pattern), facts, workingDirectory);
+
+    private static TreeCommand.Options DefaultTreeOptions(string pattern) =>
+        new(
+            FromPattern: pattern,
+            View: "paths",
+            Async: false,
+            IncludeDelivery: false,
+            Raw: false,
+            Files: false,
+            Signatures: false,
+            Plain: false,
+            Guards: false,
+            ExtraRules: [],
+            Depth: null,
+            Limit: null,
+            Only: CommonOptions.FilterSet(null),
+            Exclude: CommonOptions.FilterSet(null),
+            Intrinsic: false,
+            ExcludeNamespaces: CommonOptions.NamespacePrefixes(null),
+            NoCache: false,
+            Gate: true,
+            Amplification: true,
+            Time: false,
+            Format: null,
+            Suppress: null
         );
 
     private static Task<LiveAnswer> RunTreeAsync(TreeCommand.Options options, LiveFactSource facts, string workingDirectory) =>

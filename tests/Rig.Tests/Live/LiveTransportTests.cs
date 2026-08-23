@@ -260,9 +260,10 @@ public sealed class LiveTransportTests
         after.Out.ShouldContain("efcore read");
         after.Out.ShouldContain("efcore pending_write"); // the pre-existing effects survive the edit
         after.Out.ShouldContain("efcore commit");
-        after.Err.ShouldContain("live: facts from resident index revision");
-        after.Err.ShouldContain("affected facts STALE");
-        after.Err.ShouldContain("project(s) unreconciled");
+        after.Err.ShouldContain(SourceLinePrefix);
+        after.Err.ShouldContain("all projects reconciled");
+        after.Err.ShouldNotContain("affected facts STALE");
+        after.Err.ShouldNotContain("project(s) unreconciled");
 
         // AND THE STORE, in the same directory, does NOT see it — which is what makes the routed answer worth
         // having, and what proves the routed answer did not come from the store.
@@ -378,11 +379,11 @@ public sealed class LiveTransportTests
                 LiveQueryVerbs.Reaches,
                 new ReachesCommand.Options("Anything.AtAll", false, false, false, [], null, null, [], [], false, null, false),
                 directory,
-                // 2s rather than the 30s default: the mechanism under test is the READ deadline, and a test
+                // 5s rather than the 30s default: the mechanism under test is the READ deadline, and a test
                 // should not spend the production budget to watch it fire. It must stay comfortably above the
-                // client's own 500ms connect retry, or the budget would expire during the CONNECT instead and
-                // the test would be measuring the wrong thing.
-                deadline: TimeSpan.FromSeconds(2)
+                // client's own 500ms connect retry even under full-suite thread-pool contention, or the budget
+                // would expire during CONNECT instead and the test would be measuring the wrong thing.
+                deadline: TimeSpan.FromSeconds(5)
             );
             watch.Stop();
             Report($"[transport/wedged] {outcome.Status} after {watch.Elapsed.TotalSeconds:F2}s: {outcome.Reason}");

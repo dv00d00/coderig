@@ -14,7 +14,11 @@ public sealed class LivePathDemandPreparationTests
     [Test]
     public void Valid_text_path_prepares_exactly_two_quoted_endpoints_before_refinement()
     {
-        var demand = LiveQueryRunner.PrepareTextPathDemand("path \"M:App.From(System.Int32, System.String)\" App.To", Rules);
+        var demand = LiveQueryRunner.PrepareTextForwardDemand(
+            "path \"M:App.From(System.Int32, System.String)\" App.To",
+            Rules,
+            deploymentsConfigured: false
+        );
 
         demand.ShouldNotBeNull();
         demand.FromPattern.ShouldBe("M:App.From(System.Int32, System.String)");
@@ -27,24 +31,28 @@ public sealed class LivePathDemandPreparationTests
     [Test]
     public void Invalid_or_non_path_text_never_prepares_refinement()
     {
-        LiveQueryRunner.PrepareTextPathDemand("", Rules).ShouldBeNull();
-        LiveQueryRunner.PrepareTextPathDemand("reaches App.From", Rules).ShouldBeNull();
-        LiveQueryRunner.PrepareTextPathDemand("path only-one", Rules).ShouldBeNull();
-        LiveQueryRunner.PrepareTextPathDemand("path one two three", Rules).ShouldBeNull();
-        LiveQueryRunner.PrepareTextPathDemand("path \"unclosed one two", Rules).ShouldBeNull();
-        LiveQueryRunner.PrepareTextPathDemand("path A \"B", Rules).ShouldBeNull();
+        LiveQueryRunner.PrepareTextForwardDemand("", Rules, deploymentsConfigured: false).ShouldBeNull();
+        LiveQueryRunner.PrepareTextForwardDemand("callers App.From", Rules, deploymentsConfigured: false).ShouldBeNull();
+        LiveQueryRunner.PrepareTextForwardDemand("path only-one", Rules, deploymentsConfigured: false).ShouldBeNull();
+        LiveQueryRunner.PrepareTextForwardDemand("path one two three", Rules, deploymentsConfigured: false).ShouldBeNull();
+        LiveQueryRunner.PrepareTextForwardDemand("path \"unclosed one two", Rules, deploymentsConfigured: false).ShouldBeNull();
+        LiveQueryRunner.PrepareTextForwardDemand("path A \"B", Rules, deploymentsConfigured: false).ShouldBeNull();
     }
 
     [Test]
-    public void Valid_transport_path_preserves_raw_async_delivery_and_depth_shape()
+    public void Valid_transport_path_preserves_raw_and_depth_shape()
     {
-        var options = Options(from: "App.From", to: "App.To", async: true, includeDelivery: true, raw: true, depth: 7);
-        var demand = LiveQueryRunner.PrepareTransportPathDemand(Request(LiveQueryVerbs.Path, options), Rules);
+        var options = Options(from: "App.From", to: "App.To", raw: true, depth: 7);
+        var demand = LiveQueryRunner.PrepareTransportForwardDemand(
+            Request(LiveQueryVerbs.Path, options),
+            Rules,
+            deploymentsConfigured: false
+        );
 
         demand.ShouldNotBeNull();
         demand.FromPattern.ShouldBe("App.From");
         demand.ToPattern.ShouldBe("App.To");
-        demand.Mode.ShouldBe(FactPathFinder.TraversalMode.AsyncInclude);
+        demand.Mode.ShouldBe(FactPathFinder.TraversalMode.SyncCut);
         demand.MaxDepth.ShouldBe(7);
         demand.Rules.Projection.ClassifyEventSubscriptions.ShouldBeFalse();
         demand.Rules.Cut.ShouldBeEmpty();
@@ -54,14 +62,26 @@ public sealed class LivePathDemandPreparationTests
     [Test]
     public void Unsupported_malformed_or_extra_rules_transport_never_prepares_refinement()
     {
-        LiveQueryRunner.PrepareTransportPathDemand(Request("tree", Options("A", "B")), Rules).ShouldBeNull();
         LiveQueryRunner
-            .PrepareTransportPathDemand(new LiveQueryRequest(LiveQueryTransport.Protocol, LiveQueryVerbs.Path, "/repo", "{"), Rules)
+            .PrepareTransportForwardDemand(Request("callers", Options("A", "B")), Rules, deploymentsConfigured: false)
             .ShouldBeNull();
         LiveQueryRunner
-            .PrepareTransportPathDemand(Request(LiveQueryVerbs.Path, Options("A", "B") with { ExtraRules = ["custom.json"] }), Rules)
+            .PrepareTransportForwardDemand(
+                new LiveQueryRequest(LiveQueryTransport.Protocol, LiveQueryVerbs.Path, "/repo", "{"),
+                Rules,
+                deploymentsConfigured: false
+            )
             .ShouldBeNull();
-        LiveQueryRunner.PrepareTransportPathDemand(Request(LiveQueryVerbs.Path, Options("", "B")), Rules).ShouldBeNull();
+        LiveQueryRunner
+            .PrepareTransportForwardDemand(
+                Request(LiveQueryVerbs.Path, Options("A", "B") with { ExtraRules = ["custom.json"] }),
+                Rules,
+                deploymentsConfigured: false
+            )
+            .ShouldBeNull();
+        LiveQueryRunner
+            .PrepareTransportForwardDemand(Request(LiveQueryVerbs.Path, Options("", "B")), Rules, deploymentsConfigured: false)
+            .ShouldBeNull();
     }
 
     [Test]
@@ -71,12 +91,16 @@ public sealed class LivePathDemandPreparationTests
         var nullRules = Options("A", "B") with { ExtraRules = null! };
         var blankEndpoint = Options("", "B");
 
-        LiveQueryRunner.PrepareTransportPathDemand(Request(LiveQueryVerbs.Path, nullRules), Rules).ShouldNotBeNull();
+        LiveQueryRunner
+            .PrepareTransportForwardDemand(Request(LiveQueryVerbs.Path, nullRules), Rules, deploymentsConfigured: false)
+            .ShouldNotBeNull();
         var nullRulesResult = await LiveQueryRunner.RunRequestAsync(Request(LiveQueryVerbs.Path, nullRules), facts, "/repo");
         nullRulesResult.DeclineReason.ShouldBeNull();
         nullRulesResult.Answer.ShouldNotBeNull();
 
-        LiveQueryRunner.PrepareTransportPathDemand(Request(LiveQueryVerbs.Path, blankEndpoint), Rules).ShouldBeNull();
+        LiveQueryRunner
+            .PrepareTransportForwardDemand(Request(LiveQueryVerbs.Path, blankEndpoint), Rules, deploymentsConfigured: false)
+            .ShouldBeNull();
         var blankResult = await LiveQueryRunner.RunRequestAsync(Request(LiveQueryVerbs.Path, blankEndpoint), facts, "/repo");
         blankResult.Answer.ShouldBeNull();
         blankResult.DeclineReason.ShouldNotBeNull();
@@ -85,7 +109,7 @@ public sealed class LivePathDemandPreparationTests
     [Test]
     public void Exact_unavailable_is_an_answered_exit_two_not_a_transport_decline()
     {
-        var answer = LiveQueryRunner.ExactUnavailable(42, "generated ownership collision");
+        var answer = LiveQueryRunner.ExactUnavailable("path", 42, "generated ownership collision");
 
         answer.Exit.ShouldBe(2);
         answer.Out.ShouldBeEmpty();

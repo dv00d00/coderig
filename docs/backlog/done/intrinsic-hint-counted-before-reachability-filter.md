@@ -1,6 +1,6 @@
-# The `--intrinsic` hint is counted BEFORE the reachability filter, so `reaches` can claim it withheld effects it never had
+# The `--intrinsic` hint was counted BEFORE the reachability filter, so `reaches` could claim it withheld effects it never had
 
-**Status:** todo · **Priority: MEDIUM** (a disclosure line that can be false; no wrong FACTS, but rig's whole
+**Status:** SHIPPED 2026-08-23 (Slice 7B1) · **Priority: was MEDIUM** (a disclosure line that can be false; no wrong FACTS, but rig's whole
 contract is that its disclosures are trustworthy) · **Found:** 2026-08-21, measured while building live query
 serving ([live-background-index](../progress/live-background-index.md) slice 6b) · **Family:** disclosure / reaches
 
@@ -19,6 +19,17 @@ var hits = effects.Where(e => e.EnclosingSymbolId is not null && reachable.Conta
 hidden by default — pass --intrinsic to include"* — over the **input** effect set, BEFORE
 `reachable.ContainsKey` narrows it to the answer. So the note fires when an `alloc`/`throw` effect exists
 anywhere in the derivation inputs, whether or not any of them is reachable from the queried entry point.
+
+## Shipped result — 2026-08-23
+
+`ReachesCommand` now restricts derived effects to its reachable method set before `SelectEffects`.
+`TreeCommand` collects the rendered forest's method ids once, restricts ordinary and hazard effect inputs to
+that set, and only then applies selection for TSV and every human/LLM view. The unfiltered tree cache payload is
+unchanged; this is render selection over the query-local forest, so no cache payload/schema migration is needed.
+
+The live/store parity gates removed `WithoutIntrinsicHint` entirely and now compare stderr byte-for-byte:
+`LiveReachesTests` passes 4/4 and `LiveTreeTests` passes 9/9 on macOS. Slice 7B1's dirty forward-query planner can
+therefore skip disjoint ordinary-project debt without allowing an unrelated alloc/throw to change the answer.
 
 Told to a user, the note means "there is more to see here, pass `--intrinsic`". Passing it can then add
 nothing, because nothing withheld was ever in the answer.
@@ -46,16 +57,14 @@ Check `tree --hazards` and any other `SelectEffects` caller for the same pre-fil
 
 ## Acceptance
 
-1. `rig reaches <pattern>` on a pattern with no reachable `alloc`/`throw` emits NO intrinsic note; adding
-   `--intrinsic` changes nothing (today: note emitted, `--intrinsic` adds nothing).
-2. A pattern WITH a reachable intrinsic still emits the note and `--intrinsic` still reveals exactly that many.
-3. `LiveReachesTests` can then compare stderr WITHOUT the `WithoutIntrinsicHint` exemption — deleting that
-   exemption is the regression test, and its header comment says so.
+1. [x] `rig reaches <pattern>` on a pattern with no reachable `alloc`/`throw` emits no intrinsic note; adding
+   `--intrinsic` changes nothing.
+2. [x] A pattern with a reachable intrinsic still emits the note and `--intrinsic` reveals it.
+3. [x] `LiveReachesTests` and `LiveTreeTests` compare stderr without a `WithoutIntrinsicHint` exemption.
 
 ## Related
 
-Pinned (not fixed) by `tests/Rig.Tests/Live/LiveReachesTests.cs`, which compares stdout byte-for-byte and
-stderr with this one line stripped from both sides, asserting the asymmetry is confined to it.
+Originally pinned by `tests/Rig.Tests/Live/LiveReachesTests.cs`; the exemption was removed by the shipped fix.
 
 ## CONFIRMED for `tree` — 2026-08-21, all views
 

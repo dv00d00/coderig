@@ -25,18 +25,9 @@ namespace Rig.Tests.Live;
 //     an unreachable method, which the filter drops. If that ever stops holding, THIS is where it surfaces,
 //     with the differing lines printed.
 //
-//     ONE MEASURED EXCEPTION, pinned rather than wished away. The `--intrinsic` hint on stderr ("intrinsic
-//     effects (alloc, throw) are hidden by default") is emitted from SelectEffects' withheld count, which
-//     ReachesCommand computes BEFORE the reachability filter — i.e. off the INPUT set, not the answer. So on
-//     a pattern whose bounded closure happens to contain no alloc/throw, the store stays silent while the
-//     live path (whole-store inputs) emits the hint. Measured on EntryPointEffects: 3 of 7 patterns
-//     (TeamRepository.AddAsync, SavePublisher.Raise, CycleFixture.MutualA) diverge on exactly that one line,
-//     with STDOUT byte-identical throughout. Neither side is "right": the hint describes what the derivation
-//     withheld, not what the answer withheld — the store is merely more precise by accident of bounding (its
-//     closure is still a reach SUPERSET, so it can raise the same false hint). The honest fix is to count the
-//     withheld intrinsics AFTER the reachable filter, which changes the store path's output and is therefore
-//     not this slice's business. Until then: stdout is compared byte-for-byte, stderr is compared with that
-//     one hint line removed from BOTH sides, and the asymmetry is asserted to be confined to it.
+//     Intrinsic hiding is counted AFTER the reachable-method filter. That ordering matters for live demand
+//     refinement: a disjoint dirty project must not change this answer's stderr note, and it also makes the
+//     live whole-generation derivation byte-identical to the store's bounded input on both streams.
 //
 //  2. THE EDIT IS REFLECTED. A live answer that does not change when the code changes is worthless however
 //     fast it is. Reaches_reflects_a_disk_edit_the_pre_edit_answer_did_not asserts the pre-edit answer does
@@ -49,15 +40,6 @@ namespace Rig.Tests.Live;
 public sealed class LiveReachesTests
 {
     private static readonly object ReportLock = new();
-
-    // The one line whose presence legitimately differs between the two paths (header note, claim 1).
-    private const string IntrinsicHint = "note: intrinsic effects (alloc, throw) are hidden by default";
-
-    private static string WithoutIntrinsicHint(string stream) =>
-        string.Join(
-            Environment.NewLine,
-            stream.Split(Environment.NewLine).Where(line => !line.Contains(IntrinsicHint, StringComparison.Ordinal))
-        );
 
     // DeepChain: a 7-project reference chain whose entry point reaches the DB effect five project hops down
     // through an interface dispatch. Chosen for the comparison because the dispatch fan-out and the deep
@@ -263,28 +245,23 @@ public sealed class LiveReachesTests
 
             // Anti-vacuity: a pattern that resolves to nothing on BOTH sides would compare equal and prove
             // nothing, so every pattern in the list must be a real answer on the store side.
-            storeExit.ShouldBe(0, $"[{label}] '{pattern}' did not resolve on the STORE side — the comparison would be vacuous.{storeOut}{storeErr}");
+            storeExit.ShouldBe(
+                0,
+                $"[{label}] '{pattern}' did not resolve on the STORE side — the comparison would be vacuous.{storeOut}{storeErr}"
+            );
             storeOut.ToString().ShouldContain($"From: {pattern}");
 
             Diff(differences, label, pattern, "stdout", storeOut.ToString(), answer.Out);
-            // stderr with the pre-filter `--intrinsic` hint dropped from BOTH sides — see the header note.
-            // Everything else on stderr (ambiguity warnings, seed-resolution notes) still has to match
-            // exactly, and does.
-            Diff(differences, label, pattern, "stderr", WithoutIntrinsicHint(storeErr.ToString()), WithoutIntrinsicHint(answer.Err));
-            // …and the asymmetry is CONFINED to that hint: the live side may add it, never drop it.
-            if (storeErr.ToString().Contains(IntrinsicHint, StringComparison.Ordinal))
-            {
-                answer
-                    .Err.Contains(IntrinsicHint, StringComparison.Ordinal)
-                    .ShouldBeTrue($"[{label}] '{pattern}': the store emitted the intrinsic hint and the live path did not.");
-            }
+            Diff(differences, label, pattern, "stderr", storeErr.ToString(), answer.Err);
 
             answer.Exit.ShouldBe(storeExit, $"[{label}] '{pattern}': exit code differs (store={storeExit}, live={answer.Exit}).");
             if (requiredInEveryAnswer is not null)
             {
                 answer
                     .Out.Contains(requiredInEveryAnswer, StringComparison.Ordinal)
-                    .ShouldBeTrue($"[{label}] '{pattern}': the live answer is missing '{requiredInEveryAnswer}' — that feature is not being exercised.");
+                    .ShouldBeTrue(
+                        $"[{label}] '{pattern}': the live answer is missing '{requiredInEveryAnswer}' — that feature is not being exercised."
+                    );
             }
 
             compared++;
@@ -316,12 +293,21 @@ public sealed class LiveReachesTests
             var l = i < liveLines.Length ? liveLines[i] : "<absent>";
             if (!string.Equals(s, l, StringComparison.Ordinal))
             {
-                into.Append(CultureInfo.InvariantCulture, $"{Environment.NewLine}  line {i + 1} STORE: {s}{Environment.NewLine}  line {i + 1} LIVE : {l}");
+                into.Append(
+                    CultureInfo.InvariantCulture,
+                    $"{Environment.NewLine}  line {i + 1} STORE: {s}{Environment.NewLine}  line {i + 1} LIVE : {l}"
+                );
             }
         }
     }
 
-    private static async Task<string> WaitForAnswerAsync(WatchHost host, string query, Func<string, bool> until, TimeSpan timeout, string reason)
+    private static async Task<string> WaitForAnswerAsync(
+        WatchHost host,
+        string query,
+        Func<string, bool> until,
+        TimeSpan timeout,
+        string reason
+    )
     {
         var deadline = DateTime.UtcNow + timeout;
         var last = "";

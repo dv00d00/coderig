@@ -35,7 +35,7 @@ a live-path artifact — the live answer is byte-identical to the EF-fallback ar
 
 Third instance in two days of *a disclosure computed off a derivation INPUT SET rather than off the answer*:
 
-1. [the `--intrinsic` hint counted before the reachability filter](intrinsic-hint-counted-before-reachability-filter.md)
+1. [the `--intrinsic` hint counted before the reachability filter](../done/intrinsic-hint-counted-before-reachability-filter.md)
    — counts withheld intrinsics over the input effects, not the reachable ones.
 2. [a rules edit not reaching the baked graph](baked-call-edges-ignore-rules-edits.md) — classification read from
    `call_edges` on one path, recomputed on another.

@@ -18,7 +18,7 @@ public sealed class ExactPathRefinementTests
     {
         using var fixture = Fixture.Create(references: [Reference(Fixture.Start, Fixture.End, Fixture.APath)], dirty: DirtyOrigin.B);
 
-        var plan = ExactPathRefinement.Plan(fixture.Snapshot, Demand(Fixture.Start, Fixture.End));
+        var plan = ExactForwardRefinement.Plan(fixture.Snapshot, Demand(Fixture.Start, Fixture.End));
 
         plan.UnavailableReason.ShouldBeNull();
         plan.SelectedOrigins.ShouldBeEmpty();
@@ -34,7 +34,7 @@ public sealed class ExactPathRefinementTests
             generatorCapableB: true
         );
 
-        var plan = ExactPathRefinement.Plan(fixture.Snapshot, Demand("Flow.Start", "Flow.End"));
+        var plan = ExactForwardRefinement.Plan(fixture.Snapshot, Demand("Flow.Start", "Flow.End"));
 
         plan.FromMatched.ShouldBeTrue();
         plan.ToMatched.ShouldBeTrue();
@@ -48,7 +48,7 @@ public sealed class ExactPathRefinementTests
     {
         using var fixture = Fixture.Create(references: [Reference(Fixture.Start, Fixture.End, Fixture.APath)], dirty: DirtyOrigin.A);
 
-        var plan = ExactPathRefinement.Plan(fixture.Snapshot, Demand(Fixture.Start, Fixture.End));
+        var plan = ExactForwardRefinement.Plan(fixture.Snapshot, Demand(Fixture.Start, Fixture.End));
 
         plan.SelectedOrigins.ShouldBe([fixture.A], ignoreOrder: true);
         plan.UnknownOrigins.ShouldBe([fixture.A], ignoreOrder: true);
@@ -60,7 +60,7 @@ public sealed class ExactPathRefinementTests
     {
         using var fixture = Fixture.Create(references: [], dirty: DirtyOrigin.B, bReferencesA: true);
 
-        var plan = ExactPathRefinement.Plan(fixture.Snapshot, Demand(Fixture.Start, Fixture.Start));
+        var plan = ExactForwardRefinement.Plan(fixture.Snapshot, Demand(Fixture.Start, Fixture.Start));
 
         // B is a reverse dependent of the TO seed. This fails if FROM wins a mutually-exclusive endpoint map.
         plan.SelectedOrigins.ShouldBe([fixture.B], ignoreOrder: true);
@@ -80,7 +80,7 @@ public sealed class ExactPathRefinementTests
             dispatch: [new DispatchFact(Fixture.InterfaceMethod, Fixture.ImplementationMethod, DispatchKinds.Impl, Fixture.BPath)]
         );
 
-        var plan = ExactPathRefinement.Plan(fixture.Snapshot, Demand(Fixture.InterfaceMethod, Fixture.ImplementationMethod));
+        var plan = ExactForwardRefinement.Plan(fixture.Snapshot, Demand(Fixture.InterfaceMethod, Fixture.ImplementationMethod));
 
         plan.UnavailableReason.ShouldBeNull();
         plan.SelectedOrigins.ShouldBe([fixture.B], ignoreOrder: true);
@@ -108,7 +108,7 @@ public sealed class ExactPathRefinementTests
             symbols: [Method(Fixture.Start, "T:Generated.Type", generatedPath, "Generated")]
         );
 
-        var plan = ExactPathRefinement.Plan(fixture.Snapshot, Demand(Fixture.Start, Fixture.Start));
+        var plan = ExactForwardRefinement.Plan(fixture.Snapshot, Demand(Fixture.Start, Fixture.Start));
 
         plan.UnavailableReason.ShouldNotBeNull();
         plan.UnavailableReason.ShouldContain("owned");
@@ -121,9 +121,9 @@ public sealed class ExactPathRefinementTests
         await fixture.ApplyEditAsync(surfaceChanged: false);
         var basis = fixture.Index.CaptureSnapshot();
 
-        var outcome = await fixture.Index.EnsureExactPathAsync(basis, Demand(TransactionFixture.Start, TransactionFixture.End));
+        var outcome = await fixture.Index.EnsureExactForwardAsync(basis, Demand(TransactionFixture.Start, TransactionFixture.End));
 
-        outcome.Kind.ShouldBe(ExactPathRefinementKind.ExactPublished);
+        outcome.Kind.ShouldBe(ExactForwardRefinementKind.ExactPublished);
         outcome.Snapshot.ShouldBeSameAs(fixture.Index.CaptureSnapshot());
         outcome.Snapshot.Revision.Value.ShouldBe(
             basis.Revision.Value + 1,
@@ -142,9 +142,9 @@ public sealed class ExactPathRefinementTests
         await fixture.ApplyEditAsync(surfaceChanged: true);
         var basis = fixture.Index.CaptureSnapshot();
 
-        var outcome = await fixture.Index.EnsureExactPathAsync(basis, Demand(TransactionFixture.Start, TransactionFixture.End));
+        var outcome = await fixture.Index.EnsureExactForwardAsync(basis, Demand(TransactionFixture.Start, TransactionFixture.End));
 
-        outcome.Kind.ShouldBe(ExactPathRefinementKind.ExactPublished);
+        outcome.Kind.ShouldBe(ExactForwardRefinementKind.ExactPublished);
         outcome.Snapshot.ShouldBeSameAs(fixture.Index.CaptureSnapshot());
         outcome.Snapshot.Revision.Value.ShouldBe(basis.Revision.Value + 1);
         outcome.Snapshot.Dirty.PendingDocuments.ShouldBeEmpty();
@@ -165,7 +165,7 @@ public sealed class ExactPathRefinementTests
         var basis = fixture.Index.CaptureSnapshot();
         using var cancellation = new CancellationTokenSource();
 
-        var refinement = fixture.Index.EnsureExactPathAsync(
+        var refinement = fixture.Index.EnsureExactForwardAsync(
             basis,
             Demand(TransactionFixture.Start, TransactionFixture.End),
             cancellation.Token
@@ -179,8 +179,9 @@ public sealed class ExactPathRefinementTests
         fixture.Index.CaptureSnapshot().Revision.ShouldBe(basis.Revision);
     }
 
-    private static ExactPathDemand Demand(string from, string to) =>
+    private static ExactForwardDemand Demand(string from, string to) =>
         new(
+            ExactForwardQueryKind.Path,
             from,
             to,
             new DemandForwardGraphRules(new ForwardCallProjectionRules(), [], []),

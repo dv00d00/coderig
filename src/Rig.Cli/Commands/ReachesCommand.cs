@@ -79,7 +79,8 @@ internal static class ReachesCommand
                     // Route to the resident index if one is watching this directory, else the store. The
                     // already-parsed options record IS the request payload, which is why every rendering flag
                     // above works identically on both paths. See LiveRoute for the default and the disclosure.
-                    return await LiveRoute.TryAnswerAsync(LiveQueryVerbs.Reaches, opts, io, pr.GetValue(noLive)) ?? await RunAsync(opts, io);
+                    return await LiveRoute.TryAnswerAsync(LiveQueryVerbs.Reaches, opts, io, pr.GetValue(noLive))
+                        ?? await RunAsync(opts, io);
                 }
             )
         );
@@ -171,8 +172,10 @@ internal static class ReachesCommand
 
         var effects = await source.DeriveEffectsAsync(inputs, graph, rules);
         // --only / --exclude (e.g. --exclude throw), plus the default hiding of intrinsic providers
-        // (alloc/throw) restored by --intrinsic. The withheld count is disclosed after the results below.
-        var selection = SelectEffects(effects, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
+        // (alloc/throw) restored by --intrinsic. Restrict first so the withheld count describes THIS
+        // reachable answer, not unrelated effects present in a live whole-generation input.
+        var reachableEffects = effects.Where(e => e.EnclosingSymbolId is not null && reachable.ContainsKey(e.EnclosingSymbolId)).ToList();
+        var selection = SelectEffects(reachableEffects, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
         effects = selection.Effects;
         traversalWatch.Stop();
         timing.Record("traversal", traversalWatch.Elapsed);
@@ -182,7 +185,6 @@ internal static class ReachesCommand
         // call site is inside a loop (the looped_effect observation). >0 => the effect fires N-deep
         // inside loops along this path; the loop detail shown is the innermost wrapping loop.
         var hits = effects
-            .Where(e => e.EnclosingSymbolId is not null && reachable.ContainsKey(e.EnclosingSymbolId))
             .Select(e =>
             {
                 var ri = reachable[e.EnclosingSymbolId!];

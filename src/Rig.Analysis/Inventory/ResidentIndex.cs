@@ -502,18 +502,18 @@ internal sealed class ResidentIndex : IDisposable
         );
     }
 
-    // Demand-driven exactness for live path only. Every refresh/extraction below builds private immutable
+    // Demand-driven exactness for live forward queries. Every refresh/extraction below builds private immutable
     // candidates. One final expected-reference CAS publishes the fixed point; cancellation or a concurrent
     // edit leaves the original generation untouched.
-    internal async Task<ExactPathRefinementOutcome> EnsureExactPathAsync(
+    internal async Task<ExactForwardRefinementOutcome> EnsureExactForwardAsync(
         FactSnapshot basis,
-        ExactPathDemand demand,
+        ExactForwardDemand demand,
         CancellationToken cancellationToken = default
     )
     {
         if (!ReferenceEquals(CaptureSnapshot(), basis))
         {
-            return ExactPathRefinementOutcome.Superseded(CaptureSnapshot());
+            return ExactForwardRefinementOutcome.Superseded(CaptureSnapshot());
         }
 
         var candidate = basis;
@@ -521,26 +521,26 @@ internal sealed class ResidentIndex : IDisposable
         for (var iteration = 0; iteration < MaxIterations; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var plan = ExactPathRefinement.Plan(candidate, demand);
+            var plan = ExactForwardRefinement.Plan(candidate, demand);
             if (plan.UnavailableReason is not null)
             {
-                return ExactPathRefinementOutcome.Unavailable(basis, plan.UnavailableReason);
+                return ExactForwardRefinementOutcome.Unavailable(basis, plan.UnavailableReason);
             }
 
             if (plan.SelectedOrigins.Count == 0)
             {
                 if (ReferenceEquals(candidate, basis))
                 {
-                    return ExactPathRefinementOutcome.Unchanged(basis);
+                    return ExactForwardRefinementOutcome.Unchanged(basis);
                 }
 
                 var final = WithRevision(candidate, basis.Revision.Next());
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, final, basis), basis))
                 {
-                    return ExactPathRefinementOutcome.Superseded(CaptureSnapshot());
+                    return ExactForwardRefinementOutcome.Superseded(CaptureSnapshot());
                 }
-                return ExactPathRefinementOutcome.Published(final);
+                return ExactForwardRefinementOutcome.Published(final);
             }
 
             var before = candidate;
@@ -553,12 +553,12 @@ internal sealed class ResidentIndex : IDisposable
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
-                    return ExactPathRefinementOutcome.Unavailable(basis, $"surface refresh failed: {exception.Message}");
+                    return ExactForwardRefinementOutcome.Unavailable(basis, $"surface refresh failed: {exception.Message}");
                 }
 
                 if (refined.FailedOrigins.Overlaps(plan.UnknownOrigins))
                 {
-                    return ExactPathRefinementOutcome.Unavailable(
+                    return ExactForwardRefinementOutcome.Unavailable(
                         basis,
                         "generated/project surface ownership could not be classified exactly"
                     );
@@ -578,12 +578,12 @@ internal sealed class ResidentIndex : IDisposable
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                return ExactPathRefinementOutcome.Unavailable(basis, $"coarse reconciliation failed: {exception.Message}");
+                return ExactForwardRefinementOutcome.Unavailable(basis, $"coarse reconciliation failed: {exception.Message}");
             }
 
             if (ReferenceEquals(candidate, before))
             {
-                return ExactPathRefinementOutcome.Unavailable(
+                return ExactForwardRefinementOutcome.Unavailable(
                     basis,
                     "intersecting dirty origin is not exactly payable from the retained project surface"
                 );
@@ -591,7 +591,7 @@ internal sealed class ResidentIndex : IDisposable
             // Replan after coarse replacement: rebinding may expand the demand closure.
         }
 
-        return ExactPathRefinementOutcome.Unavailable(basis, "exact path refinement did not converge");
+        return ExactForwardRefinementOutcome.Unavailable(basis, $"exact {demand.Verb} refinement did not converge");
     }
 
     private FactSnapshot WithRevision(FactSnapshot snapshot, FactRevision revision) =>

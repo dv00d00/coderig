@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli;
 using Rig.Cli.Commands;
+using Rig.Cli.Live;
 using Rig.Tests.Fixtures;
 using Shouldly;
 
@@ -98,10 +99,10 @@ public sealed class WatchCommandTests
     }
 
     // Acceptance 2: the loop end-to-end on a temp copy of DeepChain — boot with the watcher live,
-    // write a REAL two-file burst on disk, poll until one eager generation publishes, and prove the
-    // dependent debt remains disclosed until an explicit scheduler request reconciles it.
+    // write a REAL two-file burst on disk, poll until one eager generation publishes, and prove a
+    // forward query pays exactly the intersecting dependent debt before it captures its answer.
     [Test]
-    public async Task Watcher_publishes_a_dirty_edit_and_only_explicit_reconcile_clears_the_disclosure()
+    public async Task Watcher_publishes_a_dirty_edit_and_reaches_refines_its_forward_boundary()
     {
         using var playground = await DeepChainPlayground.CreateAsync();
         var rules = RuleSetLoader.Load(playground.WorkingDirectory);
@@ -131,7 +132,7 @@ public sealed class WatchCommandTests
         originalText.ShouldContain(Marker);
         var editedText = originalText.Replace(
             Marker,
-            "Foundation.Db.Query(\"audit: booking attempt\");\n        " + Marker,
+            "new SmsChannel().Notify(\"audit\");\n        Foundation.Db.Query(\"audit: booking attempt\");\n        " + Marker,
             StringComparison.Ordinal
         );
         await File.WriteAllTextAsync(editedFilePath, editedText);
@@ -158,21 +159,21 @@ public sealed class WatchCommandTests
         );
         facts.Symbols!.Single(s => s.SymbolId == QueryTarget).BodyHash.ShouldNotBe(bootQueryBodyHash);
 
-        // (c) A query consumes the eager generation on demand, says the affected boundary is stale,
-        // and does NOT secretly pay the full cascade. With automatic warming removed, this first query
-        // also reports the derived factories it actually forced.
+        // (c) Reaches pays the exact forward boundary before capturing its answer. Both changed projects
+        // intersect this demand (Business owns the seed; Foundation owns its new target), so the published
+        // successor is current and the first query reports the derived factories it actually forced.
         (await host.GetUnreconciledProjectsAsync()).ShouldNotBeEmpty();
         var answer = await host.AnswerQueryAsync("reaches BookingService.Book");
-        answer.Split(Environment.NewLine)[0].ShouldContain("affected facts STALE");
-        answer.Split(Environment.NewLine)[0].ShouldContain("project(s) unreconciled");
+        answer.Split(Environment.NewLine)[0].ShouldContain("all projects reconciled");
         answer.ShouldContain("live: derived layer built this generation:");
-        (await host.GetUnreconciledProjectsAsync()).ShouldNotBeEmpty("a query must not trigger reconcile-all");
+        (await host.GetCurrentRevisionAsync()).ShouldBe(2);
+        (await host.GetUnreconciledProjectsAsync()).ShouldBeEmpty();
         output.ToString().ShouldNotContain("derived layer warmed");
         output.ToString().ShouldNotContain("| reconcile ");
 
-        // (d) Reconcile-all is now an explicit scheduler/verification primitive. It publishes one exact
-        // successor generation, clears the disclosure, and preserves the changed-file fact.
-        (await host.ReconcileAllAsync()).ShouldBeTrue();
+        // (d) Reconcile-all remains an explicit scheduler/verification primitive, but has no work after
+        // the demand-shaped publication and therefore cannot manufacture another revision.
+        (await host.ReconcileAllAsync()).ShouldBeFalse();
         (await host.GetCurrentRevisionAsync()).ShouldBe(2);
         (await host.GetUnreconciledProjectsAsync()).ShouldBeEmpty();
 
@@ -184,7 +185,7 @@ public sealed class WatchCommandTests
 
         // Atomic saves are classified from the debounced FINAL filesystem state. Both common macOS event
         // orders below include an unretained temporary *.cs and a transiently missing retained target; neither
-        // is a topology change once the burst settles, so exact live path must remain available.
+        // is a topology change once the burst settles, so exact live forward queries must remain available.
         var tempCreateThenReplace = Path.Combine(playground.WorkingDirectory, "Business", "BookingService.atomic-one.cs");
         await File.WriteAllTextAsync(tempCreateThenReplace, editedText.Replace("audit: booking attempt", "audit: atomic one"));
         File.Move(tempCreateThenReplace, editedFilePath, overwrite: true);
@@ -193,9 +194,46 @@ public sealed class WatchCommandTests
             TimeSpan.FromSeconds(60),
             "the watcher never applied create-temp then replace-target atomic save"
         );
-        var firstAtomicAnswer = await host.AnswerQueryAsync("path BookingService.Book Db.Query");
-        firstAtomicAnswer.ShouldNotContain("exact path unavailable");
-        firstAtomicAnswer.ShouldNotContain("source topology changed");
+        // A routed tree at depth 1 puts the newly-added SmsChannel.Notify edge exactly on the presentation
+        // boundary. The query must refine before capture, then agree byte-for-byte with a fresh store; the
+        // repeated raw-live answer exercises the new generation's memo rather than a pre-edit cache entry.
+        var depthOneTree = new LiveQueryRequest(
+            LiveQueryTransport.Protocol,
+            LiveQueryVerbs.Tree,
+            playground.WorkingDirectory,
+            """{"fromPattern":"BookingService.Book","view":"full","depth":1}"""
+        );
+        var firstAtomicAnswer = await host.ServeAsync(depthOneTree);
+        firstAtomicAnswer.DeclineReason.ShouldBeNull();
+        firstAtomicAnswer.Exit.ShouldBe(0);
+        firstAtomicAnswer.Out.ShouldContain("SmsChannel.Notify");
+        firstAtomicAnswer.Disclosure.ShouldContain("all projects reconciled");
+        firstAtomicAnswer.Err.ShouldNotContain("exact tree unavailable");
+        firstAtomicAnswer.Err.ShouldNotContain("source topology changed");
+
+        var indexOut = new StringWriter();
+        var indexErr = new StringWriter();
+        (await CliApplication.RunAsync(["index", playground.SolutionPath], indexOut, indexErr, playground.WorkingDirectory)).ShouldBe(
+            0,
+            indexOut.ToString() + indexErr
+        );
+        var storeOut = new StringWriter();
+        var storeErr = new StringWriter();
+        var storeExit = await CliApplication.RunAsync(
+            ["tree", "BookingService.Book", "--view", "full", "--depth", "1"],
+            storeOut,
+            storeErr,
+            playground.WorkingDirectory
+        );
+        var refinedFacts = new LiveFactSource(await host.GetCurrentFactsAsync(), rules);
+        var firstRaw = await LiveQueryRunner.RunRequestAsync(depthOneTree, refinedFacts, playground.WorkingDirectory);
+        var repeatedRaw = await LiveQueryRunner.RunRequestAsync(depthOneTree, refinedFacts, playground.WorkingDirectory);
+        firstRaw.DeclineReason.ShouldBeNull();
+        repeatedRaw.DeclineReason.ShouldBeNull();
+        firstRaw.Answer!.Exit.ShouldBe(storeExit);
+        firstRaw.Answer.Out.ShouldBe(storeOut.ToString());
+        firstRaw.Answer.Err.ShouldBe(storeErr.ToString());
+        repeatedRaw.Answer.ShouldBe(firstRaw.Answer);
 
         var tempDeleteThenRename = Path.Combine(playground.WorkingDirectory, "Business", "BookingService.atomic-two.cs");
         await File.WriteAllTextAsync(tempDeleteThenRename, editedText.Replace("audit: booking attempt", "audit: atomic two"));

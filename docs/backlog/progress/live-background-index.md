@@ -1,11 +1,12 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–7A completed locally 2026-08-23: deterministic scale/trial baselines,
+**Status:** PROGRESS — Slices 0–7B1 completed locally 2026-08-23: deterministic scale/trial baselines,
 emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
 watcher batches, the v7 surface-fact substrate, per-origin lazy surface refinement, and independent cascade
 verification with coarse fallback, plus an emitter-aware immutable graph-fact substrate and canonical keyed
-symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggered exact refinement for that
-path boundary. Next: give `reaches`/`tree`/`callers` their own demand shapes before widening exact refinement.
+symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggered exact forward refinement for
+`path`/`reaches`/`tree`. Next: give reverse `callers` its own demand shape; delivery-aware forward projection
+then removes the temporary store fallback for `--async`/`--include-delivery`.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -113,6 +114,18 @@ path boundary. Next: give `reaches`/`tree`/`callers` their own demand shapes bef
   requests share endpoint/rules validation. Other live verbs remain honestly stale-disclosed until they have
   command-specific demand shapes. Sixteen planner, transaction, and request-shaping tests plus the expanded real
   watcher gate bring exact discovery to **1,161 tests**.
+- **Slice 7B1:** live `reaches` and `tree` now use the same transactional exact-refinement boundary, planned
+  from their real keyed forward demand graph rather than a project-reference cone. Path alone retains TO's
+  reverse-dependent ownership; ordinary reaches/tree pay only dirty origins intersecting the forward closure.
+  Hazard trees and every deployment-backed forward render pay whole-resident debt because their hazard/EP chips
+  are global. Routed async/delivery requests conservatively decline to the store until the demand graph can
+  project delivery sites; sync text defaults remain live. Transport preparation and execution share nullable
+  option normalization and shape validation, and tree planning honors max depth while ignoring its presentation
+  node budget. The intrinsic-hidden disclosure is now counted after reachable/tree-method filtering, removing
+  the final unrelated-project dependency from ordinary forward output and closing the measured store/live stderr
+  exemption. Eleven planner/request tests plus a real watcher edit that adds a new depth-boundary edge, compares
+  the refined answer with a freshly indexed store, and repeats against the new generation's cache bring exact
+  discovery to **1,172 tests**.
 - **macOS suite gate:** canonical temp roots prevent NuGet from seeing `/var` and `/private/var` as two copies of
   one referenced project, and the resident equivalence fixture uses deterministic one-at-a-time project loading.
   All tests that launch `dotnet`, load/retain solutions, drive CLI indexing/watch hosts, or consume the shared
@@ -120,12 +133,12 @@ path boundary. Next: give `reaches`/`tree`/`callers` their own demand shapes bef
   ordinary suite at normal parallelism, then runs the integration process with one outer worker on every OS.
   SolutionAnalyzer is also pinned to one project worker for that isolated process, and MSBuild node reuse is
   disabled there so evaluated state cannot cross temporary playground roots. A single source manifest owns the
-  classification. On macOS the ordinary lane now passes **960/960 in 10s**; the serialized integration lane
-  passes **200 + one intentional skip in 9m39s**. Exact discovery is **1,161**, with zero failures. The process
+  classification. On macOS the ordinary lane now passes **971/971 in 10s**; the serialized integration lane
+  passes **200 + one intentional skip in 4m50s**. Exact discovery is **1,172**, with zero failures. The process
   boundary removes nested workspace/MSBuild fan-out risk without throttling unrelated tests and turns the slow
   lane into a deterministic release gate rather than a 17-minute main-suite outlier.
-- **Next:** Slice 7B, command-specific demand graphs and exact dirty-debt refinement for live
-  `reaches`/`tree`/`callers`; do not widen from `path` by substituting a project-reference cone.
+- **Next:** Slice 7B2, true reverse demand plus forward confirmation for live `callers`; then delivery-aware
+  demand projection for async forward queries. Do not substitute a project-reference cone for either shape.
 
 ## Why — the workflow that makes this the target
 
@@ -686,7 +699,7 @@ always reported it.
    can claim it withheld effects that were never in the answer. It diverged live-vs-store on 3 of 7 patterns
    — but neither side is right; the store is merely more precise by accident of SQL bounding, and its bounded
    closure is still a reach superset, so it can raise the same false hint. Filed as
-   [intrinsic-hint-counted-before-reachability-filter](../todo/intrinsic-hint-counted-before-reachability-filter.md);
+   [intrinsic-hint-counted-before-reachability-filter](../done/intrinsic-hint-counted-before-reachability-filter.md);
    pinned in the test with the exemption documented, not papered over.
 3. **The bounded-vs-whole-store worry did not materialise.** The store derives effects from a SQL-bounded input
    set and live derives over everything, and the answers still agree because the command filters on
@@ -1130,13 +1143,11 @@ apply must not queue behind, with a `Lazy` factory being uninterruptible once en
 where it is paid** (`hazardEffects 3423.5ms | shapedGraph 3859.0ms | graphHazardFindings 4952.1ms`), and every
 later hazards query in the generation pays nothing. Measure-then-decide, not switch-on-because-available.
 
-### The one divergence is a CONFIRMATION, not a new finding
+### The one measured divergence is now closed
 
-`tree` has the already-filed
-[intrinsic-hint](../todo/intrinsic-hint-counted-before-reachability-filter.md) bug — and in EVERY view, not just
-hazards, which that item explicitly asked someone to check. Same pattern as the `reaches` measurement named
-(`TeamRepository.AddAsync`), 1 of 5, stderr only. The item now records the confirmed blast radius: `reaches` and
-`tree` (all views); `path`/`callers` do not emit the hint.
+Slice 7B1 moved intrinsic selection after the reachable/tree-method filter for both `reaches` and every `tree`
+view. The [intrinsic-hint item](../done/intrinsic-hint-counted-before-reachability-filter.md) records the fix;
+the parity gates now compare stderr byte-for-byte with no exemption.
 
 ### A per-query cost found by reading the code, not the instrument
 

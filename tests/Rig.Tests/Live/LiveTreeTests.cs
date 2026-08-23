@@ -45,17 +45,9 @@ namespace Rig.Tests.Live;
 //       * The repeat query returns a byte-identical answer, so the memo cannot be serving a stale/partial
 //         artifact.
 //
-// ONE MEASURED EXCEPTION, and it is a CONFIRMATION rather than a new finding: the pre-filter `--intrinsic`
-// hint, exactly the bug `docs/backlog/todo/intrinsic-hint-counted-before-reachability-filter.md` files against
-// `reaches` — whose "Fix" section says in as many words *"Check `tree --hazards` and any other SelectEffects
-// caller for the same pre-filter ordering"*. It has the same ordering, in every view: `SelectEffects` computes
-// HiddenIntrinsic over the effects the DERIVATION produced, before the tree's own method filter narrows them to
-// the answer. The store derives from SQL-BOUNDED inputs and the live path from the whole fact set, so on a
-// pattern whose bounded closure happens to contain no alloc/throw the store stays silent while the live path
-// emits the hint. Measured on EntryPointEffects: 1 of 5 patterns (TeamRepository.AddAsync) diverges on exactly
-// that one line, with STDOUT byte-identical throughout — and it is the SAME pattern the reaches measurement
-// named. Neither side is right; both count the wrong set. So: stdout byte-for-byte, stderr with that one line
-// stripped from BOTH sides, and the asymmetry asserted to be one-directional (live may ADD it, never drop it).
+// Intrinsic hiding is counted AFTER the rendered tree-method filter. Besides making the note truthful, this
+// removes the last whole-generation dependency from ordinary live trees: a disjoint dirty project's alloc or
+// throw cannot change this query's stderr. Store/live parity is therefore byte-for-byte on both streams.
 //
 // `path`'s loader-dependent load banner has no analogue here — `tree` prints no such line, so nothing else is
 // excluded. If any other line differs, the test fails with that line.
@@ -64,17 +56,6 @@ namespace Rig.Tests.Live;
 public sealed class LiveTreeTests
 {
     private static readonly object ReportLock = new();
-
-    // The one line whose presence legitimately differs between the two paths (header note). Shared verbatim
-    // with LiveReachesTests, deliberately: it is the same bug, the same line, and the same filed item — when the
-    // fix lands, both exemptions come out together.
-    private const string IntrinsicHint = "note: intrinsic effects (alloc, throw) are hidden by default";
-
-    private static string WithoutIntrinsicHint(string stream) =>
-        string.Join(
-            Environment.NewLine,
-            stream.Split(Environment.NewLine).Where(line => !line.Contains(IntrinsicHint, StringComparison.Ordinal))
-        );
 
     // One comparison: the CLI invocation, the equivalent live Options record, and the marker proving the STORE
     // side actually answered (anti-vacuity — two empty answers compare equal and prove nothing).
@@ -165,7 +146,10 @@ public sealed class LiveTreeTests
                 // EntryPointEffects instead, where the controller actions are real EPs.
                 .. DeepChainPatterns.Select(p => new TreeCase(
                     ["tree", p, "--view", "full"],
-                    DefaultOptions(p) with { View = "full" },
+                    DefaultOptions(p) with
+                    {
+                        View = "full",
+                    },
                     p.Split('.')[^1]
                 )),
             ]
@@ -199,7 +183,10 @@ public sealed class LiveTreeTests
                 // that dropped it on BOTH would otherwise still compare equal and pass.
                 new TreeCase(
                     ["tree", "TeamsController.Create", "--view", "full"],
-                    DefaultOptions("TeamsController.Create") with { View = "full" },
+                    DefaultOptions("TeamsController.Create") with
+                    {
+                        View = "full",
+                    },
                     "TeamsController.Create",
                     RequiredInAnswer: "⟦api (site)⟧"
                 ),
@@ -242,7 +229,11 @@ public sealed class LiveTreeTests
             // is a single level, so any --depth >= 1 elides nothing and the case would be vacuous).
             new(
                 ["tree", "TeamWorkflow.LoadTeamSummaryAsync", "--depth", "1", "--view", "full"],
-                DefaultOptions("TeamWorkflow.LoadTeamSummaryAsync") with { Depth = 1, View = "full" },
+                DefaultOptions("TeamWorkflow.LoadTeamSummaryAsync") with
+                {
+                    Depth = 1,
+                    View = "full",
+                },
                 "⋯elided"
             ),
             // A pattern that matches nothing: the store must say so and exit 1, and the live path must produce
@@ -626,18 +617,9 @@ public sealed class LiveTreeTests
                 storeOut.ToString().ShouldContain(query.StoreMustContain);
             }
 
-            // stdout byte-for-byte; stderr with the pre-filter `--intrinsic` hint dropped from BOTH sides (see
-            // the header note). Everything else on stderr — the ambiguity warning, the --guards note — still
-            // has to match exactly, and does.
+            // Both streams are byte-for-byte; ambiguity and filter/guard disclosures are answer-local too.
             Diff(differences, label, name, "stdout", storeOut.ToString(), answer.Out);
-            Diff(differences, label, name, "stderr", WithoutIntrinsicHint(storeErr.ToString()), WithoutIntrinsicHint(answer.Err));
-            // …and the asymmetry is CONFINED to that hint: the live side may add it, never drop it.
-            if (storeErr.ToString().Contains(IntrinsicHint, StringComparison.Ordinal))
-            {
-                answer
-                    .Err.Contains(IntrinsicHint, StringComparison.Ordinal)
-                    .ShouldBeTrue($"[{label}] '{name}': the store emitted the intrinsic hint and the live path did not.");
-            }
+            Diff(differences, label, name, "stderr", storeErr.ToString(), answer.Err);
             answer.Exit.ShouldBe(storeExit, $"[{label}] '{name}': exit code differs (store={storeExit}, live={answer.Exit}).");
             if (query.RequiredInAnswer is { } required)
             {
@@ -674,7 +656,10 @@ public sealed class LiveTreeTests
             if (!string.Equals(s, l, StringComparison.Ordinal))
             {
                 shown++;
-                into.Append(CultureInfo.InvariantCulture, $"{Environment.NewLine}  line {i + 1} STORE: {s}{Environment.NewLine}  line {i + 1} LIVE : {l}");
+                into.Append(
+                    CultureInfo.InvariantCulture,
+                    $"{Environment.NewLine}  line {i + 1} STORE: {s}{Environment.NewLine}  line {i + 1} LIVE : {l}"
+                );
             }
         }
     }

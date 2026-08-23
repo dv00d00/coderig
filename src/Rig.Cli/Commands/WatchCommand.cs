@@ -523,7 +523,7 @@ internal sealed class WatchHost : IAsyncDisposable
     {
         // Parse/validate before capturing or refining. A malformed/unsupported query follows the normal
         // rejection path and pays zero resident work.
-        var demand = LiveQueryRunner.PrepareTextPathDemand(query, _rules);
+        var demand = LiveQueryRunner.PrepareTextForwardDemand(query, _rules, DeploymentsConfigured());
         var capture = await CaptureForQueryAsync(demand, sourceDisclosure: false, cancellationToken);
         foreach (var line in capture.Health)
         {
@@ -531,7 +531,7 @@ internal sealed class WatchHost : IAsyncDisposable
         }
         if (capture.UnavailableReason is not null)
         {
-            var refused = LiveQueryRunner.ExactUnavailable(capture.Snapshot.Revision.Value, capture.UnavailableReason);
+            var refused = LiveQueryRunner.ExactUnavailable(demand!.Verb, capture.Snapshot.Revision.Value, capture.UnavailableReason);
             return $"{capture.Disclosure}{Environment.NewLine}{refused.Text.TrimEnd('\r', '\n')}";
         }
 
@@ -556,11 +556,11 @@ internal sealed class WatchHost : IAsyncDisposable
     // rig already puts every disclosure precisely so stdout stays parseable.
     public async Task<LiveServeResult> ServeAsync(LiveQueryRequest request, CancellationToken cancellationToken = default)
     {
-        var demand = LiveQueryRunner.PrepareTransportPathDemand(request, _rules);
+        var demand = LiveQueryRunner.PrepareTransportForwardDemand(request, _rules, DeploymentsConfigured());
         var capture = await CaptureForQueryAsync(demand, sourceDisclosure: true, cancellationToken);
         if (capture.UnavailableReason is not null)
         {
-            var refused = LiveQueryRunner.ExactUnavailable(capture.Snapshot.Revision.Value, capture.UnavailableReason);
+            var refused = LiveQueryRunner.ExactUnavailable(demand!.Verb, capture.Snapshot.Revision.Value, capture.UnavailableReason);
             return LiveServeResult.Answered(
                 refused.Exit,
                 refused.Out,
@@ -606,12 +606,12 @@ internal sealed class WatchHost : IAsyncDisposable
         );
     }
 
-    // Path is the only command with a keyed demand topology. Capture its planning basis briefly under the
+    // Forward commands with keyed demand topology capture their planning basis briefly under the
     // host gate, do all Roslyn work outside that gate, then accept only the exact snapshot reference returned
     // by ResidentIndex. The publication mutex prevents duplicate refinements and edit-CAS races without
     // blocking lock-free watcher event capture.
     private async Task<QueryCapture> CaptureForQueryAsync(
-        ExactPathDemand? demand,
+        ExactForwardDemand? demand,
         bool sourceDisclosure,
         CancellationToken cancellationToken
     )
@@ -638,21 +638,21 @@ internal sealed class WatchHost : IAsyncDisposable
                     _gate.Release();
                 }
 
-                ExactPathRefinementOutcome outcome;
+                ExactForwardRefinementOutcome outcome;
                 if (Volatile.Read(ref _topologyChanged) != 0)
                 {
-                    outcome = ExactPathRefinementOutcome.Unavailable(basis, TopologyStatusSegment);
+                    outcome = ExactForwardRefinementOutcome.Unavailable(basis, TopologyStatusSegment);
                 }
                 else if (Volatile.Read(ref _watcherOverflowed) != 0)
                 {
-                    outcome = ExactPathRefinementOutcome.Unavailable(
+                    outcome = ExactForwardRefinementOutcome.Unavailable(
                         basis,
                         "file-watcher overflowed — exactness cannot be established; restart required"
                     );
                 }
                 else
                 {
-                    outcome = await _index.EnsureExactPathAsync(basis, demand, cancellationToken);
+                    outcome = await _index.EnsureExactForwardAsync(basis, demand, cancellationToken);
                 }
 
                 await _gate.WaitAsync(cancellationToken);
@@ -674,12 +674,12 @@ internal sealed class WatchHost : IAsyncDisposable
                             "file-watcher overflowed — exactness cannot be established; restart required"
                         );
                     }
-                    if (outcome.Kind == ExactPathRefinementKind.Superseded || !ReferenceEquals(current, outcome.Snapshot))
+                    if (outcome.Kind == ExactForwardRefinementKind.Superseded || !ReferenceEquals(current, outcome.Snapshot))
                     {
                         continue;
                     }
 
-                    if (outcome.Kind == ExactPathRefinementKind.ExactPublished)
+                    if (outcome.Kind == ExactForwardRefinementKind.ExactPublished)
                     {
                         ReleasePublishedSnapshotCaches();
                     }
@@ -687,7 +687,7 @@ internal sealed class WatchHost : IAsyncDisposable
                     return CaptureSnapshot(
                         current,
                         sourceDisclosure,
-                        outcome.Kind == ExactPathRefinementKind.ExactUnavailable ? outcome.Reason : null
+                        outcome.Kind == ExactForwardRefinementKind.ExactUnavailable ? outcome.Reason : null
                     );
                 }
                 finally
@@ -702,7 +702,7 @@ internal sealed class WatchHost : IAsyncDisposable
                 return CaptureSnapshot(
                     _index.CaptureSnapshot(),
                     sourceDisclosure,
-                    "resident snapshot changed repeatedly while exact path refinement was running"
+                    $"resident snapshot changed repeatedly while exact {demand.Verb} refinement was running"
                 );
             }
             finally
@@ -715,6 +715,8 @@ internal sealed class WatchHost : IAsyncDisposable
             _publicationGate.Release();
         }
     }
+
+    private bool DeploymentsConfigured() => File.Exists(Path.Combine(_workingDirectory, "deployments.json"));
 
     private async Task<QueryCapture> CaptureCurrentAsync(bool sourceDisclosure, CancellationToken cancellationToken)
     {

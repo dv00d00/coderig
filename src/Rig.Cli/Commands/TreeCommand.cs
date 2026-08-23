@@ -423,6 +423,12 @@ internal static class TreeCommand
             FactPathFinder.DistinctTargetFqns(roots.Select(r => r.SymbolId))
         );
 
+        var treeMethods = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var root in roots)
+        {
+            CollectTreeMethods(root, treeMethods);
+        }
+
         // --hazards: surface the pattern HAZARDS (race_window / lazy_init_race / thread_local_context /
         // dual_write / n_plus_1 / unserializable_payload) on this entry point's tree — inline ⚠ marks + a
         // summary section. A hazard is a WHOLE-STORE, per-method fact (EP-independent), so we do NOT re-derive
@@ -441,12 +447,6 @@ internal static class TreeCommand
         IReadOnlyDictionary<string, string>? hazardsByMethod = null;
         if (hazards)
         {
-            var treeMethods = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var root in roots)
-            {
-                CollectTreeMethods(root, treeMethods);
-            }
-
             var hazardEffects = await source.HazardEffectsAsync(
                 rulesHash: rulesHash,
                 rules: rules,
@@ -462,11 +462,7 @@ internal static class TreeCommand
             // SAME store+rules-keyed cache `derive` populates (a warm tree is a cache hit — NO graph load), then
             // filtered to the tree's reachable methods exactly as the effect-attached set is. Appended so they
             // get BOTH the inline ⚠ mark (via hazardsByMethod below) AND the tsv `hazard` rows.
-            var graphHazardFindings = await source.GraphHazardFindingsAsync(
-                rulesHash: rulesHash,
-                rules: rules,
-                useCache: !opts.NoCache
-            );
+            var graphHazardFindings = await source.GraphHazardFindingsAsync(rulesHash: rulesHash, rules: rules, useCache: !opts.NoCache);
             hazardFindings = effectAttachedFindings.Concat(graphHazardFindings.Where(f => treeMethods.Contains(f.Enclosing))).ToList();
             // --exclude-namespace: drop hazard findings whose enclosing DocID namespace starts with any of the
             // given prefixes. Applied to both the summary section (WriteHazards) and the tsv `hazard` rows.
@@ -497,6 +493,11 @@ internal static class TreeCommand
                 .ToDictionary(keySelector: g => g.Key, elementSelector: FormatFindingMark, comparer: StringComparer.Ordinal);
             timer.Lap("hazard lookup (cached whole-store, filtered to tree)");
         }
+
+        // The live source derives ordinary effects over the whole resident generation, while a store may
+        // supply a SQL-bounded superset. Narrow both to the rendered forest before SelectEffects so its
+        // HiddenIntrinsic count—and every render path—depends only on this query's tree.
+        effects = effects.Where(e => e.EnclosingSymbolId is not null && treeMethods.Contains(e.EnclosingSymbolId)).ToList();
 
         // Deployment attribution (opt-in via deployments.json) + EP-site lookup, so tree nodes that are
         // themselves entry points get the ▶ kind + service chip. Null when unconfigured (default tree).
@@ -664,12 +665,6 @@ internal static class TreeCommand
             // Unresolved library calls: invocations to a referenced-assembly target that produced no effect
             // (no rule matched). Bounded to the rendered tree's methods; subtract the effect call-sites so a
             // call already shown as an effect leaf isn't doubled.
-            var treeMethods = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var root in roots)
-            {
-                CollectTreeMethods(root, treeMethods);
-            }
-
             var effectSites = effects.Where(e => e.EnclosingSymbolId is not null).Select(e => (e.EnclosingSymbolId!, e.Line)).ToHashSet();
             // Library-call sites are a pure function of the forest's method set → cache under the forest key
             // (`:libcalls`), recomputed only when the forest changes, not on every --full run. The `g2` suffix

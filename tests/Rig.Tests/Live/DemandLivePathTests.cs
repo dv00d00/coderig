@@ -26,7 +26,7 @@ public sealed class DemandLivePathTests
     }
 
     [Test]
-    public async Task Generic_and_interface_dispatch_live_paths_match_store_and_load_a_strict_partial_graph()
+    public async Task Generic_and_interface_dispatch_sync_live_paths_match_store_while_async_declines_to_fallback()
     {
         using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
         await using var host = await StartAsync(playground.WorkingDirectory, playground.SolutionPath);
@@ -42,13 +42,13 @@ public sealed class DemandLivePathTests
             playground.WorkingDirectory,
             ["path", "NotificationsController.Subscribe", "AuditSink.WriteAuditEntry"]
         );
-        var asyncEvent = await AssertParityAsync(
+        var asyncEvent = await AssertAsyncDeclineAsync(
             host,
             playground.WorkingDirectory,
             ["path", "NotificationsController.Subscribe", "AuditSink.WriteAuditEntry", "--async"]
         );
         syncEvent.Exit.ShouldBe(1);
-        asyncEvent.Exit.ShouldBe(0);
+        asyncEvent.DeclineReason.ShouldNotBeNull();
 
         var rules = RuleSetLoader.Load(playground.WorkingDirectory);
         var fullGraphOracle = new LiveFactSource(await host.GetCurrentFactsAsync(), rules).TraversalGraph;
@@ -101,6 +101,33 @@ public sealed class DemandLivePathTests
         var storeErr = new StringWriter();
         var storeExit = await CliApplication.RunAsync(arguments, storeOut, storeErr, workingDirectory);
 
+        var live = await ServeAsync(host, workingDirectory, arguments);
+
+        live.DeclineReason.ShouldBeNull();
+        live.Exit.ShouldBe(storeExit);
+        WithoutBanner(live.Out).ShouldBe(WithoutBanner(storeOut.ToString()));
+        live.Err.ShouldBe(storeErr.ToString());
+        live.Err.ShouldNotContain("traversalGraph");
+        live.Err.ShouldNotContain("eventSites");
+        return live;
+    }
+
+    private static async Task<LiveServeResult> AssertAsyncDeclineAsync(WatchHost host, string workingDirectory, string[] arguments)
+    {
+        var storeOut = new StringWriter();
+        var storeErr = new StringWriter();
+        var storeExit = await CliApplication.RunAsync(arguments, storeOut, storeErr, workingDirectory);
+        storeExit.ShouldBe(0, storeOut.ToString() + storeErr);
+
+        var live = await ServeAsync(host, workingDirectory, arguments);
+        live.DeclineReason.ShouldNotBeNull();
+        live.Out.ShouldBeEmpty();
+        live.Err.ShouldBeEmpty();
+        return live;
+    }
+
+    private static Task<LiveServeResult> ServeAsync(WatchHost host, string workingDirectory, string[] arguments)
+    {
         var opts = new PathCommand.Options(
             FromPattern: arguments[1],
             ToPattern: arguments[2],
@@ -112,7 +139,7 @@ public sealed class DemandLivePathTests
             Format: null,
             Time: false
         );
-        var live = await host.ServeAsync(
+        return host.ServeAsync(
             new LiveQueryRequest(
                 Protocol: LiveQueryTransport.Protocol,
                 Verb: LiveQueryVerbs.Path,
@@ -120,14 +147,6 @@ public sealed class DemandLivePathTests
                 Options: JsonSerializer.Serialize(opts, LiveQueryTransport.Json)
             )
         );
-
-        live.DeclineReason.ShouldBeNull();
-        live.Exit.ShouldBe(storeExit);
-        WithoutBanner(live.Out).ShouldBe(WithoutBanner(storeOut.ToString()));
-        live.Err.ShouldBe(storeErr.ToString());
-        live.Err.ShouldNotContain("traversalGraph");
-        live.Err.ShouldNotContain("eventSites");
-        return live;
     }
 
     private static int? Depth(string[] arguments)

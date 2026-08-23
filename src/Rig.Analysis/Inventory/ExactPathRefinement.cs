@@ -5,18 +5,45 @@ using Rig.Domain.Functions;
 
 namespace Rig.Analysis.Inventory;
 
-// Everything required to reproduce PathCommand's demand-shaped forward topology without depending on CLI
+// Everything required to reproduce a command's demand-shaped forward topology without depending on CLI
 // option types. Rules are already shaped (`--raw` applied) and the traversal mode/depth exactly match the
-// command that will consume the resulting snapshot.
-internal sealed record ExactPathDemand(
+// command that will consume the resulting snapshot. Path additionally supplies TO so its reverse endpoint
+// ownership can widen the boundary; reaches/tree deliberately do not substitute a project-reference cone
+// for the keyed forward graph they actually consume.
+internal enum ExactForwardQueryKind
+{
+    Path,
+    Reaches,
+    Tree,
+}
+
+internal enum ExactForwardDebtScope
+{
+    DemandBoundary,
+    WholeResident,
+}
+
+internal sealed record ExactForwardDemand(
+    ExactForwardQueryKind QueryKind,
     string FromPattern,
-    string ToPattern,
+    string? ToPattern,
     DemandForwardGraphRules Rules,
     int MaxDepth,
-    FactPathFinder.TraversalMode Mode
-);
+    FactPathFinder.TraversalMode Mode,
+    ExactForwardDebtScope DebtScope = ExactForwardDebtScope.DemandBoundary
+)
+{
+    internal string Verb =>
+        QueryKind switch
+        {
+            ExactForwardQueryKind.Path => "path",
+            ExactForwardQueryKind.Reaches => "reaches",
+            ExactForwardQueryKind.Tree => "tree",
+            _ => throw new InvalidOperationException($"Unknown exact forward query kind: {QueryKind}"),
+        };
+}
 
-internal enum ExactPathRefinementKind
+internal enum ExactForwardRefinementKind
 {
     ExactUnchanged,
     ExactPublished,
@@ -24,19 +51,21 @@ internal enum ExactPathRefinementKind
     ExactUnavailable,
 }
 
-internal sealed record ExactPathRefinementOutcome(ExactPathRefinementKind Kind, FactSnapshot Snapshot, string? Reason = null)
+internal sealed record ExactForwardRefinementOutcome(ExactForwardRefinementKind Kind, FactSnapshot Snapshot, string? Reason = null)
 {
-    internal static ExactPathRefinementOutcome Unchanged(FactSnapshot snapshot) => new(ExactPathRefinementKind.ExactUnchanged, snapshot);
+    internal static ExactForwardRefinementOutcome Unchanged(FactSnapshot snapshot) =>
+        new(ExactForwardRefinementKind.ExactUnchanged, snapshot);
 
-    internal static ExactPathRefinementOutcome Published(FactSnapshot snapshot) => new(ExactPathRefinementKind.ExactPublished, snapshot);
+    internal static ExactForwardRefinementOutcome Published(FactSnapshot snapshot) =>
+        new(ExactForwardRefinementKind.ExactPublished, snapshot);
 
-    internal static ExactPathRefinementOutcome Superseded(FactSnapshot snapshot) => new(ExactPathRefinementKind.Superseded, snapshot);
+    internal static ExactForwardRefinementOutcome Superseded(FactSnapshot snapshot) => new(ExactForwardRefinementKind.Superseded, snapshot);
 
-    internal static ExactPathRefinementOutcome Unavailable(FactSnapshot snapshot, string reason) =>
-        new(ExactPathRefinementKind.ExactUnavailable, snapshot, reason);
+    internal static ExactForwardRefinementOutcome Unavailable(FactSnapshot snapshot, string reason) =>
+        new(ExactForwardRefinementKind.ExactUnavailable, snapshot, reason);
 }
 
-internal sealed record ExactPathPlan(
+internal sealed record ExactForwardPlan(
     ImmutableHashSet<ProjectId> SelectedOrigins,
     ImmutableHashSet<ProjectId> UnknownOrigins,
     bool FromMatched,
@@ -44,9 +73,9 @@ internal sealed record ExactPathPlan(
     string? UnavailableReason
 );
 
-internal static class ExactPathRefinement
+internal static class ExactForwardRefinement
 {
-    internal static ExactPathPlan Plan(FactSnapshot snapshot, ExactPathDemand demand)
+    internal static ExactForwardPlan Plan(FactSnapshot snapshot, ExactForwardDemand demand)
     {
         DemandForwardGraphResult load;
         try
@@ -64,7 +93,7 @@ internal static class ExactPathRefinement
 
         var catalog = snapshot.GraphView.MethodSymbolIds.ToArray();
         var fromIds = FactPathFinder.DistinctMatchTargets(catalog, demand.FromPattern);
-        var toIds = FactPathFinder.DistinctMatchTargets(catalog, demand.ToPattern);
+        IReadOnlyList<string> toIds = demand.ToPattern is null ? [] : FactPathFinder.DistinctMatchTargets(catalog, demand.ToPattern);
         var reachable = FactPathFinder.Reaches(
             load.Graph,
             demand.FromPattern,
@@ -116,26 +145,36 @@ internal static class ExactPathRefinement
         }
 
         boundaryProjects.UnionWith(ProjectDependencyClosure(snapshot.Solution, fromProjects, reverse: false));
-        boundaryProjects.UnionWith(ProjectDependencyClosure(snapshot.Solution, toProjects, reverse: true));
+        if (demand.ToPattern is not null)
+        {
+            boundaryProjects.UnionWith(ProjectDependencyClosure(snapshot.Solution, toProjects, reverse: true));
+        }
 
         var selected = ImmutableHashSet.CreateBuilder<ProjectId>();
-        foreach (var (origin, contribution) in snapshot.Dirty.PendingByOrigin)
+        if (demand.DebtScope == ExactForwardDebtScope.WholeResident)
         {
-            if (
-                contribution.Any(documentId =>
-                    boundaryProjects.Contains(documentId.ProjectId)
-                    || snapshot.Solution.GetDocument(documentId)?.FilePath is { } file && boundaryFiles.Contains(Path.GetFullPath(file))
-                )
-            )
+            selected.UnionWith(snapshot.Dirty.PendingByOrigin.Keys);
+        }
+        else
+        {
+            foreach (var (origin, contribution) in snapshot.Dirty.PendingByOrigin)
             {
-                selected.Add(origin);
+                if (
+                    contribution.Any(documentId =>
+                        boundaryProjects.Contains(documentId.ProjectId)
+                        || snapshot.Solution.GetDocument(documentId)?.FilePath is { } file && boundaryFiles.Contains(Path.GetFullPath(file))
+                    )
+                )
+                {
+                    selected.Add(origin);
+                }
             }
         }
 
         // Missing endpoints may be generated declarations retired/introduced by an Unknown origin. Until
         // those generated shards are refreshed, an authoritative no-match would be stale. If ownership
         // cannot narrow the missing declaration, refresh every Unknown dirty origin (origin-conservative).
-        if (fromIds.Count == 0 || toIds.Count == 0)
+        if (fromIds.Count == 0 || demand.ToPattern is not null && toIds.Count == 0)
         {
             selected.UnionWith(
                 snapshot.Dirty.PendingByOrigin.Keys.Where(id => snapshot.Delta.SurfaceStates.GetValueOrDefault(id) == SurfaceState.Unknown)
@@ -158,9 +197,9 @@ internal static class ExactPathRefinement
         }
 
         var unknown = selected.Where(id => snapshot.Delta.SurfaceStates.GetValueOrDefault(id) == SurfaceState.Unknown).ToImmutableHashSet();
-        return new ExactPathPlan(selected.ToImmutable(), unknown, fromIds.Count > 0, toIds.Count > 0, null);
+        return new ExactForwardPlan(selected.ToImmutable(), unknown, fromIds.Count > 0, demand.ToPattern is null || toIds.Count > 0, null);
 
-        ExactPathPlan Unavailable(string reason) =>
+        ExactForwardPlan Unavailable(string reason) =>
             new(ImmutableHashSet<ProjectId>.Empty, ImmutableHashSet<ProjectId>.Empty, false, false, reason);
     }
 
