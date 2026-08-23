@@ -92,25 +92,20 @@ public sealed class LiveCallersExactIntegrationTests
         editedStore.Out.ShouldContain(NewCaller);
         AssertParity(editedStore, editedLive);
 
-        var revisionBeforeDeclines = await host.GetCurrentRevisionAsync();
-        foreach (
-            var unsupported in new[]
-            {
-                CallersRequest(workingDirectory, asyncMode: true),
-                CallersRequest(workingDirectory, includeDelivery: true),
-            }
-        )
+        var revisionBeforeAsyncQueries = await host.GetCurrentRevisionAsync();
+        foreach (var mode in new[] { (Async: true, Delivery: false), (Async: false, Delivery: true), (Async: true, Delivery: true) })
         {
-            var declined = await host.ServeAsync(unsupported);
-            declined.DeclineReason.ShouldNotBeNull();
-            declined.Out.ShouldBeEmpty();
-            declined.Err.ShouldBeEmpty();
-            declined.Disclosure.ShouldBeEmpty();
+            var asyncStore = await RunStoreCallersAsync(workingDirectory, mode.Async, mode.Delivery);
+            var asyncLive = await host.ServeAsync(CallersRequest(workingDirectory, mode.Async, mode.Delivery));
+
+            AssertAnsweredCallers(asyncLive, ExistingHighLevelCaller, NewCaller);
+            AssertParity(asyncStore, asyncLive);
+            AssertNoWholeGraphBuild(asyncLive);
         }
 
         (await host.GetCurrentRevisionAsync()).ShouldBe(
-            revisionBeforeDeclines,
-            "unsupported callers transport modes must decline before refinement or execution"
+            revisionBeforeAsyncQueries,
+            "repeating callers in another traversal mode over an exact generation must not publish another revision"
         );
     }
 
@@ -138,11 +133,24 @@ public sealed class LiveCallersExactIntegrationTests
         );
     }
 
-    private static async Task<CommandAnswer> RunStoreCallersAsync(string workingDirectory)
+    private static async Task<CommandAnswer> RunStoreCallersAsync(
+        string workingDirectory,
+        bool asyncMode = false,
+        bool includeDelivery = false
+    )
     {
         var output = new StringWriter();
         var error = new StringWriter();
-        var exit = await CliApplication.RunAsync(["callers", Target, "--no-live"], output, error, workingDirectory);
+        var arguments = new List<string> { "callers", Target, "--no-live" };
+        if (asyncMode)
+        {
+            arguments.Add("--async");
+        }
+        if (includeDelivery)
+        {
+            arguments.Add("--include-delivery");
+        }
+        var exit = await CliApplication.RunAsync(arguments.ToArray(), output, error, workingDirectory);
         return new CommandAnswer(exit, output.ToString(), error.ToString());
     }
 

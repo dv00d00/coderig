@@ -631,6 +631,11 @@ public static partial class FactPathFinder
         while (stack.Count > 0 && budget > 0)
         {
             var n = stack.Pop();
+            // A node becomes part of the emitted forest only when the DFS actually visits it. Successor
+            // discovery stages every sibling before pushing them; without this bit, siblings still sitting
+            // on the stack when the budget expires were converted into ordinary leaf TraceNodes and rendered
+            // beyond --limit even though traversal never visited them.
+            n.Visited = true;
             budget--;
 
             // Already expanded elsewhere (cycle / shared callee), at depth cap, or out of budget:
@@ -738,7 +743,7 @@ public static partial class FactPathFinder
             }
         }
 
-        return mutableRoots.Select(ToTraceNode).ToArray();
+        return mutableRoots.Where(n => n.Visited).Select(ToTraceNode).ToArray();
     }
 
     // Mutable node used during BFS tree construction; converted to immutable TraceNode afterward.
@@ -773,6 +778,7 @@ public static partial class FactPathFinder
         // The reaching edge's call site (File/Line) — RENDERING only (-> TraceNode.CallFile/CallLine).
         public readonly string? CallFile;
         public readonly int CallLine;
+        public bool Visited;
         public bool Truncated;
         public TruncationCause TruncationCause;
 
@@ -843,7 +849,11 @@ public static partial class FactPathFinder
             );
         }
 
-        var children = n.Kids.Count == 0 ? EmptyNodes : n.Kids.Select(ToTraceNode).ToArray();
+        // Successors are staged as siblings before the DFS visits them. Drop every never-visited child:
+        // --limit is a strict TraceNode bound, and an unvisited successor is omitted work rather than a real
+        // leaf. The final visited node already carries BudgetCapped, preserving an explicit stop marker.
+        var visitedChildren = n.Kids.Where(k => k.Visited).ToArray();
+        var children = visitedChildren.Length == 0 ? EmptyNodes : visitedChildren.Select(ToTraceNode).ToArray();
 
         return new TraceNode(
             SymbolId: n.Symbol,

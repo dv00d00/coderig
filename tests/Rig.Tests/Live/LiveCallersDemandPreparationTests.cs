@@ -111,7 +111,7 @@ public sealed class LiveCallersDemandPreparationTests
     }
 
     [Test]
-    public async Task Unsupported_callers_options_decline_without_preparing_refinement()
+    public async Task Invalid_callers_options_decline_without_preparing_refinement()
     {
         var facts = new LiveFactSource(new AnalysisResult("Exact.sln", [], []), Rules);
         var invalid = new[]
@@ -120,8 +120,6 @@ public sealed class LiveCallersDemandPreparationTests
             {
                 ExtraRules = ["custom.json"],
             },
-            Options(asyncMode: true),
-            Options(includeDelivery: true),
             Options(roots: true, entrypoints: true),
             Options(depth: -1),
             Options(limit: 0),
@@ -136,6 +134,39 @@ public sealed class LiveCallersDemandPreparationTests
             var result = await LiveQueryRunner.RunRequestAsync(request, facts, "/repo");
             result.Answer.ShouldBeNull();
             result.DeclineReason.ShouldNotBeNull();
+        }
+    }
+
+    [Test]
+    public async Task Async_and_include_only_callers_prepare_with_normalized_modes_but_only_sync_compatibility_executes()
+    {
+        var facts = new LiveFactSource(new AnalysisResult("Exact.sln", [], []), Rules);
+        var cases = new[]
+        {
+            (Options(asyncMode: true), FactPathFinder.TraversalMode.AsyncExact),
+            (Options(includeDelivery: true), FactPathFinder.TraversalMode.SyncCut),
+            (Options(asyncMode: true, includeDelivery: true), FactPathFinder.TraversalMode.AsyncInclude),
+        };
+
+        foreach (var (options, expectedMode) in cases)
+        {
+            var request = Request(options);
+            var demand = LiveQueryRunner
+                .PrepareTransportExactDemand(request, Rules, deploymentsConfigured: false)
+                .ShouldBeOfType<ExactCallersDemand>();
+            demand.ExecutionMode.ShouldBe(expectedMode);
+
+            var result = await LiveQueryRunner.RunRequestAsync(request, facts, "/repo");
+            if (expectedMode == FactPathFinder.TraversalMode.SyncCut)
+            {
+                result.DeclineReason.ShouldBeNull();
+                result.Answer.ShouldNotBeNull();
+            }
+            else
+            {
+                result.Answer.ShouldBeNull();
+                result.DeclineReason!.ShouldContain("flattened compatibility facts cannot project delivery exactly");
+            }
         }
     }
 

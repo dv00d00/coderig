@@ -13,31 +13,42 @@ public sealed class LiveCallersDeclineReasonTests
     private static readonly RuleSet Rules = new();
 
     [Test]
-    [Arguments(true, false, "resident `callers` does not yet support `--async`; this traversal mode requires the immutable store")]
-    [Arguments(
-        false,
-        true,
-        "resident `callers` does not yet support `--include-delivery`; this traversal mode requires the immutable store"
-    )]
-    [Arguments(
-        true,
-        true,
-        "resident `callers` does not yet support `--async` and `--include-delivery`; these traversal modes require the immutable store"
-    )]
-    public async Task Valid_store_only_traversal_modes_name_the_unsupported_live_capability(
-        bool asyncMode,
-        bool includeDelivery,
-        string expectedReason
-    )
+    [Arguments(true, false)]
+    [Arguments(true, true)]
+    public async Task Async_traversal_modes_decline_when_only_flattened_compatibility_facts_exist(bool asyncMode, bool includeDelivery)
     {
+        var facts = Facts();
         var result = await LiveQueryRunner.RunRequestAsync(
             Request(Options(asyncMode: asyncMode, includeDelivery: includeDelivery)),
-            Facts(),
+            facts,
             "/repo"
         );
 
         result.Answer.ShouldBeNull();
-        result.DeclineReason.ShouldBe(expectedReason);
+        result.DeclineReason!.ShouldContain("flattened compatibility facts cannot project delivery exactly");
+        facts.BuildTimes.ShouldBeEmpty();
+    }
+
+    [Test]
+    public async Task Include_only_keeps_sync_compatibility_semantics()
+    {
+        var facts = Facts();
+        var result = await LiveQueryRunner.RunRequestAsync(Request(Options(asyncMode: false, includeDelivery: true)), facts, "/repo");
+
+        result.DeclineReason.ShouldBeNull();
+        result.Answer.ShouldNotBeNull();
+        facts.BuildTimes.ShouldContain(build => build.Artifact == "traversalGraph");
+    }
+
+    [Test]
+    public async Task Sync_human_entrypoints_can_use_async_discovery_with_flattened_compatibility_facts()
+    {
+        var facts = Facts();
+        var result = await LiveQueryRunner.RunRequestAsync(Request(Options(entrypointsOnly: true, format: null)), facts, "/repo");
+
+        result.DeclineReason.ShouldBeNull();
+        result.Answer.ShouldNotBeNull();
+        facts.BuildTimes.ShouldContain(build => build.Artifact == "traversalGraph");
     }
 
     [Test]
@@ -77,18 +88,23 @@ public sealed class LiveCallersDeclineReasonTests
     private static LiveQueryRequest Request(CallersCommand.Options options) =>
         new(LiveQueryTransport.Protocol, LiveQueryVerbs.Callers, "/repo", JsonSerializer.Serialize(options, LiveQueryTransport.Json));
 
-    private static CallersCommand.Options Options(bool asyncMode = false, bool includeDelivery = false) =>
+    private static CallersCommand.Options Options(
+        bool asyncMode = false,
+        bool includeDelivery = false,
+        bool entrypointsOnly = false,
+        string? format = "tsv"
+    ) =>
         new(
             ToPattern: "App.Target",
             RootsOnly: false,
-            EntrypointsOnly: false,
+            EntrypointsOnly: entrypointsOnly,
             IncludeReverseOnly: false,
             Async: asyncMode,
             IncludeDelivery: includeDelivery,
             Raw: false,
             ExtraRules: [],
             Depth: null,
-            Format: "tsv",
+            Format: format,
             Limit: null,
             Time: false
         );

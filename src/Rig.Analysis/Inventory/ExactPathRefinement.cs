@@ -158,6 +158,27 @@ internal static class ExactForwardRefinement
             }
         }
 
+        // Delivery joins read subscription/registration and producer partitions that can sit outside the
+        // ordinary call closure. They are query inputs, so their emitters participate in the same exact
+        // ownership boundary; otherwise an edited handler/channel could leave a plausible stale answer.
+        foreach (var symbolId in load.Ownership?.SymbolIds ?? [])
+        {
+            foreach (var row in snapshot.GraphView.SymbolsById(MonomorphizedNodeId.BaseOf(symbolId)))
+            {
+                if (!TryAddDeliveryOwnership(row.FilePath, row.DefiningAssembly, out var reason))
+                {
+                    return Unavailable(reason!);
+                }
+            }
+        }
+        foreach (var emitterPath in load.Ownership?.EmitterFilePaths ?? [])
+        {
+            if (!TryAddDeliveryOwnership(emitterPath, assemblyName: null, out var reason))
+            {
+                return Unavailable(reason!);
+            }
+        }
+
         boundaryProjects.UnionWith(ProjectDependencyClosure(snapshot.Solution, fromProjects, reverse: false));
         if (demand.ToPattern is not null)
         {
@@ -212,6 +233,32 @@ internal static class ExactForwardRefinement
 
         var unknown = selected.Where(id => snapshot.Delta.SurfaceStates.GetValueOrDefault(id) == SurfaceState.Unknown).ToImmutableHashSet();
         return new ExactForwardPlan(selected.ToImmutable(), unknown, fromIds.Count > 0, demand.ToPattern is null || toIds.Count > 0, null);
+
+        bool TryAddDeliveryOwnership(string? emitterPath, string? assemblyName, out string? unavailableReason)
+        {
+            EmitterOwnership ownership;
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(emitterPath))
+                {
+                    boundaryFiles.Add(Path.GetFullPath(emitterPath));
+                }
+                ownership = snapshot.Surfaces.ResolveEmitterOwnership(snapshot.Solution, emitterPath, assemblyName);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                unavailableReason = $"delivery emitter ownership could not be normalized: {exception.Message}";
+                return false;
+            }
+            if (!ownership.IsExact)
+            {
+                unavailableReason = ownership.UnavailableReason;
+                return false;
+            }
+            boundaryProjects.UnionWith(ownership.ProjectIds);
+            unavailableReason = null;
+            return true;
+        }
 
         ExactForwardPlan Unavailable(string reason) =>
             new(ImmutableHashSet<ProjectId>.Empty, ImmutableHashSet<ProjectId>.Empty, false, false, reason);

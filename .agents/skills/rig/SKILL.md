@@ -29,10 +29,10 @@ rig index Sln.slnx                           # PREFERRED: whole solution, ONE ca
 rig index Sln.slnx --framework net10.0       # select this TFM in multi-targeted projects (default: first declared TFM)
 rig index Sln.slnx --from Entry.csproj       # narrowing ONLY: Entry's transitive ProjectReference closure — see gotcha below before reaching for this
 rig index Other.slnx --merge --rules r.json  # multi-solution: ACCUMULATE into the (commit-scoped) store; one run/solution, queries span all. Pass --rules every time. Loop w/ continue-on-failure for a many-solution repo.
-rig reaches "Type.Method" [--async]          # effects reachable from a node (sync; --async also walks handoffs)
+rig reaches "Type.Method" [--async [--include-delivery]]  # effects reachable from a node; async exact by default, opt into delivery fan-out
 rig tree "Type.Method" [--view paths|full|effects|summary|hazards] [--format llm|llm-ids] [--guards] [--suppress ctors,lambdas] [--exclude throw] [--raw]   # call tree (default --view paths = effectful paths; --guards marks branch-gated edges)
-rig callers "Type.Method" [--roots|--entrypoints]  # reverse (roots = no-predecessor origins; entrypoints = rule-detected EPs)
-rig path "From" "To" [--async]               # one concrete path
+rig callers "Type.Method" [--roots|--entrypoints] [--async [--include-delivery]]  # reverse (roots = no-predecessor origins; entrypoints = rule-detected EPs)
+rig path "From" "To" [--async [--include-delivery]]  # one concrete path
 rig derive [--list-providers] [--exclude-namespace <ns>]   # ALL effects + EPs; --list-providers = the valid --only/--exclude token set
 rig entrypoints                              # rule-detected EPs by kind (--format tsv)
 rig refs "IFoo"  |  rig symbols "Foo" --kind method [--limit n] [--no-lambdas]
@@ -60,7 +60,7 @@ Per-repo glyphs via `rig.effect-emoji.json`.
 - **`~heuristic` = INFERRED dispatch** (Roslyn couldn't bind, net48 `!:`; name/arity fallback, ~99% — verify). Unmarked dispatch = exact mined fact, trust it.
 - **Fan-out `×N` = "could be any of these N," NOT "calls all N"** (CHA over-approximation). `reaches` buckets fan-out-only targets as "NOT a real call"; a resolved target is not re-dispatched (one hop).
 - **`derive` totals ≠ reachable**: an effect surfaces in `reaches`/`tree` only if its enclosing id is a call-graph node (`M:`/accessor/lambda/ctor). Effects keyed to `P:`/`F:` show in `derive` but never reach.
-- `tree` children are source-ordered (≈ execution order). Generic labels show the REAL instantiation (monomorphized down the chain), not `<T,U>`.
+- `tree` children are source-ordered (≈ execution order). Generic labels show the REAL instantiation (monomorphized down the chain), not `<T,U>`. `--limit N` is a strict data-node budget in every format (headers do not count), and lambda labels preserve `~λN` so distinct callbacks do not collapse into duplicate-looking rows.
 - **Intrinsic effects are HIDDEN BY DEFAULT.** `alloc` and `throw` scale with code VOLUME (every `new`/`throw`) rather than with what the code touches, and are ~91% of all effects on MedDBase (243,391 + 79,508 vs ~30,619 for the other 49 providers). `--intrinsic` restores them; naming one in `--only` (e.g. `--only alloc`) implies it. A stderr note discloses the hiding. Applies to `derive`/`reaches`/`tree`/`impact`. Low-level perf/robustness work wants `--intrinsic`; review does not.
 - **Filter**: `--only`/`--exclude <list>` (comma/space-sep, repeatable; `provider` or `provider:op`; exclude wins). Headline: `--exclude throw`. An UNKNOWN token now WARNS (stderr) instead of silently matching nothing — `rig derive --list-providers` prints the valid set for the current rules.
 - **`shared_state:read` is write-pair GATED by default** (`derive` / `tree --view hazards` / `impact`): a static-field/auto-property read is emitted only when that exact cell is also WRITTEN somewhere in scope. A read of a never-written cell — an enum member, `const`, `static readonly`, or any unmutated static — can't be the "check" half of a read-before-write, so it's dropped as inventory noise (≈94% of raw static-field reads on MedDBase — 81.7k→4.9k sites: `FieldIndex.*`, `MessageBoxButtons.*`, enum members, etc.). **`--no-gate`** restores the full ungated read inventory. Presentation-only — `race_window`/hazard output is UNCHANGED (the matcher already pairs same-cell read+write, so unpaired reads never contributed a hazard).
@@ -98,9 +98,13 @@ permits a deliberate second stdin-only host, `--once` exits after boot, `--query
 
 While the resident host runs, ordinary one-shot `reaches`, `path`, `callers`, and `tree` commands in
 that directory route to it over the local endpoint and disclose fact freshness/reconciliation state.
-Resident exact refinement currently serves the synchronous forms; `--async` / `--include-delivery`
-decline the live route with an explicit unsupported-capability reason, and the one-shot command falls back
-to the immutable store rather than serving a partial live graph.
+Resident exact refinement serves both synchronous and delivery-aware `--async` / `--async
+--include-delivery` forms. Delivery projection is keyed by the event symbol or configured argument endpoint,
+so a live query reads only the relevant channel/handler partitions and does not flatten the resident graph or
+the whole event-site corpus. Exact async projection fails closed on unsupported delivery rules, caps, or a
+legacy flattened snapshot; a routed one-shot command can then use its disclosed immutable-store fallback
+instead of presenting a partial live answer. In stdin/`--query` text, traversal flags must be trailing; a
+quoted flag-like suffix remains pattern text. `--include-delivery` without `--async` remains a sync no-op.
 `derive` deliberately remains store-backed and `impact` still requires two immutable commit stores.
 `rig serve` is the store-backed browser explorer; do not assume it is the live host.
 

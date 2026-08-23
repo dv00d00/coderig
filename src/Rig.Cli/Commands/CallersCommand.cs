@@ -204,7 +204,7 @@ internal static class CallersCommand
                     shaped.Cut,
                     shaped.Context
                 ),
-                new DemandReverseCallersGraphRequest(opts.ToPattern, maxDepth, DiscoveryMode(opts, tsv))
+                new DemandReverseCallersGraphRequest(opts.ToPattern, maxDepth, DiscoveryMode(opts, tsv), ExecutionMode: mode)
             );
             graph = demandResult.Graph;
         }

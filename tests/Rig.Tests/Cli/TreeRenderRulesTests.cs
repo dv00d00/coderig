@@ -33,7 +33,7 @@ public sealed class TreeRenderRulesTests
     {
         var output = new StringWriter();
         seamEffects ??= new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        TreeRenderer.RenderTreeNode(root, prefix: "", isLast: true, isRoot: true, effects, prune, rules, seamEffects, output, plain: plain);
+        TreeRenderer.RenderTreeNode(root, new TreeRenderContext(output, effects, rules, seamEffects) { Prune = prune, Plain = plain });
         return output.ToString();
     }
 
@@ -68,17 +68,14 @@ public sealed class TreeRenderRulesTests
         var hazards = new Dictionary<string, string>(StringComparer.Ordinal) { ["M:App.Svc.Do()"] = "  ⚠ dual_write(medium)" };
 
         var output = new StringWriter();
+        var effects = Effects(("M:App.Svc.Do()", "💾 efcore:commit"));
         TreeRenderer.RenderTreeNode(
             root,
-            prefix: "",
-            isLast: true,
-            isRoot: true,
-            Effects(("M:App.Svc.Do()", "💾 efcore:commit")),
-            prune: false,
-            FactRenderRules.Empty,
-            new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            output,
-            hazardsByMethod: hazards
+            new TreeRenderContext(output, effects, FactRenderRules.Empty, new Dictionary<string, List<string>>(StringComparer.Ordinal))
+            {
+                Prune = false,
+                HazardsByMethod = hazards,
+            }
         );
         var lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToList();
 
@@ -311,17 +308,8 @@ public sealed class TreeRenderRulesTests
 
         var folded = TreeRenderer.FoldSingleImplHops(iface, new Dictionary<string, List<string>>(StringComparer.Ordinal));
         var output = new StringWriter();
-        TreeRenderer.RenderTreeNode(
-            folded,
-            "",
-            isLast: true,
-            isRoot: true,
-            new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            prune: false,
-            FactRenderRules.Empty,
-            new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            output
-        );
+        var noEffects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        TreeRenderer.RenderTreeNode(folded, new TreeRenderContext(output, noEffects, FactRenderRules.Empty, noEffects) { Prune = false });
         var text = output.ToString();
 
         text.ShouldContain("QueryResult<Account, Invoice>.Enumerate");
@@ -477,16 +465,12 @@ public sealed class TreeRenderRulesTests
         var output = new StringWriter();
         TreeRenderer.RenderTreeNode(
             root,
-            prefix: "",
-            isLast: true,
-            isRoot: true,
-            effects,
-            prune: false,
-            FactRenderRules.Empty,
-            new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            output,
-            full: true,
-            effectLeavesByMethod: leaves
+            new TreeRenderContext(output, effects, FactRenderRules.Empty, new Dictionary<string, List<string>>(StringComparer.Ordinal))
+            {
+                Prune = false,
+                Full = true,
+                EffectLeavesByMethod = leaves,
+            }
         );
         var text = output.ToString();
 

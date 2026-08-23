@@ -66,7 +66,7 @@ internal static class TreeCommand
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var limit = CommonOptions.Limit(
-            description: $"Max tree nodes to build (default {FactPathFinder.DefaultTreeNodeBudget}, the safety cap); the node that hits the cap renders as a budget-capped ⋯elided leaf."
+            description: $"Max emitted tree data nodes (default {FactPathFinder.DefaultTreeNodeBudget}, the safety cap; headers do not count); the node that hits the cap renders as a budget-capped ⋯elided leaf."
         );
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
@@ -370,8 +370,23 @@ internal static class TreeCommand
             // shaped graph to render — locations/seam are written below so the NEXT query is a full hit.
             roots = cached.Forest;
             effects = cached.Effects;
-            graph = await source.LoadShapedTraversalGraphAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
-            if (!opts.Raw)
+            DemandForwardGraphResult? demandGraph = null;
+            if (mode != FactPathFinder.TraversalMode.SyncCut && source is IDemandForwardPathFactSource demand)
+            {
+                demandGraph = await demand.LoadDemandForwardPathGraphAsync(
+                    opts.FromPattern,
+                    shaped,
+                    maxDepth,
+                    mode,
+                    classifyEventSubscriptions: !opts.Raw
+                );
+                graph = demandGraph.Graph;
+            }
+            else
+            {
+                graph = await source.LoadShapedTraversalGraphAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
+            }
+            if (!opts.Raw && demandGraph?.EventSubscriptionsClassified != true)
             {
                 graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
             }
@@ -789,6 +804,25 @@ internal static class TreeCommand
         // the --files 📄 definition-loc) so the file name shows only when it changes down the tree. Mode-
         // agnostic — always on; it's a no-op when no loc is rendered (default mode). One writer per forest.
         var renderOut = new SourceLocDedupWriter(io.TextOutput.Output);
+        var renderContext = new TreeRenderContext(
+            Output: renderOut,
+            EffectsByMethod: effectsByMethod,
+            RenderRules: renderRules,
+            SeamEffects: seamEffects
+        )
+        {
+            Prune = !full,
+            Files = opts.Files,
+            LocationsById = locById,
+            Signatures = opts.Signatures,
+            Plain = opts.Plain,
+            CutRules = shaped.Cut,
+            EntryPoints = epContext,
+            Full = full,
+            EffectLeavesByMethod = effectLeavesByMethod,
+            HazardsByMethod = hazardsByMethod,
+            Guards = opts.Guards,
+        };
         var rendered = 0;
         foreach (var root in roots)
         {
@@ -800,27 +834,7 @@ internal static class TreeCommand
             rendered++;
             // Fold single-impl interface/base hops (IFoo.M -> Foo.M when there's exactly one target)
             // into the impl, with a «via IFoo» marker — exact, no info loss. --raw shows the raw hops.
-            RenderTreeNode(
-                node: opts.Raw ? root : FoldSingleImplHops(root, effectsByMethod),
-                prefix: "",
-                isLast: true,
-                isRoot: true,
-                effectsByMethod: effectsByMethod,
-                prune: !full,
-                renderRules: renderRules,
-                seamEffects: seamEffects,
-                output: renderOut,
-                files: opts.Files,
-                locById: locById,
-                signatures: opts.Signatures,
-                plain: opts.Plain,
-                cutRules: shaped.Cut,
-                epContext: epContext,
-                full: full,
-                effectLeavesByMethod: effectLeavesByMethod,
-                hazardsByMethod: hazardsByMethod,
-                guards: opts.Guards
-            );
+            RenderTreeNode(node: opts.Raw ? root : FoldSingleImplHops(root, effectsByMethod), context: renderContext);
         }
 
         // The default render is EFFECTFUL: branches with no downstream effect are pruned. When the symbol
@@ -899,7 +913,7 @@ internal static class TreeCommand
     // One DFS pre-order row per tree node for `--format tsv`: depth (rebuilds the hierarchy), full DocID,
     // the edge kind that reached it, the async-handoff dispatcher (if any), the dispatch fan-out degree,
     // its effects (comma-joined provider:operation, empty when none), and its declaration file:line.
-    private static void EmitTsvNode(
+    internal static void EmitTsvNode(
         TraceNode node,
         int depth,
         IReadOnlyDictionary<string, string> effectsByMethod,

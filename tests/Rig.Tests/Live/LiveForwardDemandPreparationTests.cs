@@ -67,25 +67,35 @@ public sealed class LiveForwardDemandPreparationTests
     }
 
     [Test]
-    public async Task Async_or_delivery_forward_transport_declines_before_refinement_and_at_execution()
+    public async Task Async_forward_transport_prepares_but_flattened_execution_declines_while_include_only_stays_sync()
     {
         var facts = new LiveFactSource(new AnalysisResult("Exact.sln", [], []), Rules);
-        var requests = new[]
+        var asyncRequests = new[]
         {
             Request(LiveQueryVerbs.Path, Path(asyncMode: true)),
-            Request(LiveQueryVerbs.Path, Path(delivery: true)),
             Request(LiveQueryVerbs.Reaches, Reaches("App.Start", asyncMode: true)),
-            Request(LiveQueryVerbs.Reaches, Reaches("App.Start", delivery: true)),
             Request(LiveQueryVerbs.Tree, Tree("App.Start", asyncMode: true)),
-            Request(LiveQueryVerbs.Tree, Tree("App.Start", delivery: true)),
         };
 
-        foreach (var request in requests)
+        foreach (var request in asyncRequests)
         {
-            LiveQueryRunner.PrepareTransportForwardDemand(request, Rules, deploymentsConfigured: false).ShouldBeNull();
+            LiveQueryRunner.PrepareTransportForwardDemand(request, Rules, deploymentsConfigured: false).ShouldNotBeNull();
             var result = await LiveQueryRunner.RunRequestAsync(request, facts, "/repo");
             result.Answer.ShouldBeNull();
-            result.DeclineReason.ShouldNotBeNull();
+            result.DeclineReason!.ShouldContain("flattened compatibility facts");
+        }
+
+        var includeOnlyRequests = new[]
+        {
+            Request(LiveQueryVerbs.Path, Path(delivery: true)),
+            Request(LiveQueryVerbs.Reaches, Reaches("App.Start", delivery: true)),
+            Request(LiveQueryVerbs.Tree, Tree("App.Start", delivery: true)),
+        };
+        foreach (var request in includeOnlyRequests)
+        {
+            var demand = LiveQueryRunner.PrepareTransportForwardDemand(request, Rules, deploymentsConfigured: false).ShouldNotBeNull();
+            demand.Mode.ShouldBe(FactPathFinder.TraversalMode.SyncCut);
+            (await LiveQueryRunner.RunRequestAsync(request, facts, "/repo")).DeclineReason.ShouldBeNull();
         }
     }
 

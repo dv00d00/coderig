@@ -85,6 +85,12 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
     {
         if (Source.Facts is not IIndexedFactSnapshotView indexed)
         {
+            if (mode != FactPathFinder.TraversalMode.SyncCut)
+            {
+                throw new DemandForwardGraphUnavailableException(
+                    "async live traversal requires the resident keyed graph; flattened compatibility facts cannot project delivery exactly"
+                );
+            }
             // Compatibility for callers/tests that construct LiveFactSource from a flattened AnalysisResult.
             // WatchHost never takes this arm: its resident FactSnapshot implements IIndexedFactSnapshotView.
             // The fallback is deliberately explicit in diagnostics and is not used for demand caps, budget
@@ -110,9 +116,40 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
                         ClassifyEventSubscriptions: classifyEventSubscriptions
                     ),
                     Cut: shapedRules.Cut,
-                    Context: shapedRules.Context
+                    Context: shapedRules.Context,
+                    Delivery: shapedRules.Delivery
                 ),
                 new DemandForwardGraphRequest(fromPattern, maxDepth, mode)
+            )
+        );
+    }
+
+    public async Task<DemandForwardReachInputs> LoadDemandForwardReachInputsAsync(
+        string fromPattern,
+        RuleSet shapedRules,
+        int maxDepth,
+        FactPathFinder.TraversalMode mode,
+        bool classifyEventSubscriptions
+    )
+    {
+        var demand = await LoadDemandForwardPathGraphAsync(fromPattern, shapedRules, maxDepth, mode, classifyEventSubscriptions);
+        if (demand.Diagnostics.Load.UsedLegacyFallback && mode != FactPathFinder.TraversalMode.SyncCut)
+        {
+            throw new DemandForwardGraphUnavailableException(
+                "async live traversal cannot use the flattened whole-graph compatibility fallback"
+            );
+        }
+
+        var epData = Source.EpData;
+        return new DemandForwardReachInputs(
+            demand,
+            new SqlReachability.ReachInputs(
+                Graph: demand.Graph,
+                Invocations: Source.Invocations,
+                CtorRefs: epData.CtorRefs,
+                ThrowRefs: Source.ThrowRefs,
+                AllocationFacts: Source.Facts.EnumerateAllocationFacts().ToArray(),
+                EpData: epData
             )
         );
     }
@@ -126,12 +163,27 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
         {
             // Caps and unsupported projections fail closed in the keyed builder. Do not turn either into an
             // undisclosed whole-graph answer: WatchHost owns the decision to decline an exact live query.
-            return Task.FromResult(DemandReverseCallersGraph.Build(indexed.GraphView, rules, request));
+            return Task.FromResult(
+                DemandReverseCallersGraph.Build(
+                    indexed.GraphView,
+                    rules.Delivery is null ? rules with { Delivery = Source.Rules.Delivery } : rules,
+                    request
+                )
+            );
         }
 
         // Compatibility only for tests/callers that supplied a flattened AnalysisResult. WatchHost publishes
-        // an indexed FactSnapshot and never takes this arm. This is the one deliberate whole-graph fallback;
-        // its diagnostics and empty ownership hints make the loss of keyed provenance explicit.
+        // an indexed FactSnapshot and never takes this arm. A genuinely async execution needs delivery edges,
+        // which this flattened traversal graph does not contain; fail closed rather than serving a plausible
+        // sync answer. Sync human --entrypoints may still use AsyncExact as its DISCOVERY lens, so the request
+        // carries execution separately and retains this compatibility arm.
+        if (request.EffectiveExecutionMode != FactPathFinder.TraversalMode.SyncCut)
+        {
+            throw new DemandReverseCallersGraphUnavailableException(
+                "async live callers requires the resident keyed graph; flattened compatibility facts cannot project delivery exactly"
+            );
+        }
+
         var shapedRules = Source.Rules with
         {
             Handoff = rules.Projection.Handoff ?? [],
@@ -139,6 +191,7 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
             Factory = rules.Projection.Factory ?? [],
             Cut = rules.Cut,
             Context = rules.Context,
+            Delivery = rules.Delivery ?? Source.Rules.Delivery,
         };
         var graph = SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules);
         var targetIds = FactPathFinder

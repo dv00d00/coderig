@@ -12,17 +12,8 @@ public sealed class DelegateFieldRenderingTests
     private static string Render(TraceNode root)
     {
         var output = new StringWriter();
-        TreeRenderer.RenderTreeNode(
-            root,
-            prefix: "",
-            isLast: true,
-            isRoot: true,
-            new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            prune: false,
-            FactRenderRules.Empty,
-            new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            output
-        );
+        var effects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        TreeRenderer.RenderTreeNode(root, new TreeRenderContext(output, effects, FactRenderRules.Empty, effects) { Prune = false });
         return output.ToString();
     }
 

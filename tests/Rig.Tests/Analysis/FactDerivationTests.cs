@@ -138,17 +138,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var noEffects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var root in FactPathFinder.BuildTree(graph, fromPattern))
         {
-            TreeRenderer.RenderTreeNode(
-                root,
-                "",
-                isLast: true,
-                isRoot: true,
-                noEffects,
-                prune: false,
-                FactRenderRules.Empty,
-                noEffects,
-                output
-            );
+            TreeRenderer.RenderTreeNode(root, new TreeRenderContext(output, noEffects, FactRenderRules.Empty, noEffects) { Prune = false });
         }
 
         return output.ToString();

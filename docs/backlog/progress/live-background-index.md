@@ -1,13 +1,13 @@
 # Live background index — facts current in seconds, not a 4-minute re-index
 
-**Status:** PROGRESS — Slices 0–7B2 completed locally 2026-08-23: deterministic scale/trial baselines,
+**Status:** PROGRESS — Slices 0–7B3 completed locally 2026-08-23: deterministic scale/trial baselines,
 emitter provenance, immutable snapshot generations, a streaming composite fact view, atomic dirty-only
 watcher batches, the v7 surface-fact substrate, per-origin lazy surface refinement, and independent cascade
 verification with coarse fallback, plus an emitter-aware immutable graph-fact substrate and canonical keyed
 symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggered exact forward refinement for
-`path`/`reaches`/`tree`, plus keyed reverse topology and query-triggered exact refinement for synchronous
-`callers`. Next: delivery-aware projection removes the temporary store fallback for
-`--async`/`--include-delivery`.
+`path`/`reaches`/`tree`, plus keyed reverse topology and query-triggered exact refinement for `callers`, and
+delivery-aware resident projection for all four traversal verbs. Next: controlled agent UX feedback and the
+open generic-identity/CLI-web consistency follow-ups found by adversarial dogfood.
 · **Family:** index performance / architecture · **Supersedes the approach in**
 [docs/incremental-indexing.md](../../incremental-indexing.md) (see "What the spike killed")
 
@@ -139,6 +139,18 @@ symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggere
   ordinary tests cover the reverse index, loader, closure, planner, transaction, and request shaping; one new
   serialized DeepChain gate proves pre/post-edit store parity, exact debt repayment, repeat-query reuse, and no
   `traversalGraph`/`eventSites` materialization.
+- **Slice 7B3:** resident `reaches`/`path`/`callers`/`tree` now serve `--async` and
+  `--async --include-delivery` from the exact query-owned graph. Event delivery reads exact `E:` channel
+  partitions; argument-addressed delivery reads only the configured producer/registration method partitions,
+  then applies the shared projection and handler-dispatch rules. Forward execution, reverse discovery through
+  one-hop dispatch hubs, and exact debt ownership all consume the same synthesized delivery sites. Unsupported
+  rule shapes, generic/materialization caps, missing handler declarations, and flattened compatibility facts
+  fail closed; normal indexed execution builds neither `traversalGraph` nor the whole `eventSites` corpus.
+  Text and transport share traversal-mode normalization, including quote-aware trailing flags and the existing
+  include-only sync no-op. The companion output hardening makes `tree --limit N` a strict data-node budget,
+  preserves `~λN` identity in every human/LLM label, replaces the 21-parameter renderer call with an immutable
+  context object, and advances the tree cache schema. The ordinary suite passes **1,058/1,058 in 11s**; the
+  four affected serialized integration classes pass **37 tests (one intentional skip)** in 1m45s.
 - **Agent dogfood gate:** the installed `037b15ef` tool indexed a healthy disposable clone in **17.45s**
   (`--restore --no-build-cache`), booted the resident host in **13.6s**, answered live callers in **0.36s**,
   incorporated a new forwarding caller plus exact debt repayment in **3.37s**, then repeated the current answer
@@ -153,7 +165,17 @@ symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggere
   promoted only **2 clean / rejected 4 bad** projects; one ordinary `--restore` then used **2 hits / 4 misses**,
   promoted all four rebuilt projects, and produced the healthy **5,606 symbols / 35,322 refs** store; the next
   bare run used **6 hits / 0 misses** and stayed healthy. Real callers output now shows
-  `EnsureExactCallersAsync~λ0`, `Build~λ0`/`Build~λ1`, and an explicit immutable-store fallback reason.
+  `EnsureExactCallersAsync~λ0` and `Build~λ0`/`Build~λ1`. The follow-on installed
+  `0.1.1-ci.20260823190849` gate booted the same disposable clone's resident host in **11.0s** and served
+  live `path`, `callers`, `reaches`, and `tree` in async modes without immutable-store fallback. An exact
+  lambda-root LLM tree rendered `WatchCommand.Build~λ1`; `--limit 5` emitted exactly five data rows plus its
+  header. `callers --async --include-delivery` also stayed resident. The workout still exposed UX follow-ups:
+  add `--max-depth` as an alias, provide scriptable symbol discovery, disambiguate `show`, and warn more
+  prominently when a store predates working-tree edits. The final corrected
+  `0.1.1-ci.20260823193401` build repeated the disposable-clone gate: resident boot was **11.1s**, async
+  `path`, delivery-inclusive `callers`, and two differently filtered async `tree` requests all stayed live;
+  both trees emitted the strict five-row budget with lambda identities intact, and the second filter reused
+  the resident derived layer.
 - **macOS suite gate:** canonical temp roots prevent NuGet from seeing `/var` and `/private/var` as two copies of
   one referenced project, and the resident equivalence fixture uses deterministic one-at-a-time project loading.
   All tests that launch `dotnet`, load/retain solutions, drive CLI indexing/watch hosts, or consume the shared
@@ -164,9 +186,18 @@ symbol catalog, demand-shaped generic adjacency, live `path`, and query-triggere
   classification. On the final 2026-08-23 macOS hardening gate the ordinary lane passed **1,029/1,029 in
   12s**; the serialized integration lane passed **201 + one intentional skip in 10m25s**. Exact discovery is **1,231**,
   with zero failures. The process boundary removes nested workspace/MSBuild fan-out risk without throttling
-  unrelated tests, but the isolated release lane has regressed from its earlier 4m50s baseline and remains a
-  profiling/optimization target; it is deterministic, no longer a 17-minute main-suite outlier, but not cheap.
-- **Next:** controlled agent UX feedback; then add delivery-aware demand projection for async live queries.
+  unrelated tests. The current release gate passed the ordinary lane **1,058/1,058 in 11s**; exact discovery
+  is **1,260**. A complete fresh Release pass immediately before the final cache/fail-closed corrections passed
+  the isolated lane **201 + one intentional skip in 10m10s**. Its first isolated run had one
+  transient degraded DeepChain compilation (missing project-reference symbols) after 200 other passes; the
+  exact class passed **9/9** in a fresh process and the complete fresh-process rerun passed. After the final
+  corrections, the shared process later cascaded two unrelated "zero buildable projects" failures; those exact
+  classes passed **6/6** and **2/2** in fresh Release processes, while the corrected live callers/tree classes
+  passed **10/10**. This repeatable process contamination keeps the isolated executable a reliability blocker
+  and profiling target: it is no longer a 17-minute main-suite outlier, but one 10-minute shared process is not
+  a trustworthy gate even with one outer worker.
+- **Next:** split/reset the contaminated long-lived integration process into trustworthy fresh-process shards;
+  then controlled agent UX feedback, exact open-generic node identity, and CLI/web intrinsic-effect filtering.
   Do not substitute a project-reference cone for the demand graph.
 
 ## Why — the workflow that makes this the target

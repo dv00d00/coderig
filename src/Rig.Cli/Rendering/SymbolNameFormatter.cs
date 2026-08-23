@@ -40,6 +40,21 @@ internal static class SymbolNameFormatter
         return prevDot >= 0 ? s.Substring(prevDot + 1) : s;
     }
 
+    // Tree-facing short identity. Synthetic lambda ids append `~λN` AFTER the enclosing method's parameter
+    // list, while ShortName deliberately truncates at that list. Restore the suffix once, so every human/LLM
+    // tree renderer distinguishes sibling lambdas without changing the exact DocID used by TSV output.
+    internal static string ShortNamePreservingLambda(string? symbolId)
+    {
+        var label = ShortName(symbolId);
+        if (string.IsNullOrEmpty(symbolId))
+        {
+            return label;
+        }
+
+        var marker = symbolId.IndexOf("~λ", StringComparison.Ordinal);
+        return marker < 0 || label.Contains("~λ", StringComparison.Ordinal) ? label : label + symbolId[marker..];
+    }
+
     // A DocID reduced to its queryable, fully-qualified dotted name: the leading `M:` kind prefix and the
     // parameter list are stripped, leaving `Namespace.Type.Member`. This is the exact suffix `rig tree` /
     // `reaches` / `callers` match on, so a rendered FQN round-trips straight back into a query — unlike the

@@ -20,17 +20,10 @@ public sealed class TreeGuardsRenderTests
     private static string Render(TraceNode root, bool guards)
     {
         var output = new StringWriter();
+        var noEffects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         TreeRenderer.RenderTreeNode(
             root,
-            prefix: "",
-            isLast: true,
-            isRoot: true,
-            new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            prune: false,
-            FactRenderRules.Empty,
-            new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            output,
-            guards: guards
+            new TreeRenderContext(output, noEffects, FactRenderRules.Empty, noEffects) { Prune = false, Guards = guards }
         );
         return output.ToString();
     }

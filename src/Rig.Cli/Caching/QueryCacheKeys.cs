@@ -28,7 +28,8 @@ internal static class QueryCacheKeys
     // lazy_init classification the span observations drive) forever.
     // v3->v4: whole-graph monomorphization no longer has a corpus-global instantiation cap, and generic-
     // factory candidate resolution now preserves containing-type arity; both change same-store tree reach.
-    internal const int TreeSchema = 4;
+    // v4->v5: --limit now excludes never-visited staged siblings, making cached forests strictly node-bounded.
+    internal const int TreeSchema = 5;
 
     // v1->v2 EnclosingGuards; v2->v3 lazy_init_race lock-enclosed tier; v3->v4 the n_plus_1 read gate gained
     // object_store + the `execute` operation (a BUILTIN-rules edit, which the rulesHash — computed over the

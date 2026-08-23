@@ -7,12 +7,47 @@ using static Rig.Cli.Rendering.SymbolNameFormatter;
 
 namespace Rig.Cli.Rendering;
 
+// Immutable inputs/options shared by one pretty-tree render. The recursive position and resolved generic
+// scope are deliberately separate below: callers describe WHAT to render once, while recursion carries only
+// WHERE the current node sits. This replaces RenderTreeNode's former 21-parameter call surface.
+internal sealed record TreeRenderContext(
+    TextWriter Output,
+    IReadOnlyDictionary<string, List<string>> EffectsByMethod,
+    FactRenderRules RenderRules,
+    IReadOnlyDictionary<string, List<string>> SeamEffects
+)
+{
+    internal bool Prune { get; init; }
+    internal bool Files { get; init; }
+    internal IReadOnlyDictionary<string, (string? File, int Line)>? LocationsById { get; init; }
+    internal bool Signatures { get; init; }
+    internal bool Plain { get; init; }
+    internal IReadOnlyList<FactTraversalCutRule>? CutRules { get; init; }
+    internal EpRenderContext? EntryPoints { get; init; }
+    internal bool Full { get; init; }
+    internal IReadOnlyDictionary<string, List<string>>? EffectLeavesByMethod { get; init; }
+    internal IReadOnlyDictionary<string, string>? HazardsByMethod { get; init; }
+    internal bool Guards { get; init; }
+}
+
 // The call-tree renderer: the box-drawing tree (RenderTreeNode), the single-impl-hop fold, the effect
 // group/leaf formatting, and the seam-summary computation. Split out of the command layer so the tree's
 // presentation logic — by far the densest rendering in rig — lives on its own, with the command body
 // reduced to loading + filtering and a call into here.
 internal static class TreeRenderer
 {
+    private readonly record struct TreeRenderPosition(
+        string Prefix,
+        bool IsLast,
+        bool IsRoot,
+        IReadOnlyList<string?>? ParentDeclaringConcrete,
+        IReadOnlyList<string?>? ParentMethodConcrete
+    )
+    {
+        internal static TreeRenderPosition Root =>
+            new(Prefix: "", IsLast: true, IsRoot: true, ParentDeclaringConcrete: null, ParentMethodConcrete: null);
+    }
+
     // Collapses single-target dispatch hops: when a node has exactly one child reached by impl-/override-
     // dispatch with no fan-out (Fanout <= 1) and the node itself carries no effect, the lone interface/base
     // hop is folded into its impl — the impl is promoted into the node's slot with a FoldedVia marker
@@ -177,55 +212,32 @@ internal static class TreeRenderer
 
     // Renders the call tree with box-drawing connectors (├─ └─ │). When pruning, a node's VISIBLE
     // children are filtered first so the last visible child gets └─ correctly. The root prints flush-left.
-    internal static void RenderTreeNode(
-        TraceNode node,
-        string prefix,
-        bool isLast,
-        bool isRoot,
-        IReadOnlyDictionary<string, List<string>> effectsByMethod,
-        bool prune,
-        FactRenderRules renderRules,
-        // Precomputed REALISTIC effect union per collapse-seam hub (keyed by hub DocID): the de-duped
-        // effects over the hub's full reach closure, NOT the truncated rendered subtree. Empty falls
-        // back to a subtree walk (the closure was unavailable, e.g. unit tests).
-        IReadOnlyDictionary<string, List<string>> seamEffects,
-        TextWriter output,
-        // `--files`: append each node's DEFINITION location (relpath:line) so the tree links to source.
-        // locById maps SymbolId -> (file, line) from the loaded methods; null/false leaves nodes bare.
-        bool files = false,
-        IReadOnlyDictionary<string, (string? File, int Line)>? locById = null,
-        // `--signatures`: show each method's compact parameter signature so same-named overloads differ.
-        bool signatures = false,
-        // `--plain`: drop the box-drawing connectors (├─ └─ │) for pure 2-space-per-depth indentation. The
-        // hierarchy stays legible but the lines carry no positional glyphs, so a diff of two plain trees shows
-        // only real structure changes — the connectors otherwise churn whenever a sibling is added/removed.
-        bool plain = false,
-        // Traversal-cut rules for the «cut» marker: a node matching a cut rule gets a visible marker
-        // indicating that its subtree was cut during traversal (not just render). Null = no markers.
-        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
-        // Deployment/EP context: when supplied, a node that is itself a rule-detected entry point is
-        // marked with the ▶ kind + service chip. Null = no EP marking (default tree).
-        EpRenderContext? epContext = null,
-        // `--full`: render effects as provenance leaf nodes (call site + line) BELOW each method instead of
-        // the inline {…} tag. effectLeavesByMethod carries the precomputed leaf bodies. false/null = the
-        // compact inline-tag rendering used by default/--effects/--summary.
-        bool full = false,
-        IReadOnlyDictionary<string, List<string>>? effectLeavesByMethod = null,
-        // Path-contextual monomorphization: the PARENT node's resolved concrete instantiation — its
-        // declaring-type args and its own-method args. A child resolves its forwarded T:/M: binding tokens
-        // against these, so a chain of static factories / generic methods renders concretely. Null at roots.
-        IReadOnlyList<string?>? parentDeclaringConcrete = null,
-        IReadOnlyList<string?>? parentMethodConcrete = null,
-        // `--hazards`: a precomputed compact hazard marker per enclosing method (SymbolId -> e.g.
-        // "  ⚠ dual_write(medium), race_window(high)"), appended to the node label so the pattern findings
-        // sit inline on the EP's reachable tree. Null/absent leaves nodes unmarked (the default tree).
-        IReadOnlyDictionary<string, string>? hazardsByMethod = null,
-        // `--guards`: mark a control-dependence-GUARDED call edge with ⎇ [predicate] (the analog of 🔁[loop]),
-        // decoded from the reaching edge's frozen guard set (TraceNode.EnclosingGuards). Off by default so
-        // golden tree tests don't churn; a must-run edge (empty guard set) carries no glyph.
-        bool guards = false
-    )
+    internal static void RenderTreeNode(TraceNode node, TreeRenderContext context) =>
+        RenderTreeNode(node, context, TreeRenderPosition.Root);
+
+    private static void RenderTreeNode(TraceNode node, TreeRenderContext context, TreeRenderPosition position)
     {
+        var prefix = position.Prefix;
+        var isLast = position.IsLast;
+        var isRoot = position.IsRoot;
+        var parentDeclaringConcrete = position.ParentDeclaringConcrete;
+        var parentMethodConcrete = position.ParentMethodConcrete;
+        var effectsByMethod = context.EffectsByMethod;
+        var prune = context.Prune;
+        var renderRules = context.RenderRules;
+        var seamEffects = context.SeamEffects;
+        var output = context.Output;
+        var files = context.Files;
+        var locById = context.LocationsById;
+        var signatures = context.Signatures;
+        var plain = context.Plain;
+        var cutRules = context.CutRules;
+        var epContext = context.EntryPoints;
+        var full = context.Full;
+        var effectLeavesByMethod = context.EffectLeavesByMethod;
+        var hazardsByMethod = context.HazardsByMethod;
+        var guards = context.Guards;
+
         // Compute visible children first — the fan-out label must reflect how many branches are
         // actually rendered (pruning may drop effectless children, making ×2 fan-out misleading
         // when only 1 child survives).
@@ -312,9 +324,8 @@ internal static class TreeRenderer
         // monomorphization. Carried down to children as THEIR parent binding so a forwarding chain resolves.
         // Two node kinds carry no binding of their own but render in the PARENT's type-param scope, so they
         // INHERIT the parent's resolved instantiation (for both label and children) instead of resetting it:
-        //   • a synthetic lambda (`…~λN`) — its body forwards the enclosing method's T:/M: params, and
-        //     ShortName drops the `~λN` for a parameterful method so it renders AS that method; otherwise the
-        //     chain breaks at `skip: i => Create(...)`.
+        //   • a synthetic lambda (`…~λN`) — its body forwards the enclosing method's T:/M: params; without
+        //     inheriting this scope the chain breaks at `skip: i => Create(...)`.
         //   • an impl/override-dispatch hop — `IFoo<A,B>.M` dispatches to `Impl<A,B>.M` on the SAME runtime
         //     instantiation (identity base-list `Impl<T,U> : IFoo<T,U>`, the common case). Arity-mismatched
         //     impls fall back to placeholders automatically (PrettyGenericName only substitutes on a match);
@@ -333,29 +344,12 @@ internal static class TreeRenderer
                 parentDeclaring: parentDeclaringConcrete,
                 parentMethod: parentMethodConcrete
             );
-        // A lambda renders AS its enclosing method when ShortName drops `~λN` (it does so only for a
-        // PARAMETERFUL method — load-bearing for the generic-chain monomorphization above), so sibling
-        // lambdas of one method look like identical duplicate lines. Append ONE `λN` discriminator. ShortName
-        // KEEPS `~λN` for a PARAMETERLESS enclosing method, so strip that first or we'd double it
-        // (`LoadBuiltIn~λ0 λ0`).
-        var shortName = ShortName(node.SymbolId);
-        var lambdaTag = "";
-        var lambdaAt = node.SymbolId.IndexOf("~λ", StringComparison.Ordinal);
-        if (lambdaAt >= 0)
-        {
-            var seg = node.SymbolId[lambdaAt..];
-            var segParen = seg.IndexOf('(');
-            lambdaTag = " " + (segParen >= 0 ? seg[..segParen] : seg).TrimStart('~');
-            var keptAt = shortName.IndexOf("~λ", StringComparison.Ordinal);
-            if (keptAt >= 0)
-            {
-                shortName = shortName[..keptAt];
-            }
-        }
+        // TreeNode short identity restores the terminal ~λN suffix that ordinary ShortName loses after a
+        // parameter list. The same helper feeds llm/llm-ids, so every tree format labels lambdas alike.
+        var shortName = ShortNamePreservingLambda(node.SymbolId);
         var name =
             PrettyGenericName(shortName, declaringArgs: declaringConcrete, methodArgs: methodConcrete)
-            + (signatures ? ShortSignature(node.SymbolId) : "")
-            + lambdaTag;
+            + (signatures ? ShortSignature(node.SymbolId) : "");
         // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
         // and a trailing service chip — the same custom rendering used by derive/callers.
         var (epPrefix, epSuffix) = epContext?.ChipFor(node.SymbolId) ?? ("", "");
@@ -422,27 +416,15 @@ internal static class TreeRenderer
         for (var i = 0; i < children.Count; i++)
         {
             RenderTreeNode(
-                children[i],
-                childPrefix,
-                isLast: i == children.Count - 1,
-                isRoot: false,
-                effectsByMethod: effectsByMethod,
-                prune: prune,
-                renderRules: renderRules,
-                seamEffects: seamEffects,
-                output: output,
-                files: files,
-                locById: locById,
-                signatures: signatures,
-                plain: plain,
-                cutRules: cutRules,
-                epContext: epContext,
-                full: full,
-                effectLeavesByMethod: effectLeavesByMethod,
-                parentDeclaringConcrete: declaringConcrete,
-                parentMethodConcrete: methodConcrete,
-                hazardsByMethod: hazardsByMethod,
-                guards: guards
+                node: children[i],
+                context: context,
+                position: new TreeRenderPosition(
+                    Prefix: childPrefix,
+                    IsLast: i == children.Count - 1,
+                    IsRoot: false,
+                    ParentDeclaringConcrete: declaringConcrete,
+                    ParentMethodConcrete: methodConcrete
+                )
             );
         }
     }

@@ -328,13 +328,12 @@ public sealed class DemandReverseCallersGraphTests
         ambiguous.TargetIds.Length.ShouldBe(2);
         ambiguous.Diagnostics.Reverse.ReferencesTo.Calls.ShouldBe(view.RequestedReverseTargets.Distinct(StringComparer.Ordinal).Count());
 
-        Should.Throw<DemandReverseCallersGraphUnavailableException>(() =>
-            DemandReverseCallersGraph.Build(
-                view,
-                Rules(),
-                new DemandReverseCallersGraphRequest("M:N.Target.One", int.MaxValue, FactPathFinder.TraversalMode.AsyncInclude)
-            )
+        var asyncInclude = DemandReverseCallersGraph.Build(
+            view,
+            Rules(),
+            new DemandReverseCallersGraphRequest("M:N.Target.One", int.MaxValue, FactPathFinder.TraversalMode.AsyncInclude)
         );
+        asyncInclude.Diagnostics.DeliverySitesSynthesized.ShouldBeFalse();
         Should.Throw<DemandReverseCallersGraphUnavailableException>(() =>
             DemandReverseCallersGraph.Build(
                 view,

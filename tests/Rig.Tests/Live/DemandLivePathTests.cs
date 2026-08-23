@@ -26,7 +26,7 @@ public sealed class DemandLivePathTests
     }
 
     [Test]
-    public async Task Generic_and_interface_dispatch_sync_live_paths_match_store_while_async_declines_to_fallback()
+    public async Task Generic_interface_and_async_delivery_live_paths_match_store()
     {
         using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
         await using var host = await StartAsync(playground.WorkingDirectory, playground.SolutionPath);
@@ -42,13 +42,13 @@ public sealed class DemandLivePathTests
             playground.WorkingDirectory,
             ["path", "NotificationsController.Subscribe", "AuditSink.WriteAuditEntry"]
         );
-        var asyncEvent = await AssertAsyncDeclineAsync(
+        var asyncEvent = await AssertParityAsync(
             host,
             playground.WorkingDirectory,
             ["path", "NotificationsController.Subscribe", "AuditSink.WriteAuditEntry", "--async"]
         );
         syncEvent.Exit.ShouldBe(1);
-        asyncEvent.DeclineReason.ShouldNotBeNull();
+        asyncEvent.Exit.ShouldBe(0);
 
         var rules = RuleSetLoader.Load(playground.WorkingDirectory);
         var fullGraphOracle = new LiveFactSource(await host.GetCurrentFactsAsync(), rules).TraversalGraph;
@@ -109,20 +109,6 @@ public sealed class DemandLivePathTests
         live.Err.ShouldBe(storeErr.ToString());
         live.Err.ShouldNotContain("traversalGraph");
         live.Err.ShouldNotContain("eventSites");
-        return live;
-    }
-
-    private static async Task<LiveServeResult> AssertAsyncDeclineAsync(WatchHost host, string workingDirectory, string[] arguments)
-    {
-        var storeOut = new StringWriter();
-        var storeErr = new StringWriter();
-        var storeExit = await CliApplication.RunAsync(arguments, storeOut, storeErr, workingDirectory);
-        storeExit.ShouldBe(0, storeOut.ToString() + storeErr);
-
-        var live = await ServeAsync(host, workingDirectory, arguments);
-        live.DeclineReason.ShouldNotBeNull();
-        live.Out.ShouldBeEmpty();
-        live.Err.ShouldBeEmpty();
         return live;
     }
 

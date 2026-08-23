@@ -5,6 +5,7 @@ using Rig.Cli.CommandLine;
 using Rig.Cli.Live;
 using Rig.Cli.Rendering;
 using Rig.Cli.Telemetry;
+using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.Effects.EffectDerivation;
@@ -133,9 +134,27 @@ internal static class ReachesCommand
         await using var source = await openSource();
 
         var graphWatch = Stopwatch.StartNew();
-        var inputs = await source.LoadEffectReachInputsAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
-        var graph = inputs.Graph;
-        if (!opts.Raw)
+        DemandForwardReachInputs? demandInputs = null;
+        SqlReachability.ReachInputs inputs;
+        FactGraphData graph;
+        if (mode != FactPathFinder.TraversalMode.SyncCut && source is IDemandForwardPathFactSource demand)
+        {
+            demandInputs = await demand.LoadDemandForwardReachInputsAsync(
+                opts.FromPattern,
+                shaped,
+                maxDepth,
+                mode,
+                classifyEventSubscriptions: !opts.Raw
+            );
+            inputs = demandInputs.Inputs;
+            graph = demandInputs.Demand.Graph;
+        }
+        else
+        {
+            inputs = await source.LoadEffectReachInputsAsync(opts.FromPattern, SqlReachability.Direction.Forward, shaped);
+            graph = inputs.Graph;
+        }
+        if (!opts.Raw && demandInputs?.Demand.EventSubscriptionsClassified != true)
         {
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
         }
@@ -170,7 +189,9 @@ internal static class ReachesCommand
 
         SeedResolutionNotice.NoteIfNoOutEdges(io.TextOutput.Error, reachable, maxDepth);
 
-        var effects = await source.DeriveEffectsAsync(inputs, graph, rules);
+        var effects = demandInputs is null
+            ? await source.DeriveEffectsAsync(inputs, graph, rules)
+            : QueryEffectDerivation.ForReach(rules, inputs, graph);
         // --only / --exclude (e.g. --exclude throw), plus the default hiding of intrinsic providers
         // (alloc/throw) restored by --intrinsic. Restrict first so the withheld count describes THIS
         // reachable answer, not unrelated effects present in a live whole-generation input.

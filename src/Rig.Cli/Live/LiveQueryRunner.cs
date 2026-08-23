@@ -32,7 +32,8 @@ internal static class LiveQueryRunner
     // SUBJECT is unchanged: the banner enumerates exactly the verbs that route). Keep doing it that way rather
     // than loosening the assertion to a substring: an inaccurate banner tells a user a feature doesn't exist.
     internal const string Usage =
-        "supported live queries: `reaches <pattern>`, `path <from> <to>`, `callers <to>`, `tree <pattern>`; " + "`quit` (or EOF) exits.";
+        "supported live queries: `reaches <pattern>`, `path <from> <to>`, `callers <to>`, `tree <pattern>` "
+        + "(optionally `--async [--include-delivery]`); `quit` (or EOF) exits.";
 
     // One answer, with the command's two streams kept SEPARATE. Splitting them is not fussiness: the CLI puts
     // the answer on stdout and disclosures (ambiguity, seed notes) on stderr, and a test that claims live
@@ -58,34 +59,42 @@ internal static class LiveQueryRunner
     // a required member should get a store answer with a stated reason, not a stack trace and no answer.
     internal static async Task<RequestResult> RunRequestAsync(LiveQueryRequest request, LiveFactSource facts, string workingDirectory)
     {
-        switch (request.Verb)
+        try
         {
-            case LiveQueryVerbs.Reaches:
-                return await ServeAsync<ReachesCommand.Options>(
-                    request,
-                    Normalize,
-                    o => o.ExtraRules,
-                    IsValidReachesOptions,
-                    o => RunReachesAsync(o, facts, workingDirectory)
-                );
+            switch (request.Verb)
+            {
+                case LiveQueryVerbs.Reaches:
+                    return await ServeAsync<ReachesCommand.Options>(
+                        request,
+                        Normalize,
+                        o => o.ExtraRules,
+                        IsValidReachesOptions,
+                        o => RunReachesAsync(o, facts, workingDirectory)
+                    );
 
-            case LiveQueryVerbs.Path:
-                return await ServePathAsync(request, facts, workingDirectory);
+                case LiveQueryVerbs.Path:
+                    return await ServePathAsync(request, facts, workingDirectory);
 
-            case LiveQueryVerbs.Callers:
-                return await ServeCallersAsync(request, facts, workingDirectory);
+                case LiveQueryVerbs.Callers:
+                    return await ServeCallersAsync(request, facts, workingDirectory);
 
-            case LiveQueryVerbs.Tree:
-                return await ServeAsync<TreeCommand.Options>(
-                    request,
-                    Normalize,
-                    o => o.ExtraRules,
-                    IsValidTreeOptions,
-                    o => RunTreeAsync(o, facts, workingDirectory)
-                );
+                case LiveQueryVerbs.Tree:
+                    return await ServeAsync<TreeCommand.Options>(
+                        request,
+                        Normalize,
+                        o => o.ExtraRules,
+                        IsValidTreeOptions,
+                        o => RunTreeAsync(o, facts, workingDirectory)
+                    );
 
-            default:
-                return RequestResult.Declined($"`{request.Verb}` is not served from the resident index — {Usage}");
+                default:
+                    return RequestResult.Declined($"`{request.Verb}` is not served from the resident index — {Usage}");
+            }
+        }
+        catch (Exception exception)
+            when (exception is DemandForwardGraphUnavailableException or DemandReverseCallersGraphUnavailableException)
+        {
+            return RequestResult.Declined($"resident `{request.Verb}` demand projection is unavailable: {exception.Message}");
         }
     }
 
@@ -124,14 +133,26 @@ internal static class LiveQueryRunner
         }
 
         var remainder = trimmed[(split + 1)..].Trim();
+        if (!TryExtractTraversalFlags(remainder, out var queryText, out var asyncMode, out var includeDelivery))
+        {
+            return null;
+        }
         if (string.Equals(verb, LiveQueryVerbs.Path, StringComparison.OrdinalIgnoreCase))
         {
-            return TrySplitArguments(remainder, out var endpoints) && endpoints.Count == 2
-                ? BuildPathDemand(DefaultPathOptions(endpoints[0], endpoints[1]), rules, deploymentsConfigured)
+            return TrySplitArguments(queryText, out var endpoints) && endpoints.Count == 2
+                ? BuildPathDemand(
+                    DefaultPathOptions(endpoints[0], endpoints[1]) with
+                    {
+                        Async = asyncMode,
+                        IncludeDelivery = includeDelivery,
+                    },
+                    rules,
+                    deploymentsConfigured
+                )
                 : null;
         }
 
-        var pattern = remainder.Trim('"');
+        var pattern = queryText.Trim('"');
         if (string.IsNullOrWhiteSpace(pattern))
         {
             return null;
@@ -139,16 +160,40 @@ internal static class LiveQueryRunner
 
         if (string.Equals(verb, LiveQueryVerbs.Reaches, StringComparison.OrdinalIgnoreCase))
         {
-            return BuildReachesDemand(DefaultReachesOptions(pattern), rules, deploymentsConfigured);
+            return BuildReachesDemand(
+                DefaultReachesOptions(pattern) with
+                {
+                    Async = asyncMode,
+                    IncludeDelivery = includeDelivery,
+                },
+                rules,
+                deploymentsConfigured
+            );
         }
 
         if (string.Equals(verb, LiveQueryVerbs.Callers, StringComparison.OrdinalIgnoreCase))
         {
-            return BuildCallersDemand(DefaultCallersOptions(pattern), rules, deploymentsConfigured);
+            return BuildCallersDemand(
+                DefaultCallersOptions(pattern) with
+                {
+                    Async = asyncMode,
+                    IncludeDelivery = includeDelivery,
+                },
+                rules,
+                deploymentsConfigured
+            );
         }
 
         return string.Equals(verb, LiveQueryVerbs.Tree, StringComparison.OrdinalIgnoreCase)
-            ? BuildTreeDemand(DefaultTreeOptions(pattern), rules, deploymentsConfigured)
+            ? BuildTreeDemand(
+                DefaultTreeOptions(pattern) with
+                {
+                    Async = asyncMode,
+                    IncludeDelivery = includeDelivery,
+                },
+                rules,
+                deploymentsConfigured
+            )
             : null;
     }
 
@@ -291,7 +336,8 @@ internal static class LiveQueryRunner
             new DemandForwardGraphRules(
                 new ForwardCallProjectionRules(shaped.Handoff, shaped.Redirect, shaped.Factory, ClassifyEventSubscriptions: !options.Raw),
                 shaped.Cut,
-                shaped.Context
+                shaped.Context,
+                shaped.Delivery
             ),
             CommonOptions.DepthOrUnbounded(options.Depth),
             executionMode,
@@ -318,7 +364,8 @@ internal static class LiveQueryRunner
             new DemandForwardGraphRules(
                 new ForwardCallProjectionRules(shaped.Handoff, shaped.Redirect, shaped.Factory, ClassifyEventSubscriptions: !raw),
                 shaped.Cut,
-                shaped.Context
+                shaped.Context,
+                shaped.Delivery
             ),
             CommonOptions.DepthOrUnbounded(depth),
             CommonOptions.Mode(asyncMode, includeDelivery),
@@ -368,58 +415,28 @@ internal static class LiveQueryRunner
             return RequestResult.Declined(RulesNotHonoured);
         }
 
-        if (!IsValidExactForwardMode(options.Async, options.IncludeDelivery))
-        {
-            // These are valid store-backed callers modes, not malformed transport options. Naming the
-            // missing resident capability makes the client's disclosed store fallback read as intentional.
-            var unsupported = new List<string>(2);
-            if (options.Async)
-            {
-                unsupported.Add("`--async`");
-            }
-            if (options.IncludeDelivery)
-            {
-                unsupported.Add("`--include-delivery`");
-            }
-
-            var requirement = unsupported.Count == 1 ? "this traversal mode requires" : "these traversal modes require";
-            return RequestResult.Declined(
-                $"resident `callers` does not yet support {string.Join(" and ", unsupported)}; {requirement} the immutable store"
-            );
-        }
-
         return new RequestResult(await RunCallersAsync(options, facts, workingDirectory), null);
     }
 
     private static bool IsValidPathOptions(PathCommand.Options options) =>
-        !string.IsNullOrWhiteSpace(options.FromPattern)
-        && !string.IsNullOrWhiteSpace(options.ToPattern)
-        && IsValidExactForwardMode(options.Async, options.IncludeDelivery)
-        && IsValidDepth(options.Depth);
+        !string.IsNullOrWhiteSpace(options.FromPattern) && !string.IsNullOrWhiteSpace(options.ToPattern) && IsValidDepth(options.Depth);
 
     private static bool IsValidReachesOptions(ReachesCommand.Options options) =>
-        !string.IsNullOrWhiteSpace(options.FromPattern)
-        && IsValidExactForwardMode(options.Async, options.IncludeDelivery)
-        && IsValidDepth(options.Depth)
-        && (options.Limit is null or > 0);
+        !string.IsNullOrWhiteSpace(options.FromPattern) && IsValidDepth(options.Depth) && (options.Limit is null or > 0);
 
     private static bool IsValidTreeOptions(TreeCommand.Options options) =>
         !string.IsNullOrWhiteSpace(options.FromPattern)
         && IsValidTreeView(options.View)
-        && IsValidExactForwardMode(options.Async, options.IncludeDelivery)
         && IsValidDepth(options.Depth)
         && (options.Limit is null or > 0);
 
-    private static bool IsValidCallersOptions(CallersCommand.Options options) =>
-        IsStructurallyValidCallersOptions(options) && IsValidExactForwardMode(options.Async, options.IncludeDelivery);
+    private static bool IsValidCallersOptions(CallersCommand.Options options) => IsStructurallyValidCallersOptions(options);
 
     private static bool IsStructurallyValidCallersOptions(CallersCommand.Options options) =>
         !string.IsNullOrWhiteSpace(options.ToPattern)
         && !(options.RootsOnly && options.EntrypointsOnly)
         && IsValidDepth(options.Depth)
         && (options.Limit is null or > 0);
-
-    private static bool IsValidExactForwardMode(bool asyncMode, bool includeDelivery) => !asyncMode && !includeDelivery;
 
     private static bool IsValidDepth(int? depth) => depth is null or >= 0;
 
@@ -511,37 +528,73 @@ internal static class LiveQueryRunner
         // stripped), because a pattern may legitimately contain spaces — a full DocID signature does
         // (`M:Ns.T.M(System.Int32, System.String)`). Only `path`, which needs two, is tokenized; see PathAsync.
         var remainder = split < 0 ? "" : trimmed[(split + 1)..].Trim();
-        var argument = remainder.Trim('"');
-
-        if (string.Equals(verb, "reaches", StringComparison.OrdinalIgnoreCase))
+        if (!TryExtractTraversalFlags(remainder, out var queryText, out var asyncMode, out var includeDelivery))
         {
-            return string.IsNullOrWhiteSpace(argument)
-                ? Rejected("`reaches` needs an entry-point pattern")
-                : await ReachesAsync(argument, facts, workingDirectory);
+            return Rejected("traversal flags are malformed (each flag may appear once and only as a trailing option)");
         }
+        var argument = queryText.Trim('"');
 
-        if (string.Equals(verb, "callers", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            return string.IsNullOrWhiteSpace(argument)
-                ? Rejected("`callers` needs a target pattern")
-                : await CallersAsync(argument, facts, workingDirectory);
-        }
+            if (string.Equals(verb, "reaches", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.IsNullOrWhiteSpace(argument)
+                    ? Rejected("`reaches` needs an entry-point pattern")
+                    : await RunReachesAsync(
+                        DefaultReachesOptions(argument) with
+                        {
+                            Async = asyncMode,
+                            IncludeDelivery = includeDelivery,
+                        },
+                        facts,
+                        workingDirectory
+                    );
+            }
 
-        if (string.Equals(verb, "tree", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(verb, "callers", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.IsNullOrWhiteSpace(argument)
+                    ? Rejected("`callers` needs a target pattern")
+                    : await RunCallersAsync(
+                        DefaultCallersOptions(argument) with
+                        {
+                            Async = asyncMode,
+                            IncludeDelivery = includeDelivery,
+                        },
+                        facts,
+                        workingDirectory
+                    );
+            }
+
+            if (string.Equals(verb, "tree", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.IsNullOrWhiteSpace(argument)
+                    ? Rejected("`tree` needs an entry-point pattern")
+                    : await RunTreeAsync(
+                        DefaultTreeOptions(argument) with
+                        {
+                            Async = asyncMode,
+                            IncludeDelivery = includeDelivery,
+                        },
+                        facts,
+                        workingDirectory
+                    );
+            }
+
+            if (string.Equals(verb, "path", StringComparison.OrdinalIgnoreCase))
+            {
+                // The RAW remainder, not the quote-trimmed `argument`: `path` tokenizes it itself and needs the
+                // quotes intact to group a pattern that contains spaces.
+                return await PathAsync(queryText, facts, workingDirectory, asyncMode, includeDelivery);
+            }
+
+            return new LiveAnswer(Exit: 2, Out: $"live: unsupported query '{verb}' — {Usage}{Environment.NewLine}", Err: "");
+        }
+        catch (Exception exception)
+            when (exception is DemandForwardGraphUnavailableException or DemandReverseCallersGraphUnavailableException)
         {
-            return string.IsNullOrWhiteSpace(argument)
-                ? Rejected("`tree` needs an entry-point pattern")
-                : await TreeAsync(argument, facts, workingDirectory);
+            return Rejected($"resident `{verb}` demand projection is unavailable: {exception.Message}");
         }
-
-        if (string.Equals(verb, "path", StringComparison.OrdinalIgnoreCase))
-        {
-            // The RAW remainder, not the quote-trimmed `argument`: `path` tokenizes it itself and needs the
-            // quotes intact to group a pattern that contains spaces.
-            return await PathAsync(remainder, facts, workingDirectory);
-        }
-
-        return new LiveAnswer(Exit: 2, Out: $"live: unsupported query '{verb}' — {Usage}{Environment.NewLine}", Err: "");
     }
 
     // A usage rejection: exit 2, the reason, and what IS supported. Exit 2 (not 1) keeps "you asked wrong"
@@ -550,8 +603,8 @@ internal static class LiveQueryRunner
         new LiveAnswer(Exit: 2, Out: $"live: {reason} — {Usage}{Environment.NewLine}", Err: "");
 
     // `reaches <pattern>`, answered off the resident facts. The Options record is the DEFAULT one the CLI
-    // builds when only the positional pattern is given — no --async/--raw/--depth/--limit/--format on the live
-    // surface yet, so the output is the default human rendering and is directly comparable to
+    // builds when only the positional pattern is given. The text surface additionally accepts the two
+    // traversal-mode flags; rendering flags remain transport-only, so default output is comparable to
     // `rig reaches <pattern>` against a store of the same tree (which is exactly what LiveReachesTests does).
     private static Task<LiveAnswer> ReachesAsync(string pattern, LiveFactSource facts, string workingDirectory) =>
         RunReachesAsync(DefaultReachesOptions(pattern), facts, workingDirectory);
@@ -602,8 +655,8 @@ internal static class LiveQueryRunner
     }
 
     // `callers <to>` — the REVERSE traversal, answered off the resident facts. Same shape as ReachesAsync: the
-    // DEFAULT options record (no --orphans/--entrypoints/--async/--raw/--limit/--format on the live surface
-    // yet), so the rendering is directly comparable to `rig callers <to>` against a store of the same tree.
+    // DEFAULT options record (plus the two text traversal-mode flags), so the default rendering is directly
+    // comparable to `rig callers <to>` against a store of the same tree.
     private static Task<LiveAnswer> CallersAsync(string pattern, LiveFactSource facts, string workingDirectory) =>
         RunCallersAsync(DefaultCallersOptions(pattern), facts, workingDirectory);
 
@@ -672,14 +725,28 @@ internal static class LiveQueryRunner
     // contains a space survives as ONE argument (`path "M:A.B(System.Int32, System.String)" C.D`). Anything
     // other than exactly two arguments is rejected rather than guessed at — silently pairing the wrong
     // endpoints would answer a question nobody asked.
-    private static async Task<LiveAnswer> PathAsync(string remainder, LiveFactSource facts, string workingDirectory)
+    private static async Task<LiveAnswer> PathAsync(
+        string remainder,
+        LiveFactSource facts,
+        string workingDirectory,
+        bool asyncMode = false,
+        bool includeDelivery = false
+    )
     {
         if (!TrySplitArguments(remainder, out var endpoints) || endpoints.Count != 2)
         {
             return Rejected("`path` needs exactly two patterns, a from and a to (quote a pattern containing spaces)");
         }
 
-        return await RunPathAsync(DefaultPathOptions(endpoints[0], endpoints[1]), facts, workingDirectory);
+        return await RunPathAsync(
+            DefaultPathOptions(endpoints[0], endpoints[1]) with
+            {
+                Async = asyncMode,
+                IncludeDelivery = includeDelivery,
+            },
+            facts,
+            workingDirectory
+        );
     }
 
     private static Task<LiveAnswer> RunPathAsync(PathCommand.Options options, LiveFactSource facts, string workingDirectory) =>
@@ -726,5 +793,111 @@ internal static class LiveQueryRunner
     {
         arguments = SplitArguments(remainder);
         return remainder.Count(ch => ch == '"') % 2 == 0;
+    }
+
+    private static bool TryExtractTraversalFlags(string remainder, out string queryText, out bool asyncMode, out bool includeDelivery)
+    {
+        queryText = remainder.Trim();
+        asyncMode = false;
+        includeDelivery = false;
+        if (!HasBalancedQuotes(queryText))
+        {
+            return false;
+        }
+        var seenAsync = false;
+        var seenDelivery = false;
+        while (true)
+        {
+            if (TryRemoveTrailingFlag(ref queryText, "--async"))
+            {
+                if (seenAsync)
+                {
+                    return false;
+                }
+                seenAsync = asyncMode = true;
+                continue;
+            }
+            if (TryRemoveTrailingFlag(ref queryText, "--include-delivery"))
+            {
+                if (seenDelivery)
+                {
+                    return false;
+                }
+                seenDelivery = includeDelivery = true;
+                continue;
+            }
+            break;
+        }
+
+        var misplacedTraversalFlag = ContainsUnquotedTraversalFlag(queryText);
+        // Preserve CommonOptions.Mode exactly: include-delivery without async is a sync no-op, not a
+        // resident-only validation error. Execution and preparation both flow through that same normalizer.
+        return !misplacedTraversalFlag;
+    }
+
+    private static bool TryRemoveTrailingFlag(ref string text, string flag)
+    {
+        if (!text.EndsWith(flag, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        var start = text.Length - flag.Length;
+        if (start > 0 && !char.IsWhiteSpace(text[start - 1]))
+        {
+            return false;
+        }
+        if (IsInsideQuotes(text, start))
+        {
+            return false;
+        }
+        text = text[..start].TrimEnd();
+        return true;
+    }
+
+    private static bool HasBalancedQuotes(string text) => text.Count(ch => ch == '"') % 2 == 0;
+
+    private static bool IsInsideQuotes(string text, int offset)
+    {
+        var quoted = false;
+        for (var index = 0; index < offset; index++)
+        {
+            if (text[index] == '"')
+            {
+                quoted = !quoted;
+            }
+        }
+        return quoted;
+    }
+
+    private static bool ContainsUnquotedTraversalFlag(string text)
+    {
+        var quoted = false;
+        var tokenStart = -1;
+        for (var index = 0; index <= text.Length; index++)
+        {
+            var atEnd = index == text.Length;
+            var ch = atEnd ? ' ' : text[index];
+            if (!atEnd && ch == '"')
+            {
+                quoted = !quoted;
+            }
+            if (!quoted && !atEnd && !char.IsWhiteSpace(ch) && tokenStart < 0)
+            {
+                tokenStart = index;
+            }
+            if (!quoted && (atEnd || char.IsWhiteSpace(ch)) && tokenStart >= 0)
+            {
+                var token = text[tokenStart..index];
+                if (
+                    string.Equals(token, "--async", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(token, "--include-delivery", StringComparison.OrdinalIgnoreCase)
+                )
+                {
+                    return true;
+                }
+                tokenStart = -1;
+            }
+        }
+        return false;
     }
 }

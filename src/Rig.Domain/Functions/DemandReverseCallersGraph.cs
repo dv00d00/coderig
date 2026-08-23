@@ -8,8 +8,14 @@ public sealed record DemandReverseCallersGraphRequest(
     int MaxDepth,
     FactPathFinder.TraversalMode DiscoveryMode,
     int MaxNodes = 20_000,
-    DemandMonomorphizationLimits? Monomorphization = null
-);
+    DemandMonomorphizationLimits? Monomorphization = null,
+    FactPathFinder.TraversalMode? ExecutionMode = null
+)
+{
+    // Compatibility for planner/build callers that historically supplied only the discovery lens. Query
+    // execution supplies this explicitly because sync human --entrypoints deliberately discovers AsyncExact.
+    public FactPathFinder.TraversalMode EffectiveExecutionMode => ExecutionMode ?? DiscoveryMode;
+}
 
 public sealed record DemandReverseKeyedReads(
     DemandReadMetric ReferencesTo,
@@ -44,7 +50,8 @@ public sealed record DemandReverseCallersGraphDiagnostics(
     DemandReverseKeyedReads Reverse,
     DemandReverseClosureDiagnostics Closure,
     DemandReverseLoadDiagnostics Load,
-    bool DeliverySitesSynthesized
+    bool DeliverySitesSynthesized,
+    DemandDeliveryDiagnostics? Delivery = null
 )
 {
     public static DemandReverseCallersGraphDiagnostics LegacyFallback() =>
@@ -76,8 +83,8 @@ public sealed class DemandReverseCallersGraphUnavailableException(string message
 
 // Materializes the keyed reverse candidate closure for callers. Discovery reads reverse fact partitions,
 // but reachability, roots, receiver-narrowed dispatch, cuts and forward confirmation remain exclusively in
-// FactPathFinder over the returned graph. AsyncInclude is intentionally unsupported: this loader has no
-// delivery-site source and therefore cannot synthesize publish->consumer fan-out honestly.
+// FactPathFinder over the returned graph. Async delivery is synthesized from keyed channel and endpoint
+// partitions; the resident graph and the whole event-site corpus are never flattened.
 public static class DemandReverseCallersGraph
 {
     public static DemandReverseCallersGraphResult Build(
@@ -97,13 +104,6 @@ public static class DemandReverseCallersGraph
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Maximum node count must be positive.");
         }
-        if (request.DiscoveryMode == FactPathFinder.TraversalMode.AsyncInclude)
-        {
-            throw new DemandReverseCallersGraphUnavailableException(
-                "AsyncInclude requires delivery-site synthesis, which the keyed reverse graph does not provide."
-            );
-        }
-
         return new Builder(view, rules, request).Build();
     }
 
@@ -113,8 +113,11 @@ public static class DemandReverseCallersGraph
         private readonly DemandForwardGraphRules rules;
         private readonly DemandReverseCallersGraphRequest request;
         private readonly DemandMonomorphizedCallSource calls;
+        private readonly DemandDeliverySiteSource delivery;
+        private readonly bool deferEventClassification;
         private readonly Dictionary<string, MethodRef> methods = new(StringComparer.Ordinal);
         private readonly HashSet<CallEdge> edges = [];
+        private readonly HashSet<DeliverySite> deliverySites = [];
         private readonly HashSet<ImplementsEdge> implementations = [];
         private readonly HashSet<BaseEdge> bases = [];
         private readonly HashSet<DispatchFact> dispatch = [];
@@ -148,7 +151,16 @@ public static class DemandReverseCallersGraph
             this.view = view;
             this.rules = rules;
             this.request = request;
-            calls = new DemandMonomorphizedCallSource(view, rules.Projection, request.Monomorphization);
+            delivery = new DemandDeliverySiteSource(view, rules.Delivery);
+            deferEventClassification =
+                request.DiscoveryMode != FactPathFinder.TraversalMode.SyncCut
+                && rules.Projection.ClassifyEventSubscriptions
+                && delivery.HasEventRules;
+            calls = new DemandMonomorphizedCallSource(
+                view,
+                deferEventClassification ? rules.Projection with { ClassifyEventSubscriptions = false } : rules.Projection,
+                request.Monomorphization
+            );
         }
 
         internal DemandReverseCallersGraphResult Build()
@@ -227,16 +239,28 @@ public static class DemandReverseCallersGraph
                         fixedPointPasses
                     ),
                     new DemandReverseLoadDiagnostics(DemandReverseLoadMode.KeyedDemand),
-                    DeliverySitesSynthesized: false
+                    DeliverySitesSynthesized: request.DiscoveryMode != FactPathFinder.TraversalMode.SyncCut && delivery.Enabled,
+                    Delivery: delivery.Diagnostics()
                 ),
                 targets,
-                new DemandReverseOwnershipHints(
-                    ownershipSymbols.OrderBy(id => id, StringComparer.Ordinal).ToImmutableArray(),
-                    ownershipPaths.OrderBy(path => path, StringComparer.Ordinal).ToImmutableArray()
-                ),
+                MergeOwnership(delivery.Ownership()),
                 rules.Projection.ClassifyEventSubscriptions
             );
         }
+
+        private DemandReverseOwnershipHints MergeOwnership(DemandGraphOwnershipHints deliveryOwnership) =>
+            new(
+                ownershipSymbols
+                    .Concat(deliveryOwnership.SymbolIds)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToImmutableArray(),
+                ownershipPaths
+                    .Concat(deliveryOwnership.EmitterFilePaths)
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToImmutableArray()
+            );
 
         private void ExpandIncoming(string node)
         {
@@ -249,6 +273,56 @@ public static class DemandReverseCallersGraph
                 // external hatch therefore needs the same family inverse as the original target; an
                 // exact ReferencesTo(hub) probe cannot see convenience-overload rows rewritten to it.
                 AddProjectedIncoming(hub);
+                // A registration can bind to the interface/base member while the reverse seed is a
+                // concrete implementation. Delivery is co-located with that registration row, so probe
+                // every one-hop dispatch hub as well as the concrete seed. This is discovery only; the
+                // caller-local forward confirmation below still decides which projected edge is admitted.
+                ExpandDeliveryIncoming(hub);
+            }
+
+            ExpandDeliveryIncoming(baseNode);
+        }
+
+        private void ExpandDeliveryIncoming(string handler)
+        {
+            if (request.DiscoveryMode == FactPathFinder.TraversalMode.SyncCut || !delivery.Enabled)
+            {
+                return;
+            }
+
+            if (!incomingRows.TryGetValue(handler, out var incoming))
+            {
+                incoming = view.ReferencesTo(handler);
+                incomingRows[handler] = incoming;
+                referencesToCalls++;
+                referencesToRows += incoming.Count;
+            }
+            foreach (
+                var handlerReference in incoming.Where(row =>
+                    row.RefKind == RefKinds.MethodGroup && !string.IsNullOrWhiteSpace(row.EnclosingSymbolId)
+                )
+            )
+            {
+                var registrationSites = delivery
+                    .SitesFromCaller(handlerReference.EnclosingSymbolId!)
+                    .Where(site =>
+                        string.Equals(site.FilePath, handlerReference.FilePath, StringComparison.OrdinalIgnoreCase)
+                        && site.Line == handlerReference.Line
+                        && site.Role != DeliveryRole.Producer
+                    )
+                    .ToArray();
+                foreach (var registration in registrationSites)
+                {
+                    foreach (var site in delivery.SitesForChannel(registration))
+                    {
+                        deliverySites.Add(site);
+                        AddMethod(MonomorphizedNodeId.BaseOf(site.Caller));
+                        if (site.Role != DeliveryRole.Producer)
+                        {
+                            MaterializeCallerPartition(site.Caller, calls.CallsFrom(site.Caller));
+                        }
+                    }
+                }
             }
         }
 
@@ -326,12 +400,17 @@ public static class DemandReverseCallersGraph
             {
                 return false;
             }
-            if (loadedCallerPartitions.Contains(caller))
+            MaterializeCallerPartition(caller, projected);
+            return true;
+        }
+
+        private void MaterializeCallerPartition(string caller, IReadOnlyList<CallEdge> projected)
+        {
+            if (!loadedCallerPartitions.Add(caller))
             {
-                return true;
+                return;
             }
 
-            loadedCallerPartitions.Add(caller);
             AddMethod(MonomorphizedNodeId.BaseOf(caller));
             var synthetic = new List<string>();
             foreach (var edge in projected)
@@ -350,7 +429,6 @@ public static class DemandReverseCallersGraph
                 }
             }
             AddSyntheticCallerPartitions(synthetic);
-            return true;
         }
 
         private static IEnumerable<IGrouping<string, ReferenceFact>> CallerGroups(IReadOnlyList<ReferenceFact> rows) =>
@@ -750,8 +828,9 @@ public static class DemandReverseCallersGraph
             materializedNodes.Add(node);
         }
 
-        private FactGraphData Snapshot() =>
-            new(
+        private FactGraphData Snapshot()
+        {
+            FactGraphData graph = new(
                 edges.OrderBy(edge => edge.Caller, StringComparer.Ordinal).ThenBy(edge => edge.Line).ToArray(),
                 implementations.OrderBy(edge => edge.ImplType, StringComparer.Ordinal).ThenBy(edge => edge.InterfaceType).ToArray(),
                 methods.Values.OrderBy(method => method.SymbolId, StringComparer.Ordinal).ToArray(),
@@ -766,6 +845,22 @@ public static class DemandReverseCallersGraph
                 CutRules: rules.Cut.Count == 0 ? null : rules.Cut,
                 ContextRules: rules.Context.Count == 0 ? null : rules.Context
             );
+            if (deliverySites.Count > 0)
+            {
+                graph = FactPathFinder.AddDeliveryEdges(graph, deliverySites.ToArray());
+            }
+            if (deferEventClassification)
+            {
+                graph = FactPathFinder.MarkEventSubscriptionHandoffs(
+                    graph,
+                    deliverySites
+                        .Where(site => site.IdentityToken.StartsWith("E:", StringComparison.Ordinal))
+                        .Select(site => new EventSubscriptionSite(site.Caller, site.FilePath, site.Line))
+                        .ToHashSet()
+                );
+            }
+            return graph;
+        }
 
         private static bool SameDispatchShape(string left, string right) =>
             string.Equals(MethodName(left), MethodName(right), StringComparison.Ordinal) && ParameterArity(left) == ParameterArity(right);

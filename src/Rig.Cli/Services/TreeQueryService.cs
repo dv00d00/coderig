@@ -107,11 +107,29 @@ public static class TreeQueryService
         bool raw
     )
     {
-        var inputs = await source.LoadEffectReachInputsAsync(fromPattern, SqlReachability.Direction.Forward, shaped);
-        var graph = inputs.Graph;
+        DemandForwardReachInputs? demandInputs = null;
+        SqlReachability.ReachInputs inputs;
+        FactGraphData graph;
+        if (mode != FactPathFinder.TraversalMode.SyncCut && source is IDemandForwardPathFactSource demand)
+        {
+            demandInputs = await demand.LoadDemandForwardReachInputsAsync(
+                fromPattern,
+                shaped,
+                maxDepth,
+                mode,
+                classifyEventSubscriptions: !raw
+            );
+            inputs = demandInputs.Inputs;
+            graph = demandInputs.Demand.Graph;
+        }
+        else
+        {
+            inputs = await source.LoadEffectReachInputsAsync(fromPattern, SqlReachability.Direction.Forward, shaped);
+            graph = inputs.Graph;
+        }
         // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls — mark them
         // as handoffs so the sync tree doesn't expand the handler as if the registrar ran it. Skipped under --raw.
-        if (!raw)
+        if (!raw && demandInputs?.Demand.EventSubscriptionsClassified != true)
         {
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
         }
@@ -121,7 +139,10 @@ public static class TreeQueryService
         // The one shared effect derivation (QueryEffectDerivation.ForReach, through the source so a resident
         // host can serve its per-generation memo) — same arguments as before the seam, and still skipped
         // entirely when the pattern matched nothing.
-        IReadOnlyList<DerivedEffect> effects = roots.Count == 0 ? [] : await source.DeriveEffectsAsync(inputs, graph, rules);
+        IReadOnlyList<DerivedEffect> effects =
+            roots.Count == 0 ? []
+            : demandInputs is null ? await source.DeriveEffectsAsync(inputs, graph, rules)
+            : QueryEffectDerivation.ForReach(rules, inputs, graph);
 
         return new TreeComputation(roots, effects, graph, inputs.EpData);
     }
