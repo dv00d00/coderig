@@ -111,6 +111,10 @@
       Link="Live\DemandLivePathTests.cs"
     />
     <MsBuildIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveCallersExactIntegrationTests.cs"
+      Link="Live\LiveCallersExactIntegrationTests.cs"
+    />
+    <MsBuildIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveHazardCostTrial.cs"
       Link="Live\LiveHazardCostTrial.cs"
     />
