@@ -54,6 +54,7 @@ internal static class RigWebHost
         app.MapPath(workingDirectory); //    /api/path    — one concrete From->To path
         app.MapReaches(workingDirectory); // /api/reaches — flat effect inventory from X
         app.MapEffectsDiff(workingDirectory); // /api/effects-diff — explicit A/B reachable-effect comparison
+        app.MapHotspots(workingDirectory); // /api/hotspots — transparent whole-store refactoring ranking
         app.MapRefs(workingDirectory); //    /api/refs    — unused / usage assembly-reference analysis
         app.MapSource(workingDirectory); //  /api/source  — one symbol's declaration source (by symbol id ONLY)
         // SPA fallback: any non-/api, non-file route serves index.html so client-side routing works.

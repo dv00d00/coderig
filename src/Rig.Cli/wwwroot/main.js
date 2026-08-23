@@ -23,6 +23,7 @@ import {
   ImpactView,
   ImpactProgress,
   RefsView,
+  HotspotsView,
   Chips,
   treeStatus,
   baseName,
@@ -44,8 +45,10 @@ function setBusy(on) {
   refs.statusbar.classList.toggle("busy", on);
   refs.tree.classList.toggle("busy", on);
   refs.impact.classList.toggle("busy", on);
+  refs.hotspots.classList.toggle("busy", on);
   refs.go.disabled = on;
   refs.impactGo.disabled = on;
+  refs.hotspotGo.disabled = on;
 }
 
 // ---- data actions ---------------------------------------------------------------------------------------
@@ -129,6 +132,10 @@ function selectStore(id) {
     set({ refsUnused: null, refsUsage: null });
     loadRefs();
   }
+  // Both hotspot artifacts and explicit comparisons are store-specific. Invalidate them even when another
+  // app mode is visible, so returning to Hotspots cannot briefly show the previous store's report.
+  set({ hotspotData: null, effectsDiffData: null });
+  if (get().appMode === "hotspots") loadHotspots();
 }
 function loadImpact() {
   const { impactBase, impactHead, impactAsync } = get();
@@ -201,6 +208,47 @@ async function loadRefs() {
     status("references loaded");
   } catch (e) {
     status("refs: " + e.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function loadHotspots() {
+  const s = get();
+  setBusy(true);
+  status("loading hotspots…");
+  try {
+    const data = await api.hotspots(
+      resolved(),
+      explicit(),
+      s.hotspotSort,
+      s.hotspotTop,
+      s.hotspotNoLambdas,
+      s.hotspotIntrinsic,
+    );
+    set({ hotspotData: data });
+    status(`hotspots: ${data.rows.length.toLocaleString()} method(s), sort=${data.sort}`);
+  } catch (e) {
+    status("hotspots: " + e.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function compareEffects(a, b) {
+  set({ compareA: a, compareB: b, effectsDiffData: null });
+  if (!a || !b) {
+    status("comparison requires explicit A and B patterns", true);
+    return;
+  }
+  setBusy(true);
+  status("comparing behavior…");
+  try {
+    const data = await api.effectsDiff(resolved(), explicit(), a, b);
+    set({ effectsDiffData: data });
+    status(data.matched ? `behavior diff: ${data.aOnly.length} A-only, ${data.bOnly.length} B-only` : data.error || "comparison unresolved", !data.matched);
+  } catch (e) {
+    status("behavior diff: " + e.message, true);
   } finally {
     setBusy(false);
   }
@@ -404,7 +452,10 @@ const actions = {
       set({ eps: [] });
       loadEntrypoints();
     }
-    if (get().treeFrom) openTree(get().treeFrom);
+    if (get().appMode === "hotspots") {
+      set({ hotspotData: null, effectsDiffData: null });
+      loadHotspots();
+    } else if (get().treeFrom) openTree(get().treeFrom);
     else status("cache purged");
   },
   // impact mode
@@ -412,6 +463,26 @@ const actions = {
     set({ appMode: m });
     // refs is a global report — load it on first entry (like the EP inventory loads on its tab).
     if (m === "refs" && !get().refsUnused && !get().refsUsage) loadRefs();
+    if (m === "hotspots" && !get().hotspotData) loadHotspots();
+  },
+  loadHotspots,
+  setHotspotSort(sort, reload) {
+    set({ hotspotSort: sort });
+    if (refs.hotspotSort) refs.hotspotSort.value = sort;
+    if (reload) loadHotspots();
+  },
+  setHotspotTop(value) {
+    const parsed = Number.parseInt(value, 10);
+    set({ hotspotTop: Number.isFinite(parsed) ? parsed : 50 });
+  },
+  setComparePattern(side, value) {
+    set(side === "a" ? { compareA: value } : { compareB: value });
+  },
+  compareEffects,
+  openHotspotTree(row) {
+    set({ appMode: "tree", from: row.id });
+    refs.from.value = row.id;
+    openTree(row.id);
   },
   setRefsTab(id) {
     set({ refsTab: id });
@@ -675,6 +746,8 @@ function applyAppMode(m) {
   refs.impact.classList.toggle("hidden", m !== "impact");
   refs.refsToolbar.classList.toggle("hidden", m !== "refs");
   refs.refs.classList.toggle("hidden", m !== "refs");
+  refs.hotspotToolbar.classList.toggle("hidden", m !== "hotspots");
+  refs.hotspots.classList.toggle("hidden", m !== "hotspots");
   for (const b of refs.appmode.children)
     b.classList.toggle("on", b.dataset.app === m);
 }
@@ -713,6 +786,10 @@ function syncControls(s) {
   refs.impactAsync.querySelector("input").checked = s.impactAsync;
   refs.impactFilter.value = s.impactFilter;
   refs.refsFilter.value = s.refsFilter;
+  refs.hotspotSort.value = s.hotspotSort;
+  refs.hotspotTop.value = String(s.hotspotTop);
+  refs.hotspotNoLambdas.querySelector("input").checked = s.hotspotNoLambdas;
+  refs.hotspotIntrinsic.querySelector("input").checked = s.hotspotIntrinsic;
   applyAppMode(s.appMode);
 }
 
@@ -728,6 +805,13 @@ function setupWatches() {
       const solPath = latest ? latest.solutionPath || "" : "";
       refs.storeDir.textContent = solPath;
       refs.storeDir.title = solPath; // full path on hover — the span ellipsis-truncates when narrow
+    },
+  );
+  watch(
+    store,
+    (s) => [s.hotspotData, s.effectsDiffData, s.appMode],
+    (s) => {
+      if (s.appMode === "hotspots") mount(refs.hotspots, HotspotsView(s, actions));
     },
   );
   watch(
@@ -850,6 +934,9 @@ function setupWatches() {
       if (patch.impactBase && patch.impactHead) loadImpact();
     } else if (patch.appMode === "refs") {
       loadRefs();
+    } else if (patch.appMode === "hotspots") {
+      loadHotspots();
+      if (patch.compareA && patch.compareB) compareEffects(patch.compareA, patch.compareB);
     } else if (patch.from) {
       openTree(patch.from);
     }

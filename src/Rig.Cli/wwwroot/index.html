@@ -1173,6 +1173,168 @@
         color: var(--warn);
         font-size: 11.5px;
       }
+      /* hotspot ranking: a deliberately wide, inspectable metric table rather than an opaque score card */
+      .hotspots-report {
+        min-width: 0;
+      }
+      .impact-toolbar .hotspot-top {
+        flex: 0 0 72px;
+        min-width: 72px;
+        width: 72px;
+      }
+      .hotspot-compare {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        background: var(--panel);
+      }
+      .hotspot-compare h3,
+      .hotspot-compare h4 {
+        margin: 0 0 6px;
+      }
+      .hotspot-compare-inputs {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 9px 0;
+      }
+      .hotspot-compare-inputs input {
+        flex: 1;
+        min-width: 180px;
+      }
+      .hotspot-diff-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .hotspot-diff-col {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px;
+        min-width: 0;
+      }
+      .hotspot-diff-col.add {
+        border-color: var(--add);
+      }
+      .hotspot-diff-col.del {
+        border-color: var(--danger);
+      }
+      .hotspot-diff-col ul,
+      .hotspot-target-error ul {
+        margin: 5px 0 0;
+        padding-left: 20px;
+      }
+      .hotspot-diff-col code {
+        overflow-wrap: anywhere;
+      }
+      .hotspot-cats {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .hotspot-diff-error {
+        color: var(--danger);
+      }
+      .hotspot-target-error {
+        margin-top: 6px;
+        color: var(--fg);
+      }
+      .hotspot-table-wrap {
+        overflow: auto;
+        max-width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+      .hotspot-table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 1500px;
+        font-variant-numeric: tabular-nums;
+      }
+      .hotspot-table th,
+      .hotspot-table td {
+        border-bottom: 1px solid var(--border);
+        padding: 6px 8px;
+        text-align: right;
+        vertical-align: top;
+        white-space: nowrap;
+      }
+      .hotspot-table th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: var(--panel);
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .hotspot-table th:first-child,
+      .hotspot-table td:first-child {
+        text-align: left;
+        white-space: normal;
+        min-width: 300px;
+      }
+      .hotspot-table tbody tr:hover {
+        background: var(--hover);
+      }
+      .hotspot-sort,
+      .hotspot-method-link {
+        border: none;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        padding: 0;
+        font: inherit;
+      }
+      .hotspot-sort.on,
+      .hotspot-method-link {
+        color: var(--accent);
+      }
+      .hotspot-method-link:hover,
+      .hotspot-sort:hover {
+        text-decoration: underline;
+      }
+      .hotspot-id {
+        color: var(--muted);
+        font-size: 10px;
+        overflow-wrap: anywhere;
+        margin-top: 3px;
+      }
+      .hotspot-source {
+        white-space: normal;
+        min-width: 0;
+      }
+      .hotspot-source:not(:empty) {
+        margin-top: 4px;
+        padding: 5px 8px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-left: 2px solid var(--accent);
+        border-radius: 4px;
+        overflow-x: auto;
+      }
+      .hotspot-source .srccode {
+        max-height: 260px;
+        overflow: auto;
+      }
+      .hotspot-actions {
+        display: flex;
+        gap: 4px;
+      }
+      .hotspot-actions button {
+        font-size: 11px;
+        padding: 2px 5px;
+      }
+      @media (max-width: 850px) {
+        .hotspot-compare-inputs {
+          align-items: stretch;
+          flex-direction: column;
+        }
+        .hotspot-diff-grid {
+          grid-template-columns: 1fr;
+        }
+      }
       .epd {
         border: 1px solid var(--border);
         border-radius: 8px;

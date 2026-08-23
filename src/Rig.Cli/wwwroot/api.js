@@ -71,7 +71,7 @@ async function getJson(url) {
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || body.title || res.statusText);
+    throw new Error(body.error || body.detail || body.title || res.statusText);
   }
   return res.json();
 }
@@ -87,6 +87,25 @@ async function cached(key, url) {
   mem.set(k, data);
   idbPut(k, data); // fire-and-forget persist
   return data;
+}
+
+// Some contracts (notably explicit effects-diff ambiguity/no-match) deliberately return a useful DTO with
+// HTTP 400. Preserve and cache that body so the UI can show candidates; transport/problem responses still throw.
+async function cachedContract(key, url) {
+  const k = version + "|" + key;
+  if (mem.has(k)) return mem.get(k);
+  const hit = await idbGet(k);
+  if (hit !== undefined) {
+    mem.set(k, hit);
+    return hit;
+  }
+  const res = await fetch(url);
+  const body = await res.json().catch(() => null);
+  if (!res.ok && (!body || typeof body.matched !== "boolean"))
+    throw new Error(body?.error || body?.detail || body?.title || res.statusText);
+  mem.set(k, body);
+  idbPut(k, body);
+  return body;
 }
 
 // Query string; omits null/blank. `store` is included only when explicit (an id) — implicit LATEST stays off
@@ -106,6 +125,18 @@ export const api = {
   meta: () => getJson("/api/meta"),
   runs: () => getJson("/api/runs"), // LATEST pointer moves → never cached
   providers: () => cached("providers", "/api/providers"),
+  hotspots: (storeId, explicitStore, sort, top, noLambdas, intrinsic) =>
+    cached(
+      `hotspots|${storeId}|${sort}|${top}|${!!noLambdas}|${!!intrinsic}`,
+      "/api/hotspots" + qs({ store: explicitStore, sort, top, noLambdas: noLambdas ? true : undefined, intrinsic: intrinsic ? true : undefined }),
+    ),
+  // Explicit A/B only: both patterns are user-supplied and part of the stable cache key. A 400 ambiguity/
+  // no-match contract is retained as data so its candidates can be rendered instead of collapsed to an error.
+  effectsDiff: (storeId, explicitStore, a, b) =>
+    cachedContract(
+      `effects-diff|${storeId}|${a}|${b}`,
+      "/api/effects-diff" + qs({ store: explicitStore, a, b }),
+    ),
   // raw=true bypasses the opaque/collapse seam folds (server returns the full unfolded tree). It changes the
   // payload, so it MUST be in the cache key alongside the async-walk mode.
   tree: (storeId, explicitStore, from, asyncWalk, raw, intrinsic) =>

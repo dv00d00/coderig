@@ -27,7 +27,7 @@ export const store = createStore({
   eps: [], // entry points for the active store
   hazardMarks: null, // /api/hazards response (array of {methodId,type,confidence,sites}) for the current tree
   // impact mode (store-vs-store diff)
-  appMode: "tree", // tree | impact | refs  (top-level view)
+  appMode: "tree", // tree | impact | refs | hotspots  (top-level view)
   impactBase: "", // base store id
   impactHead: "", // head store id
   impactAsync: false, // --async for the diff: walk async/scheduled handoffs (changes the diff → refetch)
@@ -38,6 +38,15 @@ export const store = createStore({
   refsFilter: "", // substring filter → the `filter` query param (unused: declaring; usage: target assemblies)
   refsUnused: null, // /api/refs/unused response ({ solutionAvailable, groups, candidateCount, projectCount })
   refsUsage: null, // /api/refs/usage response ({ rows: [{ assembly, refs, fromMethods }] })
+  // hotspot/refactoring report + its explicit A/B behavior comparison
+  hotspotSort: "density",
+  hotspotTop: 50,
+  hotspotNoLambdas: false,
+  hotspotIntrinsic: false,
+  hotspotData: null,
+  compareA: "",
+  compareB: "",
+  effectsDiffData: null,
   // diff overlay on a tree: when you open a tree FROM an impact EP card, this carries that EP's changed
   // methods so the head tree can highlight what the diff touched. Session-only (not URL-synced). null = off.
   diffOverlay: null, // { from, base, head, added:[enclosingFqn], removed:[enclosingFqn], changedOnly:bool }
@@ -88,6 +97,12 @@ export const querySlice = (s) => [
   s.impactBase,
   s.impactHead,
   s.impactAsync,
+  s.hotspotSort,
+  s.hotspotTop,
+  s.hotspotNoLambdas,
+  s.hotspotIntrinsic,
+  s.compareA,
+  s.compareB,
 ];
 
 // state -> URL (query params only; defaults omitted to keep links terse).
@@ -99,7 +114,9 @@ export function serializeUrl(s = get()) {
   if (s.mode !== "none") p.set("mode", s.mode);
   if (s.tokens.length) p.set("tokens", s.tokens.join(","));
   if (s.asyncWalk) p.set("async", "1");
-  if (s.intrinsic) p.set("intrinsic", "1");
+  // Hotspots has its own intrinsic report option below. Do not let a remembered Tree preference silently
+  // opt a shared Hotspots URL into alloc/throw metrics.
+  if (s.intrinsic && s.appMode !== "hotspots") p.set("intrinsic", "1");
   if (s.collapse) p.set("collapse", s.collapse);
   if (s.signatures) p.set("sig", "1");
   if (s.predicates) p.set("pred", "1");
@@ -111,6 +128,14 @@ export function serializeUrl(s = get()) {
     if (s.impactAsync) p.set("iasync", "1");
   } else if (s.appMode === "refs") {
     p.set("app", "refs");
+  } else if (s.appMode === "hotspots") {
+    p.set("app", "hotspots");
+    if (s.hotspotSort !== "density") p.set("sort", s.hotspotSort);
+    if (s.hotspotTop !== 50) p.set("top", String(s.hotspotTop));
+    if (s.hotspotNoLambdas) p.set("noLambdas", "1");
+    if (s.hotspotIntrinsic) p.set("hintrinsic", "1");
+    if (s.compareA) p.set("a", s.compareA);
+    if (s.compareB) p.set("b", s.compareB);
   }
   // Preserve whatever state is already attached to the CURRENT history entry (a pivot crumb — see main.js's
   // pushState/popstate wiring) — this call's job is keeping the URL text in sync, not managing history state.
@@ -133,6 +158,9 @@ export function readUrl(runs, search = location.search) {
   const tokens = (p.get("tokens") || "").split(",").filter(Boolean);
   const onlyNamesIntrinsic =
     mode === "only" && tokens.some((t) => ["alloc", "throw"].includes(t.split(":", 1)[0].toLowerCase()));
+  const requestedTop = Number.parseInt(p.get("top") || "50", 10);
+  const requestedHotspotSort = p.get("sort") || "density";
+  const hotspotSorts = ["callers", "callees", "effects", "density", "hazards", "amplification", "dispatch"];
   return {
     from: p.get("from") || "",
     storeId: s && runs.some((r) => r.storeId === s) ? s : null,
@@ -146,7 +174,13 @@ export function readUrl(runs, search = location.search) {
     predicates: p.get("pred") === "1",
     hazards: p.get("haz") === "1",
     appMode:
-      p.get("app") === "impact" ? "impact" : p.get("app") === "refs" ? "refs" : "tree",
+      p.get("app") === "impact"
+        ? "impact"
+        : p.get("app") === "refs"
+          ? "refs"
+          : p.get("app") === "hotspots"
+            ? "hotspots"
+            : "tree",
     impactBase: runs.some((r) => r.storeId === p.get("ibase"))
       ? p.get("ibase")
       : "",
@@ -154,5 +188,13 @@ export function readUrl(runs, search = location.search) {
       ? p.get("ihead")
       : "",
     impactAsync: p.get("iasync") === "1",
+    hotspotSort: hotspotSorts.includes(requestedHotspotSort) ? requestedHotspotSort : "density",
+    hotspotTop: Number.isFinite(requestedTop) ? Math.min(500, Math.max(1, requestedTop)) : 50,
+    hotspotNoLambdas: p.get("noLambdas") === "1",
+    // Keep the whole-store report preference independent of Tree's `intrinsic` flag. Sharing one URL key
+    // made a refreshed Hotspots link silently enable alloc/throw when the user later switched to Tree.
+    hotspotIntrinsic: p.get("hintrinsic") === "1",
+    compareA: p.get("a") || "",
+    compareB: p.get("b") || "",
   };
 }

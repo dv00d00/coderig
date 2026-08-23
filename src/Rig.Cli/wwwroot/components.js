@@ -125,6 +125,30 @@ function Loc(node, actions) {
   });
   return chip;
 }
+function InlineSource(node, actions) {
+  if (!node.file) return null;
+  const panel = h("div", { class: "hotspot-source" });
+  const button = h(
+    "button",
+    { class: "loc loc-src", title: "show source" },
+    `Source · ${baseName(node.file)}:${node.line}`,
+  );
+  let open = false;
+  button.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    open = !open;
+    button.classList.toggle("on", open);
+    if (!open) return mount(panel, []);
+    mount(panel, h("div", { class: "srcmsg" }, "loading source…"));
+    try {
+      const d = await actions.loadSource(node.id);
+      if (open) mount(panel, SourceBody(d));
+    } catch (err) {
+      if (open) mount(panel, h("div", { class: "srcerr" }, "source: " + err.message));
+    }
+  });
+  return h("div", {}, button, panel);
+}
 // Opaque/collapse seam badge: a folded node is a labelled leaf (its subtree hidden server-side). A collapse
 // badge shows the hidden node count; the union of effects it hides rides on node.effects (rendered as glyphs).
 // Toggle "raw" in the toolbar to refetch the unfolded tree. Null when the node did not fold.
@@ -975,6 +999,171 @@ export function RefsView(s) {
   return s.refsTab === "usage" ? RefsUsageView(s) : RefsUnusedView(s);
 }
 
+// ---- hotspots + explicit behavior comparison -----------------------------------------------------------
+function DiffResources(title, rows, cls = "") {
+  return h(
+    "section",
+    { class: "hotspot-diff-col " + cls },
+    h("h4", {}, `${title} (${rows.length})`),
+    rows.length
+      ? h(
+          "ul",
+          {},
+          rows.map((r) =>
+            h(
+              "li",
+              {},
+              h("code", {}, r.resourceKey),
+              r.categories.length ? h("span", { class: "hotspot-cats" }, r.categories.join(", ")) : null,
+            ),
+          ),
+        )
+      : h("div", { class: "hint" }, "none"),
+  );
+}
+
+function EffectsDiffResult(d) {
+  if (!d) return h("div", { class: "hint" }, "Choose A and B explicitly, then Compare. No peer is inferred.");
+  if (!d.matched) {
+    const target = (label, t) =>
+      h(
+        "div",
+        { class: "hotspot-target-error" },
+        h("b", {}, `${label}: ${t.pattern || "(missing)"}`),
+        ` — ${t.status}`,
+        t.matches?.length
+          ? h("ul", {}, t.matches.map((m) => h("li", {}, h("code", {}, m))))
+          : null,
+      );
+    return h("div", { class: "hotspot-diff-error", role: "alert" }, d.error || "Comparison could not be resolved.", target("A", d.a), target("B", d.b));
+  }
+  return h(
+    "div",
+    { class: "hotspot-diff-grid" },
+    DiffResources("Common", d.common),
+    DiffResources("A only", d.aOnly, "add"),
+    DiffResources("B only", d.bOnly, "del"),
+  );
+}
+
+export function HotspotsView(s, actions) {
+  const d = s.hotspotData;
+  if (!d) return h("div", { class: "impact-empty" }, "Load the hotspot report above.");
+
+  // Local input refs let row-level “A/B” buttons fill the explicit comparison panel without peer guessing.
+  // State is still updated for URL round-tripping; typing does not trigger a report re-render.
+  const aInput = h("input", {
+    value: s.compareA,
+    placeholder: "A method pattern / exact id",
+    "aria-label": "Comparison method A",
+    onInput: (e) => actions.setComparePattern("a", e.target.value),
+  });
+  const bInput = h("input", {
+    value: s.compareB,
+    placeholder: "B method pattern / exact id",
+    "aria-label": "Comparison method B",
+    onInput: (e) => actions.setComparePattern("b", e.target.value),
+  });
+  const fill = (side, id) => {
+    const input = side === "a" ? aInput : bInput;
+    input.value = id;
+    actions.setComparePattern(side, id);
+  };
+  const comparison = h(
+    "section",
+    { class: "hotspot-compare", "aria-labelledby": "hotspot-compare-title" },
+    h("h3", { id: "hotspot-compare-title" }, "Explicit behavior comparison"),
+    h("div", { class: "hint" }, "Supply both methods. rig compares reachable effect resources; it never discovers or guesses a peer."),
+    h(
+      "div",
+      { class: "hotspot-compare-inputs" },
+      aInput,
+      h("span", { "aria-hidden": "true" }, "↔"),
+      bInput,
+      h("button", { class: "go", onClick: () => actions.compareEffects(aInput.value.trim(), bInput.value.trim()) }, "Compare"),
+    ),
+    EffectsDiffResult(s.effectsDiffData),
+  );
+
+  const sortable = (label, key, title) =>
+    h(
+      "th",
+      { scope: "col", title },
+      h(
+        "button",
+        { class: "hotspot-sort" + (d.sort === key ? " on" : ""), onClick: () => actions.setHotspotSort(key, true) },
+        label,
+        d.sort === key ? " ↓" : "",
+      ),
+    );
+  const plain = (label, title) => h("th", { scope: "col", title }, label);
+  const header = h(
+    "tr",
+    {},
+    plain("method", "Exact first-party method id and source"),
+    plain("lines", "Declaration line count"),
+    sortable("callers", "callers", "Distinct caller methods"),
+    plain("in sites", "Distinct incoming static call sites"),
+    sortable("callees", "callees", "Distinct callee methods"),
+    plain("out sites", "Distinct outgoing static call sites"),
+    sortable("effects", "effects", "Distinct effect sites"),
+    plain("effect kinds", "Distinct provider:operation pairs"),
+    sortable("effects / 100 lines", "density", "Effect sites per 100 declaration lines"),
+    sortable("hazards", "hazards", "Distinct hazard sites"),
+    plain("hazard kinds", "Distinct hazard kinds"),
+    sortable("amplification", "amplification", "In-scope loop-amplified effect sites"),
+    plain("dispatch fan", "Residual un-narrowed dispatch fan"),
+    plain("dispatch edges", "Un-narrowed incoming dispatch edges"),
+    sortable("dispatch rank", "dispatch", "Residual dispatch fan × incoming dispatch edges"),
+    plain("actions", "Open existing rig query surfaces or fill explicit comparison inputs"),
+  );
+  const rows = d.rows.map((r) =>
+    h(
+      "tr",
+      {},
+      h(
+        "td",
+        { class: "hotspot-method", title: r.id },
+        h("button", { class: "hotspot-method-link", onClick: () => actions.openHotspotTree(r) }, r.name),
+        r.isLambda ? h("span", { class: "mode-chip" }, "lambda") : null,
+        h("div", { class: "hotspot-id" }, r.id),
+        InlineSource(r, actions),
+      ),
+      h("td", {}, r.lines.toLocaleString()),
+      h("td", {}, r.callerMethods.toLocaleString()),
+      h("td", {}, r.incomingCallSites.toLocaleString()),
+      h("td", {}, r.calleeMethods.toLocaleString()),
+      h("td", {}, r.outgoingCallSites.toLocaleString()),
+      h("td", {}, r.effectSites.toLocaleString()),
+      h("td", {}, r.effectKinds.toLocaleString()),
+      h("td", {}, r.effectSitesPer100Lines.toLocaleString(undefined, { maximumFractionDigits: 2 })),
+      h("td", {}, r.hazardSites.toLocaleString()),
+      h("td", {}, r.hazardKinds.toLocaleString()),
+      h("td", {}, r.amplificationSites.toLocaleString()),
+      h("td", {}, r.residualDispatchFan.toLocaleString()),
+      h("td", {}, r.dispatchIncomingEdges.toLocaleString()),
+      h("td", {}, r.dispatchRank.toLocaleString()),
+      h(
+        "td",
+        { class: "hotspot-actions" },
+        h("button", { onClick: () => actions.openHotspotTree(r) }, "Tree"),
+        h("button", { onClick: () => actions.openReaches(r) }, "Reaches"),
+        h("button", { onClick: () => actions.openCallers(r, "roots") }, "Callers"),
+        h("button", { title: "fill comparison A", onClick: () => fill("a", r.id) }, "A"),
+        h("button", { title: "fill comparison B", onClick: () => fill("b", r.id) }, "B"),
+      ),
+    ),
+  );
+
+  return h(
+    "div",
+    { class: "hotspots-report" },
+    h("div", { class: "impact-summary" }, h("b", {}, `${d.rows.length.toLocaleString()} methods`), " · generated code excluded · no blended score", d.hiddenIntrinsic > 0 ? h("div", { class: "impact-mode-note" }, `${d.hiddenIntrinsic.toLocaleString()} alloc/throw effect sites hidden — enable intrinsic and reload to include them`) : null),
+    comparison,
+    h("div", { class: "hotspot-table-wrap", role: "region", "aria-label": "Hotspot ranking", tabindex: "0" }, h("table", { class: "hotspot-table" }, h("thead", {}, header), h("tbody", {}, rows))),
+  );
+}
+
 // The reverse-navigation drawer: "who reaches this node". Opened from a tree node's context menu, backed by
 // /api/callers. entrypoints mode groups the rule-detected EPs by owning deployed service (the "which services
 // can trigger this" lens); roots mode lists no-predecessor origins. Any row re-roots the tree onto itself.
@@ -1182,6 +1371,7 @@ export function Shell(actions) {
     { class: "appmode" },
     modeBtn("tree", "Tree"),
     modeBtn("impact", "Impact"),
+    modeBtn("hotspots", "Hotspots"),
     modeBtn("refs", "Refs"),
   );
   refs.purge = h(
@@ -1395,6 +1585,37 @@ export function Shell(actions) {
     refs.refsFilter,
   );
 
+  // hotspots toolbar — report shape only; the expensive full artifact remains server-cached independently.
+  refs.hotspotSort = h(
+    "select",
+    { title: "hotspot sort metric", onChange: (e) => actions.setHotspotSort(e.target.value, false) },
+    ["callers", "callees", "effects", "density", "hazards", "amplification", "dispatch"].map((x) => h("option", { value: x }, x)),
+  );
+  refs.hotspotTop = h("input", {
+    class: "hotspot-top",
+    type: "number",
+    min: "1",
+    max: "500",
+    value: "50",
+    title: "maximum rows (1–500)",
+    onInput: (e) => actions.setHotspotTop(e.target.value),
+  });
+  refs.hotspotNoLambdas = toggle("no lambdas", "hotspotNoLambdas", "exclude synthetic lambda methods on reload");
+  refs.hotspotIntrinsic = toggle("intrinsic", "hotspotIntrinsic", "include alloc and throw effect sites on reload");
+  refs.hotspotGo = h("button", { class: "go", onClick: () => actions.loadHotspots() }, "Reload");
+  refs.hotspotToolbar = h(
+    "div",
+    { class: "controls impact-toolbar hidden" },
+    h("span", { class: "hint" }, "sort"),
+    refs.hotspotSort,
+    h("span", { class: "hint" }, "top"),
+    refs.hotspotTop,
+    refs.hotspotNoLambdas,
+    refs.hotspotIntrinsic,
+    refs.hotspotGo,
+    h("span", { class: "hint" }, "generated excluded · no blended score"),
+  );
+
   // status + content (tree OR impact OR refs, toggled by appMode)
   refs.spin = h("span", { class: "spin" });
   refs.status = h("span", { id: "status" });
@@ -1402,6 +1623,7 @@ export function Shell(actions) {
   refs.tree = h("div", { class: "tree" });
   refs.impact = h("div", { class: "tree impact-wrap hidden" });
   refs.refs = h("div", { class: "tree impact-wrap hidden" }); // refs report content area (mirrors refs.impact)
+  refs.hotspots = h("div", { class: "tree impact-wrap hidden" });
   refs.callers = h("div", { class: "callers-mount" }); // reverse-nav drawer mounts here (overlays the tree area)
   refs.crumbs = h("div", { class: "crumbs-mount" }); // pivot-history breadcrumb trail mounts here (see BreadcrumbTrail)
   const section = h(
@@ -1411,10 +1633,12 @@ export function Shell(actions) {
     refs.treeToolbar,
     refs.impactToolbar,
     refs.refsToolbar,
+    refs.hotspotToolbar,
     refs.statusbar,
     refs.tree,
     refs.impact,
     refs.refs,
+    refs.hotspots,
     refs.callers,
   );
 
