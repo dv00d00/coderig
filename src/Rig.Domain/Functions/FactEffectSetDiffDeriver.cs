@@ -219,20 +219,35 @@ public static class FactEffectSetDiffDeriver
         var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var node in reachSet)
         {
-            if (!keysByEnclosing.TryGetValue(node, out var keys))
+            AddKeys(node);
+
+            // Static monomorphization keeps the concrete `~mono` node in the traversal so its binding still
+            // drives dispatch, while effects remain owned by the canonical source method. Join that canonical
+            // ownership as a fallback; do not collapse the reach set itself or leak one binding's traversal
+            // into another. An effect explicitly keyed to a mono node is still included only for that node.
+            var canonical = MonomorphizedNodeId.BaseOf(node);
+            if (!string.Equals(canonical, node, StringComparison.Ordinal))
             {
-                continue;
+                AddKeys(canonical);
             }
 
-            foreach (var (key, cats) in keys)
+            void AddKeys(string enclosing)
             {
-                if (!result.TryGetValue(key, out var acc))
+                if (!keysByEnclosing.TryGetValue(enclosing, out var keys))
                 {
-                    acc = new HashSet<string>(StringComparer.Ordinal);
-                    result[key] = acc;
+                    return;
                 }
 
-                acc.UnionWith(cats);
+                foreach (var (key, cats) in keys)
+                {
+                    if (!result.TryGetValue(key, out var acc))
+                    {
+                        acc = new HashSet<string>(StringComparer.Ordinal);
+                        result[key] = acc;
+                    }
+
+                    acc.UnionWith(cats);
+                }
             }
         }
 

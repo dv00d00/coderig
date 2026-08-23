@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using Rig.Analysis.Rules;
+using Rig.Cli.Caching;
 using Rig.Cli.CommandLine;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
-using Rig.Storage.Queries;
+using Rig.Storage.Storage;
+using static Rig.Cli.Caching.QueryCacheKeys;
 using static Rig.Cli.Effects.EffectDerivation;
 using static Rig.Cli.Graph.TraversalGraphLoader;
 
@@ -56,12 +58,25 @@ public static class EffectsDiffQueryService
         string? storeRef = null
     )
     {
-        var rules = RuleSetLoader.Load(workingDirectory);
-        await using var context = await OpenReadContextGatedAsync(
-            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
+        var rules = RuleSetLoader.Load(
+            workingDirectory: workingDirectory,
+            extraRules: [],
+            loadedPaths: out var loadedRulePaths
         );
+        var (context, storeDirectory) = await OpenReadContextGatedAsync(
+            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef),
+            withStoreDir: true
+        );
+        await using var contextScope = context;
+        var storeKey = StoreKey(Path.Combine(storeDirectory, StoreLayout.DbFileName));
+        var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths);
         var graphWatch = Stopwatch.StartNew();
-        var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
+        var graph = await WarmStore.GraphAsync(
+            context: context,
+            rules: rules,
+            storeDir: storeDirectory,
+            rulesHash: rulesHash
+        );
         graphWatch.Stop();
 
         var a = Resolve(graph, aPattern);
@@ -82,7 +97,14 @@ public static class EffectsDiffQueryService
         }
 
         var traversalWatch = Stopwatch.StartNew();
-        var effects = await DeriveHazardEffectsAsync(context: context, rules: rules);
+        var effects = await LoadOrDeriveHazardEffectsAsync(
+            context: context,
+            rigDirectory: storeDirectory,
+            storeKey: storeKey,
+            rulesHash: rulesHash,
+            rules: rules,
+            useCache: true
+        );
         var result = ComputeResolved(
             graph,
             effects,
@@ -203,29 +225,44 @@ public static class EffectsDiffQueryService
     private static ResolvedTarget Resolve(FactGraphData graph, string pattern)
     {
         var nodes = graph.Methods.Select(m => m.SymbolId).Distinct(StringComparer.Ordinal).ToList();
-        var matches = FactPathFinder.DistinctMatchTargets(nodes, pattern);
-        var status = matches.Count switch
-        {
-            0 => TargetStatus.NoMatch,
-            1 => TargetStatus.Matched,
-            _ => TargetStatus.Ambiguous,
-        };
-        if (status != TargetStatus.Matched)
+        var conceptualMatches = FactPathFinder.DistinctMatchTargets(nodes, pattern);
+        if (conceptualMatches.Count == 0)
         {
             return new ResolvedTarget(
-                new TargetResolution(pattern, status, matches, ResolvedId: null),
+                new TargetResolution(pattern, TargetStatus.NoMatch, conceptualMatches, ResolvedId: null),
                 SeedIds: []
             );
         }
 
-        // Depth-zero nodes are precisely FactPathFinder's exact-first selected seeds. Prefer the canonical
-        // open member as the display id when it is present; otherwise use a deterministic concrete seed.
+        // Depth-zero nodes are precisely FactPathFinder's exact-first selected seeds. Reduce only for target
+        // IDENTITY: open base + N monomorphs is one source member; two overload base DocIDs are two targets.
+        // In the latter case fail closed and return full signatures that can be pasted back verbatim.
         var seeds = SeedIds(graph, pattern);
-        var resolved = seeds
-            .OrderBy(MonomorphizedNodeId.IsMonomorphized)
-            .ThenBy(id => id, StringComparer.Ordinal)
-            .FirstOrDefault();
-        return new ResolvedTarget(new TargetResolution(pattern, status, matches, resolved), seeds);
+        var seedSet = seeds.ToHashSet(StringComparer.Ordinal);
+        var canonicalTargets = seeds
+            .Where(seed => !IsContainedLambdaOfMatched(seed, seedSet))
+            .Select(MonomorphizedNodeId.BaseOf)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+        if (canonicalTargets.Count != 1)
+        {
+            return new ResolvedTarget(
+                new TargetResolution(pattern, TargetStatus.Ambiguous, canonicalTargets, ResolvedId: null),
+                SeedIds: []
+            );
+        }
+
+        return new ResolvedTarget(
+            new TargetResolution(pattern, TargetStatus.Matched, conceptualMatches, canonicalTargets[0]),
+            seeds
+        );
+    }
+
+    private static bool IsContainedLambdaOfMatched(string nodeId, HashSet<string> matched)
+    {
+        var marker = nodeId.IndexOf("~λ", StringComparison.Ordinal);
+        return marker > 0 && matched.Contains(nodeId[..marker]);
     }
 
     private static IReadOnlyList<string> SeedIds(FactGraphData graph, string pattern) =>

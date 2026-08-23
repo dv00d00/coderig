@@ -54,6 +54,60 @@ public sealed class EffectsDiffQueryServiceTests
     }
 
     [Test]
+    public void Effect_owned_by_open_generic_member_surfaces_through_a_concrete_monomorph_reach()
+    {
+        const string open = "M:N.GenericWorker.Run``1(System.String)";
+        var mono = MonomorphizedNodeId.For(open, [], ["System.Int32"]);
+        var graph = Graph(
+            ["M:N.A.Entry", "M:N.B.Entry", open, mono],
+            Edge("M:N.A.Entry", mono)
+        );
+        var effects = new[]
+        {
+            Effect("db", "write", "N.GenericWorkEntityCollection", open),
+        };
+
+        var result = EffectsDiffQueryService.Compute(graph, effects, "N.A.Entry", "N.B.Entry");
+
+        result.Matched.ShouldBeTrue();
+        result.AOnly.Select(x => x.ResourceKey).ShouldBe(["GenericWork"]);
+    }
+
+    [Test]
+    public void Param_free_overload_target_fails_closed_with_rerunnable_signature_candidates()
+    {
+        const string text = "M:N.Runner.Run(System.String)";
+        const string number = "M:N.Runner.Run(System.Int32)";
+        var graph = Graph([text, number, "M:N.Other.Stop"]);
+
+        var result = EffectsDiffQueryService.Compute(graph, [], "N.Runner.Run", "N.Other.Stop");
+
+        result.Matched.ShouldBeFalse();
+        result.A.Status.ShouldBe(EffectsDiffQueryService.TargetStatus.Ambiguous);
+        result.A.Matches.ShouldBe([number, text]);
+        result.A.ResolvedId.ShouldBeNull();
+    }
+
+    [Test]
+    public void Full_overload_docid_selects_only_that_signature()
+    {
+        const string text = "M:N.Runner.Run(System.String)";
+        const string number = "M:N.Runner.Run(System.Int32)";
+        var graph = Graph([text, number, "M:N.Other.Stop"]);
+        var effects = new[]
+        {
+            Effect("db", "write", "N.TextEntityCollection", text),
+            Effect("db", "write", "N.NumberEntityCollection", number),
+        };
+
+        var result = EffectsDiffQueryService.Compute(graph, effects, text, "N.Other.Stop");
+
+        result.Matched.ShouldBeTrue();
+        result.A.ResolvedId.ShouldBe(text);
+        result.AOnly.Select(x => x.ResourceKey).ShouldBe(["Text"]);
+    }
+
+    [Test]
     public void Partial_pattern_discloses_distinct_conceptual_ambiguity_without_comparing()
     {
         var graph = Graph(["M:N.Left.Run", "M:N.Right.Run", "M:N.Other.Stop"]);
@@ -62,7 +116,7 @@ public sealed class EffectsDiffQueryServiceTests
 
         result.Matched.ShouldBeFalse();
         result.A.Status.ShouldBe(EffectsDiffQueryService.TargetStatus.Ambiguous);
-        result.A.Matches.ShouldBe(["N.Left.Run", "N.Right.Run"]);
+        result.A.Matches.ShouldBe(["M:N.Left.Run", "M:N.Right.Run"]);
         result.Findings.ShouldBeEmpty();
     }
 
@@ -122,7 +176,7 @@ public sealed class EffectsDiffQueryServiceTests
 
         dto.Matched.ShouldBeFalse();
         dto.A.Status.ShouldBe("ambiguous");
-        dto.A.Matches.ShouldBe(["N.Left.Run", "N.Right.Run"]);
+        dto.A.Matches.ShouldBe(["M:N.Left.Run", "M:N.Right.Run"]);
         dto.Error.ShouldNotBeNull().ShouldContain("ambiguous");
     }
 
