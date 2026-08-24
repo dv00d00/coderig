@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using Rig.Analysis.Inventory;
 using Rig.Cli.Effects;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -160,13 +161,38 @@ internal sealed class LiveFactSource
     // The program's headline latency ("edit → facts servable in ~0.75s") measures FACTS; a QUERY additionally
     // needs this derived layer, and nothing measured what that costs until it was instrumented here. Surfaced
     // on the live answer itself (WatchHost.AnswerQueryAsync) rather than via Console, which TUnit swallows.
+    //
+    // MERGED IN (2026-08-24): the SNAPSHOT's projected-call-graph build. That graph is this generation's
+    // traversal graph — the same artifact `_traversalGraph` memoizes — but the exact-query PLANNER now
+    // materializes it on the snapshot before the query runs, so the memo is never forced and its row went
+    // missing. On a large solution that row was the biggest number in the line (~12s), and dropping it turned
+    // the "derived layer built this generation" note into a disclosure that omits what the user actually
+    // waited for. The snapshot carries `(artifact, elapsed)`; this getter folds it back in.
+    //
+    // FIRST, not appended: the graph is the first thing any traversal needs and, on the routed path, it was
+    // built before this LiveFactSource even existed — so leading with it keeps the line in access order.
+    //
+    // EXACTLY ONE traversalGraph row, ever. If the memo ran (the un-routed path, or a flattened-fixture
+    // source with no FactSnapshot behind it) its row is already here, and the snapshot's build STRICTLY
+    // CONTAINS that memo's — LiveQueryFactSource.BuildMaterializedGraph calls TraversalGraph and then adds
+    // delivery edges — so merging both would report the same milliseconds twice. The memo's row wins because
+    // it is already in true access order; the delivery-edge remainder it understates is small next to the
+    // shaping pass, and an understated row beats a double-counted one in a disclosure.
     public IReadOnlyList<(string Artifact, TimeSpan Elapsed)> BuildTimes
     {
         get
         {
+            // Read the snapshot BEFORE taking _buildTimeLock: FactSnapshot takes its own gate, and no lock
+            // order between the two is worth establishing for a diagnostic read.
+            var projected = Facts is FactSnapshot snapshot ? snapshot.ProjectedCallGraphBuild : null;
             lock (_buildTimeLock)
             {
-                return _buildTimes.ToArray();
+                if (projected is not { } graphBuild || _buildTimes.Any(t => t.Artifact == FactSnapshot.ProjectedCallGraphArtifact))
+                {
+                    return _buildTimes.ToArray();
+                }
+
+                return [graphBuild, .. _buildTimes];
             }
         }
     }

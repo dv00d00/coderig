@@ -217,14 +217,21 @@ public sealed class LiveCallersExactIntegrationTests
     // contributes no BuildTimes row. Asserting its ABSENCE is the same single-build claim, read from the
     // other side: if the query had built a second graph, this row would be back.
     //
-    // KNOWN INSTRUMENTATION GAP, recorded rather than papered over: the planner's build is not in
-    // LiveFactSource.BuildTimes, so the "derived layer built this generation" note no longer accounts for
-    // the graph at all. Closing it means recording the snapshot-level build and merging it into BuildTimes,
-    // which is a WatchCommand/LiveFactSource change.
+    // CHANGED 2026-08-24 (graph-cost disclosure restored): was `disclosure.ShouldNotContain("traversalGraph")`.
+    //
+    // The GAP the comment above recorded is now closed, so the absence assertion had to go — it was pinning
+    // the gap, not the claim. FactSnapshot times its projected-graph build and LiveFactSource.BuildTimes
+    // merges it, so the planner's materialization is named in the "derived layer built this generation" note
+    // again, exactly as the memo's was before the planner started paying for it.
+    //
+    // Same single-build claim, read the honest way round: the generation's graph is disclosed EXACTLY ONCE.
+    // Zero would mean the cost went dark again; two would mean the planner and the query each built one,
+    // which is the doubling this whole program exists to prevent. Both still fail here.
     private static void AssertGraphMaterializedOnce(LiveServeResult answer)
     {
         var disclosure = answer.Disclosure + Environment.NewLine + answer.Err;
-        disclosure.ShouldNotContain("traversalGraph");
+        var mentions = disclosure.Split("traversalGraph", StringSplitOptions.None).Length - 1;
+        mentions.ShouldBe(1, disclosure);
     }
 
     private static string WithoutLoadBanner(string stream) =>

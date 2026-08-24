@@ -201,7 +201,18 @@ public sealed class PlannerMaterializedGraphTests
         // Still ONE slot, and the query never forced LiveFactSource's own traversalGraph memo: the planner's
         // graph IS the query's graph.
         scale.Snapshot.ProjectedCallGraphCount.ShouldBe(1);
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "traversalGraph");
+        // CHANGED 2026-08-24 (graph-cost disclosure restored): was
+        // `live.BuildTimes.ShouldNotContain(build => build.Artifact == "traversalGraph")`.
+        //
+        // The CLAIM is unchanged and is still exactly what this line pins: the generation built its graph
+        // ONCE. What changed is that the single build is now DISCLOSED. The absence assertion was reading the
+        // single-build claim off an instrumentation GAP — the planner's build was not in BuildTimes at all,
+        // so the host's "derived layer built this generation" note had stopped naming the call graph and the
+        // seconds a user waits for it went unreported (the gap this file's own comment recorded as open).
+        // FactSnapshot now times the build and LiveFactSource.BuildTimes merges it, so the same claim is read
+        // the honest way round: EXACTLY ONE row, never two. A second graph build would fail this as loudly as
+        // the old absence assertion did.
+        live.BuildTimes.Count(build => build.Artifact == "traversalGraph").ShouldBe(1);
     }
 
     // ---- differential corpus ----

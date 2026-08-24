@@ -251,10 +251,14 @@ internal static class CallersCommand
         {
             // F9: load the DeploymentMap here and pass it into RunEntryPointsAsync, eliminating the
             // LoadDeploymentsAsync call that was inside RunEntryPointsAsync (depth-1 in the call tree).
+            var deploymentsWatch = Stopwatch.StartNew();
             var epDeployments = await source.LoadDeploymentsAsync(io.WorkspaceLocation.WorkingDirectory);
+            deploymentsWatch.Stop();
+            timing.Record("deployments", deploymentsWatch.Elapsed);
             var epResult = await RunEntryPointsAsync(
                 source,
                 graph,
+                timing: timing,
                 toPattern: opts.ToPattern,
                 maxDepth: maxDepth,
                 mode: mode,
@@ -286,12 +290,15 @@ internal static class CallersCommand
 
         if (opts.RootsOnly)
         {
+            // SPLIT (2026-08-24) from the single `traversal` bucket into the two hot spots it hid: the reverse
+            // closure and the forward verification. They scale differently — the closure with graph size, the
+            // verification with candidate COUNT x depth — so one bucket could never say which one to attack.
             var traversalWatch = Stopwatch.StartNew();
             var roots = FactPathFinder.EntryRootsReaching(graph, opts.ToPattern, maxDepth, mode: mode);
+            traversalWatch.Stop();
+            timing.Record("reverse closure", traversalWatch.Elapsed);
             if (roots.Count == 0)
             {
-                traversalWatch.Stop();
-                timing.Record("traversal", traversalWatch.Elapsed);
                 if (!tsv)
                 {
                     io.TextOutput.Output.WriteLine(
@@ -308,6 +315,7 @@ internal static class CallersCommand
             // resolves to a sibling override that never reaches the target. The depth-0 entries of the reverse
             // closure are the matched target nodes; each root forward-reaches them or is partitioned as
             // reverse-only (recall-safe — a forward reach can legitimately miss an interface/lambda-only path).
+            var verifyWatch = Stopwatch.StartNew();
             var rootsConfirmed = roots;
             var rootsReverseOnly = (IReadOnlyList<string>)[];
             if (!opts.Raw)
@@ -323,8 +331,8 @@ internal static class CallersCommand
                 rootsReverseOnly = roots.Where((_, i) => !confirmedFlags[i]).ToList();
             }
 
-            traversalWatch.Stop();
-            timing.Record("traversal", traversalWatch.Elapsed);
+            verifyWatch.Stop();
+            timing.Record("forward verify", verifyWatch.Elapsed);
 
             var rootsRenderWatch = Stopwatch.StartNew();
             // Reverse-only roots are hidden by default (matching the text output); --include-reverse-only
@@ -379,7 +387,7 @@ internal static class CallersCommand
         if (reachable.Count == 0)
         {
             defaultTraversalWatch.Stop();
-            timing.Record("traversal", defaultTraversalWatch.Elapsed);
+            timing.Record("reverse closure", defaultTraversalWatch.Elapsed);
             if (!tsv)
             {
                 io.TextOutput.Output.WriteLine($"No symbol matches '{opts.ToPattern}'.");
@@ -393,6 +401,8 @@ internal static class CallersCommand
         // — the matched nodes are the SUBJECT of the query, not its answer.
         var matched = reachable.Where(k => k.Value == 0).OrderBy(k => k.Key, StringComparer.Ordinal).ToList();
         var callers = reachable.Where(k => k.Value > 0).OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).ToList();
+        defaultTraversalWatch.Stop();
+        timing.Record("reverse closure", defaultTraversalWatch.Elapsed);
 
         // FORWARD-VERIFY each upstream caller against the SAME graph (mirrors RunEntryPointsAsync), unless
         // --raw — which keeps the exact unfiltered reverse superset. Reverse reachability is set-based BFS, so
@@ -400,6 +410,7 @@ internal static class CallersCommand
         // resolves to a sibling override that never reaches the target. Each caller forward-reaches a matched
         // (depth-0) target node or is partitioned as reverse-only (recall-safe — a forward reach can
         // legitimately miss an interface/lambda-only path, so we caveat rather than drop).
+        var defaultVerifyWatch = Stopwatch.StartNew();
         var forwardConfirmed = new Dictionary<string, bool>(StringComparer.Ordinal);
         if (!opts.Raw)
         {
@@ -416,8 +427,8 @@ internal static class CallersCommand
         var confirmedCallers = callers.Where(kv => !IsReverseOnly(kv.Key)).ToList();
         var reverseOnlyCallers = callers.Where(kv => IsReverseOnly(kv.Key)).ToList();
 
-        defaultTraversalWatch.Stop();
-        timing.Record("traversal", defaultTraversalWatch.Elapsed);
+        defaultVerifyWatch.Stop();
+        timing.Record("forward verify", defaultVerifyWatch.Elapsed);
 
         var renderWatch = Stopwatch.StartNew();
         // Depth-0 rows are the BFS start nodes (always forwardConfirmed=true). Reverse-only rows are
@@ -481,9 +492,15 @@ internal static class CallersCommand
     // map still work (they pass null and the method loads its own below). All current callers pass it in.
     // `source` is the IQueryFactSource seam, not a RigDbContext: this whole method is fact-source-agnostic, so
     // `--entrypoints` answers off the resident live facts too.
+    //
+    // TIMED (2026-08-24): this branch recorded NO phase at all, so `--time` attributed the whole of it to a
+    // single unlabelled remainder — on a 227-project store that was ~7s of a ~12s query with nothing said
+    // about where it went. `timing` is the caller's QueryTiming (the same one `graph load` was recorded on),
+    // threaded in rather than created here so the phases land in ONE table with the load that precedes them.
     private static async Task<int> RunEntryPointsAsync(
         IQueryFactSource source,
         FactGraphData graph,
+        QueryTiming timing,
         string toPattern,
         int maxDepth,
         FactPathFinder.TraversalMode mode,
@@ -499,8 +516,11 @@ internal static class CallersCommand
         // loaded — so the rule-detected entry points are intersected with the cut-shaped reach. Keep the
         // depth-bearing result: the depth-0 entries are the matched TARGET nodes, the forward-verify pass
         // (below) reaches each candidate EP toward them.
+        var closureWatch = Stopwatch.StartNew();
         var reachedBy = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode);
         var reachable = reachedBy.Keys.ToHashSet(StringComparer.Ordinal);
+        closureWatch.Stop();
+        timing.Record("reverse closure", closureWatch.Elapsed);
         if (reachable.Count == 0)
         {
             if (!tsv)
@@ -518,6 +538,7 @@ internal static class CallersCommand
         // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites. Sourced
         // from the already-loaded graph's method nodes (the same Kind==Method set, deduped by SymbolId) rather
         // than a second whole-method-table EF scan (LoadDeadCodeMethodsAsync) of the identical rows.
+        var epWatch = Stopwatch.StartNew();
         var reachableSites = graph.Methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
 
         // The rule-detected entry points (identical derivation to `rig derive`) + promoted handoff origins.
@@ -536,6 +557,11 @@ internal static class CallersCommand
             .OrderBy(e => e.Kind, StringComparer.Ordinal)
             .ThenBy(e => e.Route, StringComparer.Ordinal)
             .ToList();
+        epWatch.Stop();
+        // The EP FACT load + rule derivation + the site join — everything between "who reaches it" and "which
+        // of those declarations are entry points". Its cost tracks the STORE (every EP fact in the solution),
+        // not the query's closure, which is why it deserves its own row next to the two traversal rows.
+        timing.Record("entry points", epWatch.Elapsed);
 
         // BUG-rig-missed-entrypoints-healthcode (Defect 2): the sync surface hides the scheduled/actor-handoff
         // paths, so a sync EP answer can UNDER-report — "0 sync" misreads as "unreachable from any entry point"
@@ -553,15 +579,21 @@ internal static class CallersCommand
                 return 0;
             }
 
+            // Timed from HERE, past the early-out: a probe that did not run must not add a 0ms row that reads
+            // as "the async hint is free". A row appearing at all means a SECOND whole reverse walk was paid.
+            var probeWatch = Stopwatch.StartNew();
             var asyncReachable = FactPathFinder
                 .ReachedBy(graph, toPattern, maxDepth, mode: FactPathFinder.TraversalMode.AsyncExact)
                 .Keys.ToHashSet(StringComparer.Ordinal);
             var asyncSites = graph.Methods.Where(m => asyncReachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
-            return derivedEps
+            var count = derivedEps
                 .Concat(promoted)
                 .Where(e => asyncSites.Contains((e.FilePath, e.Line)))
                 .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
                 .Count();
+            probeWatch.Stop();
+            timing.Record("async probe", probeWatch.Elapsed);
+            return count;
         }
 
         // THE FRONTIER: the reverse-reachable methods that have NO caller of their own — where the chain TOPS
@@ -637,23 +669,34 @@ internal static class CallersCommand
 
         if (touching.Count == 0)
         {
+            // The 0-EP answer is not a cheap answer: it pays a SECOND whole reverse walk (the async probe) and
+            // the frontier scan. Both are timed — the probe under its own row, the writes under `render` — so
+            // the empty result still accounts for its seconds instead of returning through an unmeasured exit.
+            var emptyRenderWatch = Stopwatch.StartNew();
             if (!tsv)
             {
                 // A target reachable ONLY via a handoff (background worker, actor message, event) would
                 // otherwise be wrongly reported as dead/background-only — defeating the security-reachability
                 // use case. Paid only on the 0-result path here.
+                emptyRenderWatch.Stop();
                 var asyncCount = AsyncReachableEpCount();
+                emptyRenderWatch.Start();
                 if (asyncCount > 0)
                 {
                     output.WriteLine(
                         $"No entry points reach '{toPattern}' synchronously — but {asyncCount} reach it via async/scheduled handoff. Re-run with --async."
                     );
+                    emptyRenderWatch.Stop();
+                    timing.Record("render", emptyRenderWatch.Elapsed);
                     return 1;
                 }
 
                 output.WriteLine($"No rule-detected entry points reach '{toPattern}'.");
                 WriteFrontier();
             }
+
+            emptyRenderWatch.Stop();
+            timing.Record("render", emptyRenderWatch.Elapsed);
 
             return 1;
         }
@@ -666,6 +709,11 @@ internal static class CallersCommand
         // keep it as CONFIRMED iff one of them forward-reaches a matched target node; the rest are listed
         // under a caveat (reverse-only) rather than dropped — a forward reach can legitimately miss an
         // interface-dispatch/lambda-only reach, so dropping would risk a false negative.
+        //
+        // Its own phase, separate from `reverse closure`: SeedsReachTarget is a forward walk PER candidate EP,
+        // so this row scales with the candidate COUNT x depth while the closure row scales with graph size.
+        // Folded together they could never say which of the two a slow query was actually paying for.
+        var verifyWatch = Stopwatch.StartNew();
         var targetIds = reachedBy.Where(kv => kv.Value == 0).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
         // (FilePath,Line) -> the method symbol ids declared there, inverting the same graph.Methods set
         // reachableSites was built from — the candidate EP's handler nodes to seed the forward reach with.
@@ -688,7 +736,10 @@ internal static class CallersCommand
         var confirmedFlags = FactPathFinder.SeedsReachTarget(graph, seedGroups, targetIds, maxDepth, mode);
         var confirmed = touching.Where((_, i) => confirmedFlags[i]).ToList();
         var reverseOnly = touching.Where((_, i) => !confirmedFlags[i]).ToList();
+        verifyWatch.Stop();
+        timing.Record("forward verify", verifyWatch.Elapsed);
 
+        var renderWatch = Stopwatch.StartNew();
         // Reverse-only EPs (no forward path) are hidden by default, matching the text output; --include-reverse-only surfaces them.
         // Columns: kind, route, file, line, requires, loadedServices, activeServices, forwardConfirmed, fqn.
         if (tsv)
@@ -702,6 +753,8 @@ internal static class CallersCommand
                     $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(isConfirmed ? "true" : "false")}\t{FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)}"
                 );
             }
+            renderWatch.Stop();
+            timing.Record("render", renderWatch.Elapsed);
             return 0;
         }
         // Headline count is the PRECISE answer — confirmed (forward-verified) EPs only.
@@ -736,7 +789,13 @@ internal static class CallersCommand
         // conflating it with the reverse-only partition. Cost is one extra reverse walk, paid only on the text
         // path in SyncCut mode (the helper early-outs otherwise). The precise per-EP confirmation lives on the
         // --async run, so this is a "go look" pointer, not a verified count.
+        //
+        // The render watch is PAUSED across the probe so the probe's whole reverse walk is attributed to
+        // `async probe` and to nothing else — leaving it running would have counted the same milliseconds in
+        // two rows and inflated the summed total the table prints as 100%.
+        renderWatch.Stop();
         var asyncEpCount = AsyncReachableEpCount();
+        renderWatch.Start();
         if (asyncEpCount > touching.Count)
         {
             output.WriteLine(
@@ -773,6 +832,9 @@ internal static class CallersCommand
         {
             WriteServiceSummary(confirmed.Select(t => (t.Kind, (string?)t.FilePath, t.Requires)), deployments, output);
         }
+
+        renderWatch.Stop();
+        timing.Record("render", renderWatch.Elapsed);
 
         return 0;
     }

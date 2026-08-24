@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Globalization;
 using Microsoft.CodeAnalysis;
 using Rig.Domain.Data;
@@ -79,6 +80,10 @@ internal sealed class FactSnapshot : IIndexedFactSnapshotView
     private readonly Lazy<CompilationHealth?> _compilationHealth;
     private readonly object _projectedGraphGate = new();
     private readonly Dictionary<string, FactGraphData> _projectedGraphs = new(StringComparer.Ordinal);
+
+    // Wall time of the FIRST projected-graph build on this generation, or null if nothing has built one.
+    // Guarded by _projectedGraphGate, like the dictionary it describes. See ProjectedCallGraphBuild.
+    private TimeSpan? _projectedGraphBuild;
 
     internal FactSnapshot(
         FactRevision revision,
@@ -182,13 +187,46 @@ internal sealed class FactSnapshot : IIndexedFactSnapshotView
                 return cached;
             }
 
+            var watch = Stopwatch.StartNew();
             var graph = build();
+            watch.Stop();
+            // FIRST build only (`??=`), which is what makes the disclosure read "once per GENERATION" rather
+            // than once per shaping slot: `--raw` legitimately takes a second slot, and reporting a second
+            // multi-second graph row for it would read as the generation having paid twice for one artifact.
+            // The first build is also the one a user actually waits on — every later slot is a rarer variant.
+            _projectedGraphBuild ??= watch.Elapsed;
             if (_projectedGraphs.Count < MaxProjectedShapes)
             {
                 _projectedGraphs[shapingKey] = graph;
             }
 
             return graph;
+        }
+    }
+
+    // The artifact NAME this build is disclosed under. Deliberately the same string LiveFactSource's own memo
+    // uses, because it is the same artifact: before the exact planner started filling this cache slot, the
+    // memo built the graph and the "derived layer built this generation" note said `traversalGraph <ms>`.
+    // Reporting the planner's build under a different name would have read as a new cost rather than the same
+    // one moving, so the disclosure stays byte-comparable across that change.
+    internal const string ProjectedCallGraphArtifact = "traversalGraph";
+
+    // What the generation paid to materialize its projected call graph, for the host's per-query cost
+    // disclosure — null until something builds one.
+    //
+    // WHY THIS EXISTS: the exact-query PLANNER runs before the query and fills the slot above, so on the
+    // routed path LiveFactSource's `traversalGraph` memo is never forced and contributed no row. The cost did
+    // not go away — on a large solution it is seconds the user waits inside their first query of a generation
+    // — it just stopped being disclosed, and an answer-plus-disclosure tool silently dropping the biggest
+    // number in the query is the regression. LiveFactSource.BuildTimes merges this back in.
+    internal (string Artifact, TimeSpan Elapsed)? ProjectedCallGraphBuild
+    {
+        get
+        {
+            lock (_projectedGraphGate)
+            {
+                return _projectedGraphBuild is { } elapsed ? (ProjectedCallGraphArtifact, elapsed) : null;
+            }
         }
     }
 
@@ -255,9 +293,11 @@ internal sealed class FactSnapshot : IIndexedFactSnapshotView
         // One lock at a time, never nested: two snapshots can never legitimately inherit from each other,
         // but a lock-order hazard that only "can't happen" is not worth leaving in a publication path.
         KeyValuePair<string, FactGraphData>[] carried;
+        TimeSpan? carriedBuild;
         lock (source._projectedGraphGate)
         {
             carried = [.. source._projectedGraphs];
+            carriedBuild = source._projectedGraphBuild;
         }
 
         lock (_projectedGraphGate)
@@ -266,6 +306,12 @@ internal sealed class FactSnapshot : IIndexedFactSnapshotView
             {
                 _projectedGraphs[key] = graph;
             }
+
+            // The BUILD COST rides along with the graph, for the same reason the graph does: a revision stamp
+            // is not a rebuild, so the generation that inherits the graph is the generation that paid for it
+            // and must be able to say so. Carried with `??=`, never overwritten — if this snapshot has already
+            // recorded a build of its own, that one is the first and the disclosure must stay at ONE row.
+            _projectedGraphBuild ??= carriedBuild;
         }
     }
 
