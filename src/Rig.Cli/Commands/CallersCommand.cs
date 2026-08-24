@@ -59,6 +59,10 @@ internal static class CallersCommand
         var maxGenericWork = CommonOptions.MaxGenericWork();
         var store = CommonOptions.Store();
         var noLive = CommonOptions.NoLive();
+        // --entrypoints memoizes the whole-store entry-point set (see EntryPointContext
+        // .LoadOrDeriveEntryPointRecordsAsync); this is its bypass, the same flag `tree`/`impact` already
+        // carry. The other two lenses cache nothing, so it is a no-op for them.
+        var noCache = CommonOptions.NoCache();
         var cmd = new Command(name: "callers", description: "Reverse reachability: which methods reach the target.")
         {
             to,
@@ -77,6 +81,7 @@ internal static class CallersCommand
             maxGenericWork,
             store,
             noLive,
+            noCache,
         };
         // --orphans (the candidate heuristic) and --entrypoints (the precise rule set) are distinct lenses.
         cmd.Validators.Add(result =>
@@ -106,7 +111,8 @@ internal static class CallersCommand
                         Limit: pr.GetValue(limit),
                         Time: pr.GetValue(time),
                         MaxNodes: CommonOptions.ResolveBudget(pr.GetValue(maxNodes)),
-                        MaxGenericWork: CommonOptions.ResolveBudget(pr.GetValue(maxGenericWork))
+                        MaxGenericWork: CommonOptions.ResolveBudget(pr.GetValue(maxGenericWork)),
+                        NoCache: pr.GetValue(noCache)
                     );
                     var io = new CommandIo(
                         new TextOutput(Output: output, Error: error),
@@ -137,7 +143,11 @@ internal static class CallersCommand
         int? Limit,
         bool Time,
         int? MaxNodes = null,
-        int? MaxGenericWork = null
+        int? MaxGenericWork = null,
+        // --no-cache: bypass the --entrypoints artifact cache (the whole-store EP record set). Defaulted so
+        // the live transport's JSON round-trip of this record, and every existing positional construction,
+        // keep meaning "caching on" — which on the live path is the fact generation's memo, never cache.db.
+        bool NoCache = false
     );
 
     // ShortName truncates at the parameter list, which drops the trailing `~λN` marker from a contained
@@ -188,7 +198,14 @@ internal static class CallersCommand
         // --raw bypasses shaping (the exact unfiltered reverse closure); else monomorphize factories + cut +
         // context, honoured symmetrically by the reverse traversal (a cut node yields no successors forward,
         // so it is never a predecessor in reverse).
-        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
+        // loadedRulePaths: the cascade RuleSetLoader just resolved, reused for the --entrypoints cache key's
+        // rule fingerprint instead of re-running the merge (RulesFingerprint.Compute -> ResolveLoadedPaths)
+        // to re-discover the same files. Same hash, one rule-file parse.
+        var rules = RuleSetLoader.Load(
+            workingDirectory: io.WorkspaceLocation.WorkingDirectory,
+            extraRules: opts.ExtraRules,
+            loadedPaths: out var loadedRulePaths
+        );
         var shaped = ShapeRules(opts, rules);
 
         await using var source = await openSource();
@@ -267,7 +284,12 @@ internal static class CallersCommand
                 tsv: tsv,
                 output: io.TextOutput.Output,
                 includeReverseOnly: opts.IncludeReverseOnly,
-                deployments: epDeployments
+                deployments: epDeployments,
+                // The two inputs the EP-record cache key is a function of beyond the store itself: the rule
+                // cascade's fingerprint (which --rules moves), and --no-cache, which turns the cache into one
+                // that misses and drops.
+                loadedRulePaths: loadedRulePaths,
+                useCache: !opts.NoCache
             );
             return epResult;
         }
@@ -508,6 +530,11 @@ internal static class CallersCommand
         string workingDirectory,
         bool tsv,
         TextWriter output,
+        // REQUIRED, not defaulted: these two are the EP-record cache key's non-store inputs. A default would
+        // let a future caller key a --rules query under the DEFAULT rule fingerprint and serve it the wrong
+        // entry-point set — so the caller must say which cascade it loaded and whether caching is on.
+        IReadOnlyList<string> loadedRulePaths,
+        bool useCache,
         bool includeReverseOnly = false,
         DeploymentMap? deployments = null
     )
@@ -541,26 +568,37 @@ internal static class CallersCommand
         var epWatch = Stopwatch.StartNew();
         var reachableSites = graph.Methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
 
-        // The rule-detected entry points (identical derivation to `rig derive`) + promoted handoff origins.
-        var epData = await source.LoadEntryPointDataAsync();
-        var (derivedEps, _, promoted) = await source.DeriveEntryPointsAsync(epData, rules);
+        // The rule-detected entry points (identical derivation to `rig derive`) + promoted handoff origins,
+        // each carrying the handler DocID its FQN column resolves from.
+        //
+        // CACHED (2026-08-24), because this set is a pure function of (store + rules) and NOT of the question:
+        // it used to load every EP fact in the solution and re-derive the whole EP set on every invocation,
+        // however small the closure — 3.5s of a 9.7s query on the 227-project store, the largest phase in the
+        // tool's hottest query. Routed through the SOURCE's artifact cache, so the store path gets the
+        // `.rig/cache.db` blob a fresh process needs and the live path gets the fact generation's memo, off
+        // ONE code path and ONE key (see EntryPointContext.LoadOrDeriveEntryPointRecordsAsync).
+        using var epCache = source.OpenArtifactCache(useCache);
+        var epRecords = await LoadOrDeriveEntryPointRecordsAsync(
+            source: source,
+            cache: epCache,
+            rulesHash: RulesFingerprint.ComputeFromPaths(loadedRulePaths),
+            rules: rules
+        );
 
-        // (file,line) -> handler DocID, so each entry-point line/row carries the queryable FQN beside its
-        // slash route (the route matches nothing as a `rig tree`/`reaches` pattern — this is the handle).
-        var docIdBySite = MethodDocIdBySite(epData);
-
-        var touching = derivedEps
-            .Concat(promoted)
+        var touching = epRecords
             .Where(e => reachableSites.Contains((e.FilePath, e.Line)))
             .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
-            .Select(g => (g.Key.Kind, g.Key.Route, g.Key.FilePath, g.Key.Line, g.First().Requires))
+            // The group key IS four of the six fields, and DocId is a function of the other two, so taking the
+            // first member is the same row the old projection built field-by-field off the key + First().
+            .Select(g => g.First())
             .OrderBy(e => e.Kind, StringComparer.Ordinal)
             .ThenBy(e => e.Route, StringComparer.Ordinal)
             .ToList();
         epWatch.Stop();
-        // The EP FACT load + rule derivation + the site join — everything between "who reaches it" and "which
-        // of those declarations are entry points". Its cost tracks the STORE (every EP fact in the solution),
-        // not the query's closure, which is why it deserves its own row next to the two traversal rows.
+        // The EP set (cache hit, or the fact load + rule derivation behind it) + the site join — everything
+        // between "who reaches it" and "which of those declarations are entry points". Cold, its cost tracks
+        // the STORE (every EP fact in the solution) rather than the query's closure, which is why it deserves
+        // its own row next to the two traversal rows; warm, this row is what shows the cache working.
         timing.Record("entry points", epWatch.Elapsed);
 
         // BUG-rig-missed-entrypoints-healthcode (Defect 2): the sync surface hides the scheduled/actor-handoff
@@ -586,8 +624,7 @@ internal static class CallersCommand
                 .ReachedBy(graph, toPattern, maxDepth, mode: FactPathFinder.TraversalMode.AsyncExact)
                 .Keys.ToHashSet(StringComparer.Ordinal);
             var asyncSites = graph.Methods.Where(m => asyncReachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
-            var count = derivedEps
-                .Concat(promoted)
+            var count = epRecords
                 .Where(e => asyncSites.Contains((e.FilePath, e.Line)))
                 .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
                 .Count();
@@ -750,7 +787,7 @@ internal static class CallersCommand
                 var loaded = deployments.ServicesForFile(e.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
                 output.WriteLine(
-                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(isConfirmed ? "true" : "false")}\t{FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)}"
+                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(isConfirmed ? "true" : "false")}\t{FqnOrRoute(e)}"
                 );
             }
             renderWatch.Stop();
@@ -779,7 +816,7 @@ internal static class CallersCommand
                     filePath: e.FilePath,
                     line: e.Line,
                     requires: e.Requires,
-                    fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)
+                    fqn: FqnOrRoute(e)
                 );
             }
         }
@@ -822,7 +859,7 @@ internal static class CallersCommand
                         filePath: e.FilePath,
                         line: e.Line,
                         requires: e.Requires,
-                        fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)
+                        fqn: FqnOrRoute(e)
                     );
                 }
             }

@@ -1,7 +1,9 @@
 using System.Text;
 using Rig.Analysis.Rules;
+using Rig.Cli.Caching;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Deployments;
+using Rig.Cli.Live;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -141,6 +143,89 @@ internal static class EntryPointContext
         return sb.ToString();
     }
 
+    // ONE derived entry point, flattened into everything a listing needs and nothing it doesn't: the four
+    // identity fields (`callers --entrypoints` groups by exactly these), the capability tokens deployment
+    // attribution reads, and the handler-method DocID its FQN column resolves from — pre-resolved HERE, at
+    // derivation time, so the whole-store (file,line)->DocID map (MethodDocIdBySite over every indexed method)
+    // never has to exist at query time. DocId is null when the EP's site maps to no indexed method symbol
+    // (ctor-less pages, synthesized/promoted handoff origins), which is exactly the case FqnOrRoute falls back
+    // to the Route for.
+    //
+    // This is the CACHED shape (EntryPointRecordCodec): a few thousand small records standing in for the EP
+    // fact bundle + deriver + whole-store method map that produced them. Changing these fields is a payload-
+    // shape change -> bump EpSchema.
+    internal sealed record EntryPointRecord(
+        string Kind,
+        string Route,
+        string FilePath,
+        int Line,
+        IReadOnlyList<string>? Requires,
+        string? DocId
+    );
+
+    // The whole-store EP record list, from cache when one is warm and from the facts when it isn't.
+    //
+    // WHY THIS EXISTS: `callers --entrypoints` derived this set on EVERY invocation — LoadEntryPointDataAsync
+    // (every method/type/base-edge/ctor-ref fact in the SOLUTION) + the deriver + the handoff classification —
+    // regardless of how small the query's closure was. Measured on the 227-project MedDBase store it was the
+    // single largest phase of the hottest query rig answers (3.5s of 9.7s; 3.9s of 6.6s on a query whose
+    // reverse closure cost 0.1s). It does not scale with the question, so it must not be paid per question.
+    //
+    // The set is a pure function of (store identity + effective rules): no pattern, no depth, no traversal
+    // mode, no --raw (the EP derivation reads the UNSHAPED rules). So it keys exactly like the site->kind map
+    // beside it and rides the SAME artifact-cache seam every other cached artifact uses — `.rig/cache.db` on
+    // the store path (where a fresh process would otherwise re-derive from zero), the fact generation's memo
+    // on the live path (where the per-query adapter's memo dies with the query and the handoff arm re-projects
+    // the whole call graph each time). `useCache:false` yields a cache that misses and drops, so --no-cache is
+    // a plain re-derive of the identical set.
+    internal static async Task<IReadOnlyList<EntryPointRecord>> LoadOrDeriveEntryPointRecordsAsync(
+        IQueryFactSource source,
+        IQueryArtifactCache cache,
+        string rulesHash,
+        RuleSet rules
+    )
+    {
+        var key = EpRecordsCacheKey(cache.StoreKey, rulesHash);
+        if (cache.Get(key, EntryPointRecordCodec.Decode) is { } hit)
+        {
+            return hit;
+        }
+
+        var epData = await source.LoadEntryPointDataAsync();
+        var (derived, _, promoted) = await source.DeriveEntryPointsAsync(epData, rules);
+        var records = BuildEntryPointRecords(derived, promoted, epData);
+        cache.Put(key, records, EntryPointRecordCodec.Encode);
+        return records;
+    }
+
+    // Flatten a derived EP set into the cached record shape. ORDER IS LOAD-BEARING: `derived` then `promoted`,
+    // the exact concatenation the listing used to build inline. Its consumer group-bys (which preserve
+    // first-occurrence order) and then STABLE-sorts by kind+route, so a reordering here would reorder ties in
+    // the rendered answer — and the whole point of caching this is that a warm answer is byte-identical.
+    internal static IReadOnlyList<EntryPointRecord> BuildEntryPointRecords(
+        IReadOnlyList<DerivedEntryPoint> derived,
+        IReadOnlyList<DerivedEntryPoint> promoted,
+        FactEntryPointDeriver.FactEntryPointData epData
+    )
+    {
+        // Built once here and DISCARDED with epData — the records carry the resolved DocID, so no query on the
+        // warm path ever materializes this map (or the method facts behind it) again.
+        var docIdBySite = MethodDocIdBySite(epData);
+        return derived
+            .Concat(promoted)
+            .Select(e => new EntryPointRecord(
+                Kind: e.Kind,
+                Route: e.Route,
+                FilePath: e.FilePath,
+                Line: e.Line,
+                Requires: e.Requires,
+                // Same two conditions FqnOrRoute applied at render time, evaluated against the same map:
+                // a non-empty site that resolves to an indexed method symbol.
+                DocId: !string.IsNullOrEmpty(e.FilePath) && docIdBySite.TryGetValue((e.FilePath, e.Line), out var docId) ? docId : null
+            ))
+            .ToList();
+    }
+
     // (file,line) -> handler-method DocID, for recovering an EP's queryable FQN from its declaration site.
     // Built from the full method-symbol set (epData.Methods covers page .ctor rows, attribute action methods,
     // and class-inheritance handlers — every kind whose site IS a method declaration). First symbol wins when
@@ -171,6 +256,12 @@ internal static class EntryPointContext
         !string.IsNullOrEmpty(filePath) && docIdBySite.TryGetValue((filePath, line), out var docId)
             ? SymbolNameFormatter.FqnFromDocId(docId)
             : route;
+
+    // The same resolution off a record whose site lookup already happened (at derivation time, before the
+    // whole-store method map was discarded). The DocID is stored rather than the formatted FQN so the NAME
+    // FORMATTER stays live: a FqnFromDocId change takes effect on warm caches with no schema bump.
+    internal static string FqnOrRoute(EntryPointRecord entryPoint) =>
+        entryPoint.DocId is { } docId ? SymbolNameFormatter.FqnFromDocId(docId) : entryPoint.Route;
 
     // Builds the EP-render context for a tree: the SymbolId->site map (from the loaded graph) and the
     // site->kind map (from the SAME derived entry-point set `derive` emits, incl. promoted handoff

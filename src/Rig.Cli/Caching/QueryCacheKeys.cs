@@ -18,6 +18,15 @@ internal static class QueryCacheKeys
     // impact diff and the >1 MB client trees on any unrelated `.cs` edit — whereas these move only on a
     // deliberate logic/schema change, which is the honest signal. The cost is discipline: a derivation
     // change with no matching bump serves stale (same tradeoff the tree/hazard keys have always carried).
+    // Gates BOTH entry-point artifacts, because both are the SAME derivation (FactEntryPointDeriver.Derive +
+    // the classified-handoff promotion) projected two ways: the site->kind map (EpCacheKey / EpSiteCacheCodec)
+    // and the full EP RECORD list (EpRecordsCacheKey / EntryPointRecordCodec — route + requires + handler
+    // DocID, which the site map collapses away). One constant, so a change to that derivation can never
+    // invalidate one projection and leave the other serving the pre-change EP set.
+    // NOT bumped when the record projection was added (2026-08-24): `eprecords|v1|…` is a NEW key namespace no
+    // prior rig ever wrote a blob under, and the site-map payload/derivation it shares this constant with did
+    // not change — so there was nothing warm to flush, on disk or in a browser. Bump on the next EP-DERIVATION
+    // change (same store + same rules, different EP set), which is what this constant is for.
     internal const int EpSchema = 1;
 
     // v1->v2: TraceNode gained TruncationCause (no stale conflated seen flags); v2->v3: the BOUNDED reach-input
@@ -100,6 +109,18 @@ internal static class QueryCacheKeys
     internal static string EpCacheKey(string storeKey, string rulesHash)
     {
         var material = $"ep|v{EpSchema}|{storeKey}|{rulesHash}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    // Cache key for the pattern-INDEPENDENT EP RECORD list — the derived EPs + promoted handoff origins with
+    // their route, capability requirements, declaration site and handler DocID intact. Same two axes as
+    // EpCacheKey (store identity + rule fingerprint) and the same EpSchema gate, because it is the same
+    // derivation; a DISTINCT `eprecords` namespace so the two projections can never decode each other's blob.
+    // No pattern / depth / mode in the material: `callers --entrypoints` intersects this whole-store set with
+    // its own closure AFTER the cache, so one derivation serves every query against the store.
+    internal static string EpRecordsCacheKey(string storeKey, string rulesHash)
+    {
+        var material = $"eprecords|v{EpSchema}|{storeKey}|{rulesHash}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
