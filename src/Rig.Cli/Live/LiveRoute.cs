@@ -54,8 +54,15 @@ internal static class LiveRoute
                 return null;
 
             case LiveRouteStatus.Failed:
+                // TWO facts, both required, because the store is a DIFFERENT snapshot of this tree than the
+                // live index: WHY live declined, and WHICH source is about to answer instead. The second half
+                // is completed by the store path itself — StoreAnswerDisclosure prints a `store: <id> @
+                // <commit> — <freshness>` line as it opens the store, immediately after this one — so the
+                // pointer here is what ties the two lines into one disclosure rather than leaving a reader to
+                // guess that the answer below came from somewhere else entirely.
                 io.TextOutput.Error.WriteLine(
-                    $"live: a resident index is watching this directory but did not answer ({outcome.Reason}) — answering from the .rig store instead."
+                    $"live: a resident index is watching this directory but did not answer ({outcome.Reason}) — answering from the .rig store instead; "
+                        + "the store is a separately indexed snapshot, and the `store:` line below names it and its freshness."
                 );
                 return null;
 

@@ -555,14 +555,20 @@ internal sealed class WatchHost : IAsyncDisposable
     {
         var demand = LiveQueryRunner.PrepareTransportExactDemand(request, _rules, DeploymentsConfigured());
         var capture = await CaptureForQueryAsync(demand, sourceDisclosure: true, cancellationToken);
+        // PREPARATION-time unavailability DECLINES, exactly as an execution-time demand failure does below.
+        // Both are "the resident index cannot answer this question"; rendering one as an exit-2 answer and
+        // the other as a decline gave the same failure two opposite outcomes — a store answer for one, a
+        // terminal error and no answer at all for the other. Every producer of UnavailableReason routes here:
+        // a failed demand refinement, the sticky watcher-overflow and topology-changed flags, and the
+        // repeated-supersession case. The client discloses the reason and reads the store (LiveRoute), which
+        // then discloses which snapshot answered (StoreAnswerDisclosure) — so the fallback names both halves.
+        //
+        // The compile-health note is deliberately dropped on this path: it describes the RESIDENT facts, and
+        // the answer the user is about to get comes from the store, whose own provenance line describes it.
         if (capture.UnavailableReason is not null)
         {
-            var refused = LiveQueryRunner.ExactUnavailable(demand!.Verb, capture.Snapshot.Revision.Value, capture.UnavailableReason);
-            return LiveServeResult.Answered(
-                refused.Exit,
-                refused.Out,
-                string.Concat(capture.Health.Select(line => line + "\n")) + refused.Err,
-                capture.Disclosure
+            return LiveServeResult.Declined(
+                LiveQueryRunner.ExactUnavailableDecline(demand!.Verb, capture.Snapshot.Revision.Value, capture.UnavailableReason)
             );
         }
 
@@ -798,7 +804,9 @@ internal sealed class WatchHost : IAsyncDisposable
         _changes.Writer.TryWrite(fullPath);
     }
 
-    private void RecordTopologyChange(string fullPath, string change)
+    // Internal, not private: the sticky topology flag is one of the four producers of an unavailable
+    // preparation, and LiveDeclineFallbackTests drives it directly rather than racing a FileSystemWatcher.
+    internal void RecordTopologyChange(string fullPath, string change)
     {
         if (!fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || IsBuildArtifactPath(fullPath))
         {

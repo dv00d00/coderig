@@ -7,9 +7,11 @@ using static Rig.Cli.Live.LiveQueryTransport;
 namespace Rig.Cli.Live;
 
 // What the host produced for one request: the command's two streams and exit code plus the source/staleness
-// disclosure — or a DECLINE, which is the host refusing to answer at all (unroutable verb, undecodable
-// options). A decline is not an error answer: it carries no rendered output, because the client must fall
-// back to the store rather than print an empty result.
+// disclosure — or a DECLINE, which is the host refusing to answer at all: an unroutable verb, undecodable
+// options, a demand projection that failed during execution, or a PREPARATION that could not establish
+// exactness (failed refinement, watcher overflow, topology change, repeated supersession). A decline is not
+// an error answer: it carries no rendered output, because the client must fall back to the store rather than
+// print an empty result.
 internal sealed record LiveServeResult(int Exit, string Out, string Err, string Disclosure, string? DeclineReason)
 {
     internal static LiveServeResult Answered(int exit, string standardOut, string standardError, string disclosure) =>

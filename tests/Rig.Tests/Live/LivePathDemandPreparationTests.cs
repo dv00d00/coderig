@@ -107,7 +107,10 @@ public sealed class LivePathDemandPreparationTests
     }
 
     [Test]
-    public void Exact_unavailable_is_an_answered_exit_two_not_a_transport_decline()
+    // The STDIN-loop rendering contract, which is not the transport policy: a routed request that cannot be
+    // prepared now DECLINES so the client reads the store, while `rig watch`'s own terminal loop has no store
+    // to fall back to and still renders this exit-2 answer for the person running the watcher.
+    public void Exact_unavailable_renders_an_exit_two_answer_for_the_stdin_loop()
     {
         var answer = LiveQueryRunner.ExactUnavailable("path", 42, "generated ownership collision");
 

@@ -259,11 +259,24 @@ internal static class LiveQueryRunner
     // monorepo that is every query, which is how a hard-coded 20k cap read as "rig is broken here" rather
     // than "rig needs a bigger budget here". A budget reason already names its own knob, so pass it through.
     internal static LiveAnswer ExactUnavailable(string verb, long revision, string reason) =>
-        new(
-            Exit: 2,
-            Out: "",
-            Err: $"live: exact {verb} unavailable at resident revision {revision}: {reason}{(IsBudgetReason(reason) ? "" : "; restart the watcher and retry")}\n"
-        );
+        new(Exit: 2, Out: "", Err: $"live: {ExactUnavailableDecline(verb, revision, reason)}\n");
+
+    // The SAME sentence, as a DECLINE reason rather than a rendered answer — one string so the two channels
+    // cannot drift.
+    //
+    // WHY THE TRANSPORT DECLINES INSTEAD OF ANSWERING EXIT 2. A live query can fail in two places: while the
+    // host PREPARES exactness (demand refinement, a watcher overflow, a topology change, a snapshot that kept
+    // moving) and while it EXECUTES (a demand projection that will not load). Execution failure has always
+    // declined — RunRequestAsync catches the two Demand*Unavailable exceptions — so the client falls back and
+    // the user gets a store answer with the reason stated. Preparation failure used to be rendered as an
+    // exit-2 ANSWER, which the client faithfully printed: same class of failure, opposite outcome, and on a
+    // large solution (where the sticky flags latch and never clear) that killed every routed query for the
+    // life of the host while a perfectly good store answer sat one fallback away. Both channels now decline.
+    //
+    // The fallback is never silent: LiveRoute prints this reason on stderr and the store path then prints its
+    // own `store:` provenance line, so the answer names both why live declined and which snapshot answered.
+    internal static string ExactUnavailableDecline(string verb, long revision, string reason) =>
+        $"exact {verb} unavailable at resident revision {revision}: {reason}{(IsBudgetReason(reason) ? "" : "; restart the watcher and retry")}";
 
     private static bool IsBudgetReason(string reason) =>
         reason.Contains("node cap", StringComparison.Ordinal) || reason.Contains("monomorphization", StringComparison.Ordinal);
