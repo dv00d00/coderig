@@ -252,12 +252,21 @@ internal static class LiveQueryRunner
         return null;
     }
 
+    // WHY THE REMEDY IS CONDITIONAL. "restart the watcher and retry" is sound advice for a STALE-STATE
+    // failure — the resident revision moved under the query — and useless for a BUDGET failure: a graph that
+    // did not fit a node/monomorphization cap is exactly the same size after a restart, so the suggestion
+    // sends the user off to pay a multi-minute cold boot for a guaranteed identical failure. On a large
+    // monorepo that is every query, which is how a hard-coded 20k cap read as "rig is broken here" rather
+    // than "rig needs a bigger budget here". A budget reason already names its own knob, so pass it through.
     internal static LiveAnswer ExactUnavailable(string verb, long revision, string reason) =>
         new(
             Exit: 2,
             Out: "",
-            Err: $"live: exact {verb} unavailable at resident revision {revision}: {reason}; restart the watcher and retry\n"
+            Err: $"live: exact {verb} unavailable at resident revision {revision}: {reason}{(IsBudgetReason(reason) ? "" : "; restart the watcher and retry")}\n"
         );
+
+    private static bool IsBudgetReason(string reason) =>
+        reason.Contains("node cap", StringComparison.Ordinal) || reason.Contains("monomorphization", StringComparison.Ordinal);
 
     private static ExactForwardDemand BuildPathDemand(
         PathCommand.Options options,

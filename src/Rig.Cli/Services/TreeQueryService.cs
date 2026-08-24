@@ -128,7 +128,9 @@ public static class TreeQueryService
         int maxDepth,
         int maxNodes,
         FactPathFinder.TraversalMode mode,
-        bool raw
+        bool raw,
+        int? demandMaxNodes = null,
+        int? demandMaxGenericWork = null
     )
     {
         DemandForwardReachInputs? demandInputs = null;

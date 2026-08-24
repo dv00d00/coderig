@@ -10,7 +10,7 @@ public sealed record ForwardCallProjectionRules(
     bool ClassifyEventSubscriptions = false
 );
 
-public sealed record DemandMonomorphizationLimits(int MaxInstantiationsPerMethod = 50, int MaxWorkUnits = 100_000);
+public sealed record DemandMonomorphizationLimits(int MaxInstantiationsPerMethod = 50, int MaxWorkUnits = 5_000_000);
 
 public readonly record struct DemandReadMetric(int Calls, int Rows);
 

@@ -14,7 +14,7 @@ internal sealed record ExactCallersDemand(
     FactPathFinder.TraversalMode ExecutionMode,
     FactPathFinder.TraversalMode DiscoveryMode,
     ExactForwardDebtScope DebtScope = ExactForwardDebtScope.DemandBoundary,
-    int MaxNodes = 20_000
+    int MaxNodes = 250_000
 ) : IExactQueryDemand
 {
     public string Verb => "callers";

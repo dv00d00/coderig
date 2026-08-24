@@ -35,6 +35,8 @@ internal static class ReachesCommand
         var intrinsic = CommonOptions.Intrinsic();
         var limit = CommonOptions.Limit();
         var time = CommonOptions.Time();
+        var maxNodes = CommonOptions.MaxNodes();
+        var maxGenericWork = CommonOptions.MaxGenericWork();
         var store = CommonOptions.Store();
         var noLive = CommonOptions.NoLive();
         var cmd = new Command(name: "reaches", description: "Effects reachable from an entry point, by depth.")
@@ -51,6 +53,8 @@ internal static class ReachesCommand
             intrinsic,
             limit,
             time,
+            maxNodes,
+            maxGenericWork,
             store,
             noLive,
         };
@@ -72,7 +76,9 @@ internal static class ReachesCommand
                         Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
                         Intrinsic: pr.GetValue(intrinsic),
                         Limit: pr.GetValue(limit),
-                        Time: pr.GetValue(time)
+                        Time: pr.GetValue(time),
+                        MaxNodes: CommonOptions.ResolveBudget(pr.GetValue(maxNodes)),
+                        MaxGenericWork: CommonOptions.ResolveBudget(pr.GetValue(maxGenericWork))
                     );
                     var io = new CommandIo(
                         new TextOutput(Output: output, Error: error),
@@ -104,7 +110,9 @@ internal static class ReachesCommand
         HashSet<string> Exclude,
         bool Intrinsic,
         int? Limit,
-        bool Time
+        bool Time,
+        int? MaxNodes = null,
+        int? MaxGenericWork = null
     );
 
     // The CLI entry: answer off the .rig store, which is what every `rig reaches` invocation does. The source
@@ -144,7 +152,9 @@ internal static class ReachesCommand
             opts.Raw,
             opts.Only,
             opts.Exclude,
-            opts.Intrinsic
+            opts.Intrinsic,
+            opts.MaxNodes,
+            opts.MaxGenericWork
         );
         var graph = computation.Graph;
         var reachable = computation.Reachable;

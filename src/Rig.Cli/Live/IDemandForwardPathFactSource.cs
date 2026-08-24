@@ -14,7 +14,9 @@ internal interface IDemandForwardPathFactSource
         RuleSet shapedRules,
         int maxDepth,
         FactPathFinder.TraversalMode mode,
-        bool classifyEventSubscriptions
+        bool classifyEventSubscriptions,
+        int? maxNodes = null,
+        int? maxGenericWork = null
     );
 
     Task<DemandForwardReachInputs> LoadDemandForwardReachInputsAsync(
@@ -22,6 +24,8 @@ internal interface IDemandForwardPathFactSource
         RuleSet shapedRules,
         int maxDepth,
         FactPathFinder.TraversalMode mode,
-        bool classifyEventSubscriptions
+        bool classifyEventSubscriptions,
+        int? maxNodes = null,
+        int? maxGenericWork = null
     );
 }

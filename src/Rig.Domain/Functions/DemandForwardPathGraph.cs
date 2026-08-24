@@ -15,7 +15,7 @@ public sealed record DemandForwardGraphRequest(
     int MaxDepth,
     FactPathFinder.TraversalMode Mode,
     DemandMonomorphizationLimits? Monomorphization = null,
-    int MaxNodes = 20_000
+    int MaxNodes = 250_000
 );
 
 public sealed record DemandForwardStructureReads(
@@ -378,7 +378,9 @@ public static class DemandForwardPathGraph
                 );
                 if (reachable.Count >= request.MaxNodes)
                 {
-                    throw new DemandForwardGraphUnavailableException($"Keyed forward closure reached the {request.MaxNodes} node cap.");
+                    throw new DemandForwardGraphUnavailableException(
+                        $"Keyed forward closure reached {reachable.Count} nodes, at the {request.MaxNodes} node cap. Raise it with --max-nodes <n> (0 = uncapped), or narrow the query with --depth <n>."
+                    );
                 }
                 var next = reachable
                     .Where(item => item.Value < request.MaxDepth && !expandedCallers.Contains(item.Key))
@@ -411,7 +413,7 @@ public static class DemandForwardPathGraph
             )
             {
                 throw new DemandForwardGraphUnavailableException(
-                    "Keyed forward generic projection exceeded its exact monomorphization limits."
+                    "Keyed forward generic projection exceeded its exact monomorphization limits. Raise it with --max-generic-work <n> (0 = uncapped), or narrow the query with --depth <n>."
                 );
             }
 
@@ -542,7 +544,7 @@ public static class DemandForwardPathGraph
             if (materializedNodes.Count >= request.MaxNodes)
             {
                 throw new DemandForwardGraphUnavailableException(
-                    $"Keyed forward graph materialization exceeded the {request.MaxNodes} node cap."
+                    $"Keyed forward graph materialization admitted {materializedNodes.Count} nodes, hitting the {request.MaxNodes} node cap. Raise it with --max-nodes <n> (0 = uncapped), or narrow the query with --depth <n>."
                 );
             }
             materializedNodes.Add(node);

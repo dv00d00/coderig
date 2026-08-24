@@ -115,6 +115,24 @@ internal static class CommonOptions
     internal static Option<int?> Limit(string? description = null) =>
         new("--limit") { Description = description ?? "Max rows in flood-prone listings (default: unbounded)." };
 
+    // THE DEMAND BUDGETS, made visible. A live traversal builds a keyed working graph whose size is an
+    // order of magnitude larger than the answer it produces (a 2k-method `reaches` on a 227-project monorepo
+    // admits well past 20k nodes), and generic projection has a separate work budget. Both used to be
+    // hard-coded, so on a large codebase every query failed with a number the user could neither see the
+    // meaning of nor change. Defaults are calibrated against a real 227-project solution; 0 means uncapped,
+    // for the case where the honest answer is "this codebase is bigger than any default I can pick".
+    internal static Option<int?> MaxNodes() =>
+        new("--max-nodes") { Description = "Max nodes in the demand traversal graph (0 = uncapped; default 250000)." };
+
+    internal static Option<int?> MaxGenericWork() =>
+        new("--max-generic-work") { Description = "Max generic-monomorphization work units (0 = uncapped; default 5000000)." };
+
+    // 0 => uncapped, absent => the calibrated default the request record already carries.
+    internal static int? ResolveBudget(int? value) =>
+        value is null ? null
+        : value == 0 ? int.MaxValue
+        : value;
+
     internal static Option<bool> NoCache() => new("--no-cache") { Description = "Bypass the query cache." };
 
     // --no-gate: disable the shared_state:read write-pairing gate. By default a static-field read effect is

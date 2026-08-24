@@ -55,6 +55,8 @@ internal static class CallersCommand
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
         var time = CommonOptions.Time();
+        var maxNodes = CommonOptions.MaxNodes();
+        var maxGenericWork = CommonOptions.MaxGenericWork();
         var store = CommonOptions.Store();
         var noLive = CommonOptions.NoLive();
         var cmd = new Command(name: "callers", description: "Reverse reachability: which methods reach the target.")
@@ -71,6 +73,8 @@ internal static class CallersCommand
             format,
             limit,
             time,
+            maxNodes,
+            maxGenericWork,
             store,
             noLive,
         };
@@ -100,7 +104,9 @@ internal static class CallersCommand
                         Depth: pr.GetValue(depth),
                         Format: pr.GetValue(format),
                         Limit: pr.GetValue(limit),
-                        Time: pr.GetValue(time)
+                        Time: pr.GetValue(time),
+                        MaxNodes: CommonOptions.ResolveBudget(pr.GetValue(maxNodes)),
+                        MaxGenericWork: CommonOptions.ResolveBudget(pr.GetValue(maxGenericWork))
                     );
                     var io = new CommandIo(
                         new TextOutput(Output: output, Error: error),
@@ -129,7 +135,9 @@ internal static class CallersCommand
         int? Depth,
         string? Format,
         int? Limit,
-        bool Time
+        bool Time,
+        int? MaxNodes = null,
+        int? MaxGenericWork = null
     );
 
     // ShortName truncates at the parameter list, which drops the trailing `~λN` marker from a contained
@@ -204,7 +212,16 @@ internal static class CallersCommand
                     shaped.Cut,
                     shaped.Context
                 ),
-                new DemandReverseCallersGraphRequest(opts.ToPattern, maxDepth, DiscoveryMode(opts, tsv), ExecutionMode: mode)
+                new DemandReverseCallersGraphRequest(
+                    opts.ToPattern,
+                    maxDepth,
+                    DiscoveryMode(opts, tsv),
+                    Monomorphization: opts.MaxGenericWork is null
+                        ? null
+                        : new DemandMonomorphizationLimits(MaxWorkUnits: opts.MaxGenericWork.Value),
+                    MaxNodes: opts.MaxNodes ?? 250_000,
+                    ExecutionMode: mode
+                )
             );
             graph = demandResult.Graph;
         }

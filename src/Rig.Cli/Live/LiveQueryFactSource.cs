@@ -80,7 +80,9 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
         RuleSet shapedRules,
         int maxDepth,
         FactPathFinder.TraversalMode mode,
-        bool classifyEventSubscriptions
+        bool classifyEventSubscriptions,
+        int? maxNodes = null,
+        int? maxGenericWork = null
     )
     {
         if (Source.Facts is not IIndexedFactSnapshotView indexed)
@@ -119,7 +121,13 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
                     Context: shapedRules.Context,
                     Delivery: shapedRules.Delivery
                 ),
-                new DemandForwardGraphRequest(fromPattern, maxDepth, mode)
+                new DemandForwardGraphRequest(
+                    fromPattern,
+                    maxDepth,
+                    mode,
+                    Monomorphization: maxGenericWork is null ? null : new DemandMonomorphizationLimits(MaxWorkUnits: maxGenericWork.Value),
+                    MaxNodes: maxNodes ?? new DemandForwardGraphRequest(fromPattern, maxDepth, mode).MaxNodes
+                )
             )
         );
     }
@@ -129,10 +137,20 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
         RuleSet shapedRules,
         int maxDepth,
         FactPathFinder.TraversalMode mode,
-        bool classifyEventSubscriptions
+        bool classifyEventSubscriptions,
+        int? maxNodes = null,
+        int? maxGenericWork = null
     )
     {
-        var demand = await LoadDemandForwardPathGraphAsync(fromPattern, shapedRules, maxDepth, mode, classifyEventSubscriptions);
+        var demand = await LoadDemandForwardPathGraphAsync(
+            fromPattern,
+            shapedRules,
+            maxDepth,
+            mode,
+            classifyEventSubscriptions,
+            maxNodes,
+            maxGenericWork
+        );
         if (demand.Diagnostics.Load.UsedLegacyFallback && mode != FactPathFinder.TraversalMode.SyncCut)
         {
             throw new DemandForwardGraphUnavailableException(

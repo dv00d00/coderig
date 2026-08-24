@@ -29,6 +29,8 @@ internal static class PathCommand
         var depth = CommonOptions.Depth();
         var format = CommonOptions.Format();
         var time = CommonOptions.Time();
+        var maxNodes = CommonOptions.MaxNodes();
+        var maxGenericWork = CommonOptions.MaxGenericWork();
         var store = CommonOptions.Store();
         var noLive = CommonOptions.NoLive();
         var cmd = new Command(name: "path", description: "Print the first call path from one method to another.")
@@ -42,6 +44,8 @@ internal static class PathCommand
             depth,
             format,
             time,
+            maxNodes,
+            maxGenericWork,
             store,
             noLive,
         };
@@ -60,7 +64,9 @@ internal static class PathCommand
                         ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         Depth: pr.GetValue(depth),
                         Format: pr.GetValue(format),
-                        Time: pr.GetValue(time)
+                        Time: pr.GetValue(time),
+                        MaxNodes: CommonOptions.ResolveBudget(pr.GetValue(maxNodes)),
+                        MaxGenericWork: CommonOptions.ResolveBudget(pr.GetValue(maxGenericWork))
                     );
                     var io = new CommandIo(
                         new TextOutput(Output: output, Error: error),
@@ -85,7 +91,9 @@ internal static class PathCommand
         IReadOnlyList<string> ExtraRules,
         int? Depth,
         string? Format,
-        bool Time
+        bool Time,
+        int? MaxNodes = null,
+        int? MaxGenericWork = null
     );
 
     // The CLI entry: answer off the .rig store, which is what every `rig path` invocation does. The source is

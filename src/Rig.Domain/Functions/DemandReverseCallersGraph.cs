@@ -7,7 +7,7 @@ public sealed record DemandReverseCallersGraphRequest(
     string ToPattern,
     int MaxDepth,
     FactPathFinder.TraversalMode DiscoveryMode,
-    int MaxNodes = 20_000,
+    int MaxNodes = 250_000,
     DemandMonomorphizationLimits? Monomorphization = null,
     FactPathFinder.TraversalMode? ExecutionMode = null
 )
@@ -189,7 +189,7 @@ public static class DemandReverseCallersGraph
                 if (reached.Count > request.MaxNodes)
                 {
                     throw new DemandReverseCallersGraphUnavailableException(
-                        $"Keyed reverse closure exceeded the {request.MaxNodes} node cap."
+                        $"Keyed reverse closure reached {reached.Count} nodes, past the {request.MaxNodes} node cap. Raise it with --max-nodes <n> (0 = uncapped), or narrow the query with --depth <n>."
                     );
                 }
 
@@ -217,7 +217,7 @@ public static class DemandReverseCallersGraph
             )
             {
                 throw new DemandReverseCallersGraphUnavailableException(
-                    "Keyed reverse generic projection exceeded its exact monomorphization limits."
+                    "Keyed reverse generic projection exceeded its exact monomorphization limits. Raise it with --max-generic-work <n> (0 = uncapped), or narrow the query with --depth <n>."
                 );
             }
 
@@ -822,7 +822,7 @@ public static class DemandReverseCallersGraph
             if (materializedNodes.Count >= request.MaxNodes)
             {
                 throw new DemandReverseCallersGraphUnavailableException(
-                    $"Keyed reverse graph materialization exceeded the {request.MaxNodes} node cap."
+                    $"Keyed reverse graph materialization admitted {materializedNodes.Count} nodes, hitting the {request.MaxNodes} node cap. Raise it with --max-nodes <n> (0 = uncapped), or narrow the query with --depth <n>."
                 );
             }
             materializedNodes.Add(node);

@@ -91,7 +91,9 @@ public static class ReachesQueryService
         bool raw,
         HashSet<string> only,
         HashSet<string> exclude,
-        bool includeIntrinsic
+        bool includeIntrinsic,
+        int? demandMaxNodes = null,
+        int? demandMaxGenericWork = null
     )
     {
         var graphWatch = Stopwatch.StartNew();
