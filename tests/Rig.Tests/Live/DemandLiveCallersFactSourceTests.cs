@@ -16,8 +16,13 @@ public sealed class DemandLiveCallersFactSourceTests
     private const string Middle = "M:N.Middle.Run";
     private const string Target = "M:N.Target.Run";
 
+    // CHANGED 2026-08-24 (live materialize-once): an indexed snapshot no longer projects a keyed reverse
+    // graph per query. The keyed builder's fixed point re-derived the whole graph index once per pass, so on a
+    // real monorepo it never terminated; the resident index now materializes the projected call graph ONCE per
+    // generation and lets the shared FactPathFinder narrow it, the way the store path always has. The ANSWER
+    // assertions below are unchanged — they are what this test is for; only the arm that produced it moved.
     [Test]
-    public async Task Indexed_snapshot_uses_keyed_reverse_graph_without_forcing_flattened_or_live_whole_graph_artifacts()
+    public async Task Indexed_snapshot_answers_from_the_generation_materialized_graph_without_flattening_facts()
     {
         using var workspace = new AdhocWorkspace();
         var snapshot = Snapshot(workspace.CurrentSolution, ChainFacts());
@@ -26,7 +31,7 @@ public sealed class DemandLiveCallersFactSourceTests
 
         var result = await source.LoadDemandReverseCallersGraphAsync(Rules(classifyEvents: true), Request(Target));
 
-        result.Diagnostics.Load.Mode.ShouldBe(DemandReverseLoadMode.KeyedDemand);
+        result.Diagnostics.Load.Mode.ShouldBe(DemandReverseLoadMode.MaterializedWholeGraph);
         result.Diagnostics.Load.UsedLegacyFallback.ShouldBeFalse();
         result.TargetIds.ToArray().ShouldBe([Target]);
         var reached = FactPathFinder.ReachedBy(result.Graph, Target, int.MaxValue);
@@ -34,9 +39,28 @@ public sealed class DemandLiveCallersFactSourceTests
         reached[Root].ShouldBe(2);
         result.Graph.CallEdges.ShouldContain(edge => edge.Caller == Root && edge.Callee == Middle);
         result.Graph.CallEdges.ShouldContain(edge => edge.Caller == Middle && edge.Callee == Target);
+        // The FLATTENED AnalysisResult is still never forced — materializing a graph reads the segmented view.
         snapshot.FullMaterializationCount.ShouldBe(0);
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "traversalGraph");
         live.BuildTimes.ShouldNotContain(build => build.Artifact == "eventSites");
+    }
+
+    // The point of materializing: the SECOND query against the same generation pays nothing for its graph.
+    [Test]
+    public async Task A_second_query_on_the_same_generation_reuses_the_materialized_graph()
+    {
+        using var workspace = new AdhocWorkspace();
+        var snapshot = Snapshot(workspace.CurrentSolution, ChainFacts());
+        var live = new LiveFactSource(snapshot, new RuleSet());
+        var source = (IDemandReverseCallersFactSource)new LiveQueryFactSource(live);
+
+        var first = await source.LoadDemandReverseCallersGraphAsync(Rules(classifyEvents: true), Request(Target));
+        var second = await source.LoadDemandReverseCallersGraphAsync(Rules(classifyEvents: true), Request(Middle));
+
+        // Reference identity is the proof: the second query did not re-project anything.
+        second.Graph.ShouldBeSameAs(first.Graph);
+        second.TargetIds.ToArray().ShouldBe([Middle]);
+        snapshot.ProjectedCallGraphCount.ShouldBe(1);
+        live.BuildTimes.Count(build => build.Artifact == "traversalGraph").ShouldBe(1);
     }
 
     [Test]
@@ -59,25 +83,36 @@ public sealed class DemandLiveCallersFactSourceTests
         live.BuildTimes.ShouldNotContain(build => build.Artifact == "eventSites");
     }
 
+    // CHANGED 2026-08-24 (live materialize-once): MaxNodes was a DEMAND BUDGET — how much graph a keyed
+    // projection may expand before it must fail closed rather than serve a partial answer. A materialized
+    // whole graph has nothing partial to disclose, and enforcing the budget against it would decline every
+    // query on any solution bigger than the budget — precisely the solutions materializing exists for
+    // (MedDBase: 300,961 nodes against a 250,000 default). It is therefore not applied on the indexed arm.
+    // The FLATTENED arm's typed decline for async is unchanged and still covered below.
     [Test]
-    public async Task Keyed_cap_failure_is_typed_and_never_falls_back_to_whole_graph()
+    public async Task A_demand_node_budget_does_not_decline_a_materialized_whole_graph_answer()
     {
         using var workspace = new AdhocWorkspace();
         var snapshot = Snapshot(workspace.CurrentSolution, ChainFacts());
         var live = new LiveFactSource(snapshot, new RuleSet());
         var source = (IDemandReverseCallersFactSource)new LiveQueryFactSource(live);
 
-        await Should.ThrowAsync<DemandReverseCallersGraphUnavailableException>(async () =>
-            await source.LoadDemandReverseCallersGraphAsync(Rules(classifyEvents: true), Request(Target) with { MaxNodes = 1 })
-        );
+        var result = await source.LoadDemandReverseCallersGraphAsync(Rules(classifyEvents: true), Request(Target) with { MaxNodes = 1 });
 
+        result.Diagnostics.Load.Mode.ShouldBe(DemandReverseLoadMode.MaterializedWholeGraph);
+        result.TargetIds.ToArray().ShouldBe([Target]);
+        FactPathFinder.ReachedBy(result.Graph, Target, int.MaxValue).Keys.ShouldContain(Root);
         snapshot.FullMaterializationCount.ShouldBe(0);
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "traversalGraph");
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "eventSites");
     }
 
+    // CHANGED 2026-08-24 (live materialize-once): the keyed builder classified `+=` subscription edges
+    // ITSELF, so it reported EventSubscriptionsClassified: true and the command skipped its own pass. The
+    // materialized graph is deliberately left UNCLASSIFIED — AddDeliveryEdges must see the unreclassified
+    // methodGroup edges, so the reclassification has to happen after it, which is exactly where the command
+    // (and the store path) already does it, gated on `--raw`. So the source now reports false for both, and
+    // the classified-vs-raw distinction lives one layer up, in CallersCommand/PathCommand/reaches/tree.
     [Test]
-    public async Task Keyed_event_subscription_is_classified_locally_while_raw_projection_stays_unclassified()
+    public async Task Materialized_graph_leaves_event_subscription_classification_to_the_command()
     {
         const string subscribe = "M:N.Events.Subscribe";
         const string handler = "M:N.Events.Handle";
@@ -96,11 +131,14 @@ public sealed class DemandLiveCallersFactSourceTests
         var classified = await source.LoadDemandReverseCallersGraphAsync(Rules(classifyEvents: true), Request(handler));
         var raw = await source.LoadDemandReverseCallersGraphAsync(Rules(classifyEvents: false), Request(handler));
 
-        classified.EventSubscriptionsClassified.ShouldBeTrue();
-        classified.Graph.CallEdges.Single(edge => edge.Caller == subscribe && edge.Callee == handler).Kind.ShouldBe(EdgeKinds.Handoff);
+        classified.EventSubscriptionsClassified.ShouldBeFalse();
+        classified.Graph.CallEdges.Single(edge => edge.Caller == subscribe && edge.Callee == handler).Kind.ShouldBe(EdgeKinds.MethodGroup);
         raw.EventSubscriptionsClassified.ShouldBeFalse();
         raw.Graph.CallEdges.Single(edge => edge.Caller == subscribe && edge.Callee == handler).Kind.ShouldBe(EdgeKinds.MethodGroup);
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "traversalGraph");
+        // Both shapes are identical here, so they share the ONE materialized graph rather than building two.
+        classified.Graph.ShouldBeSameAs(raw.Graph);
+        // Reclassification is the command's pass, and it reads the generation's memoized event-site set —
+        // which the SOURCE still never forces on its own.
         live.BuildTimes.ShouldNotContain(build => build.Artifact == "eventSites");
     }
 

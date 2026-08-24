@@ -18,8 +18,14 @@ public sealed class LiveCallersExactIntegrationTests
     private const string NewCaller = "ReviewBooking";
     private const string LoadBanner = "Fact graph:";
 
+    // RENAMED 2026-08-24 (live materialize-once): was
+    // `Routed_callers_refines_a_disk_edit_exactly_without_building_the_whole_traversal_graph`. The exact
+    // disk-edit refinement — the load-bearing half — is unchanged and still asserted line for line. What
+    // changed is the graph policy it used to also pin: the resident index now materializes the whole graph
+    // ONCE per generation instead of projecting a keyed one per query, so the claim becomes "built once, then
+    // reused by every later query in any traversal mode".
     [Test]
-    public async Task Routed_callers_refines_a_disk_edit_exactly_without_building_the_whole_traversal_graph()
+    public async Task Routed_callers_refines_a_disk_edit_exactly_and_materializes_its_graph_once_per_generation()
     {
         using var playground = await DeepChainPlayground.CreateAsync();
         var workingDirectory = playground.WorkingDirectory;
@@ -41,7 +47,7 @@ public sealed class LiveCallersExactIntegrationTests
 
         AssertAnsweredCallers(initialLive, ExistingHighLevelCaller);
         AssertParity(initialStore, initialLive);
-        AssertNoWholeGraphBuild(initialLive);
+        AssertGraphMaterializedOnce(initialLive);
 
         var beforeEditRevision = await host.GetCurrentRevisionAsync();
         var homePagePath = Path.Combine(workingDirectory, "Web", "HomePage.cs");
@@ -72,7 +78,7 @@ public sealed class LiveCallersExactIntegrationTests
         AssertAnsweredCallers(editedLive, ExistingHighLevelCaller, NewCaller);
         editedLive.Disclosure.ShouldContain("all projects reconciled");
         editedLive.Disclosure.ShouldNotContain("affected facts STALE");
-        AssertNoWholeGraphBuild(editedLive);
+        AssertGraphMaterializedOnce(editedLive);
 
         var refinedRevision = await host.GetCurrentRevisionAsync();
         refinedRevision.ShouldBeGreaterThan(eagerRevision, "the first post-edit callers query should publish its exact refinement");
@@ -80,8 +86,12 @@ public sealed class LiveCallersExactIntegrationTests
         var repeatedLive = await host.ServeAsync(request);
         AssertAnsweredCallers(repeatedLive, ExistingHighLevelCaller, NewCaller);
         repeatedLive.Out.ShouldBe(editedLive.Out);
-        repeatedLive.Err.ShouldBe(editedLive.Err);
-        AssertNoWholeGraphBuild(repeatedLive);
+        // Same ANSWER; the per-generation cost note differs by design (the first query built the graph, this
+        // one reused it), which is exactly what AssertNoGraphRebuild below pins.
+        AnswerStreamParity
+            .WithoutLiveCostDisclosure(repeatedLive.Err)
+            .ShouldBe(AnswerStreamParity.WithoutLiveCostDisclosure(editedLive.Err));
+        AssertNoGraphRebuild(repeatedLive);
         (await host.GetCurrentRevisionAsync()).ShouldBe(
             refinedRevision,
             "repeating an already-exact callers query must not publish another resident generation"
@@ -100,7 +110,7 @@ public sealed class LiveCallersExactIntegrationTests
 
             AssertAnsweredCallers(asyncLive, ExistingHighLevelCaller, NewCaller);
             AssertParity(asyncStore, asyncLive);
-            AssertNoWholeGraphBuild(asyncLive);
+            AssertNoGraphRebuild(asyncLive);
         }
 
         (await host.GetCurrentRevisionAsync()).ShouldBe(
@@ -180,14 +190,26 @@ public sealed class LiveCallersExactIntegrationTests
         store.Out.ShouldContain(ExistingHighLevelCaller);
         live.Exit.ShouldBe(store.Exit);
         WithoutLoadBanner(live.Out).ShouldBe(WithoutLoadBanner(store.Out));
-        AnswerStreamParity.Canonical(live.Err).ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(store.Err));
+        // The host's per-generation cost note is dropped for the same reason the store's provenance line is:
+        // it says who answered and what that cost, not what the answer is. See WithoutLiveCostDisclosure.
+        AnswerStreamParity.WithoutLiveCostDisclosure(live.Err).ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(store.Err));
     }
 
-    private static void AssertNoWholeGraphBuild(LiveServeResult answer)
+    // CHANGED 2026-08-24 (live materialize-once): the resident index no longer avoids the whole traversal
+    // graph — it MATERIALIZES it, once per generation, because the keyed per-query projection it replaced ran
+    // a fixed point that re-derived the whole graph index per pass and did not terminate at monorepo scale.
+    // The invariant that replaces "never build it" is "build it ONCE": a query that arrives on a generation
+    // whose graph is already materialized must disclose no build at all, in ANY traversal mode.
+    private static void AssertNoGraphRebuild(LiveServeResult answer)
     {
         var disclosure = answer.Disclosure + Environment.NewLine + answer.Err;
-        disclosure.ShouldNotContain("traversalGraph");
-        disclosure.ShouldNotContain("eventSites");
+        disclosure.ShouldNotContain("derived layer built this generation");
+    }
+
+    private static void AssertGraphMaterializedOnce(LiveServeResult answer)
+    {
+        var disclosure = answer.Disclosure + Environment.NewLine + answer.Err;
+        disclosure.ShouldContain("traversalGraph");
     }
 
     private static string WithoutLoadBanner(string stream) =>

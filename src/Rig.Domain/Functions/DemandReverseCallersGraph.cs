@@ -38,6 +38,10 @@ public enum DemandReverseLoadMode
 {
     KeyedDemand,
     LegacyWholeGraphFallback,
+
+    // See DemandForwardLoadMode.MaterializedWholeGraph — the whole projected call graph, materialized once
+    // per fact generation and traversed by the shared FactPathFinder.
+    MaterializedWholeGraph,
 }
 
 public sealed record DemandReverseLoadDiagnostics(DemandReverseLoadMode Mode)
@@ -67,6 +71,15 @@ public sealed record DemandReverseCallersGraphDiagnostics(
             new DemandReverseLoadDiagnostics(DemandReverseLoadMode.LegacyWholeGraphFallback),
             DeliverySitesSynthesized: false
         );
+
+    // The same all-zero counters as LegacyFallback — nothing was projected on demand — under the honest
+    // load mode. DeliverySitesSynthesized stays FALSE: the delivery edges were projected once, whole, at
+    // materialization time, not synthesized per query from keyed channel partitions.
+    public static DemandReverseCallersGraphDiagnostics Materialized() =>
+        LegacyFallback() with
+        {
+            Load = new DemandReverseLoadDiagnostics(DemandReverseLoadMode.MaterializedWholeGraph),
+        };
 }
 
 public sealed record DemandReverseCallersGraphResult(

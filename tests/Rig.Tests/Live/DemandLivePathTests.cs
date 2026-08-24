@@ -50,11 +50,17 @@ public sealed class DemandLivePathTests
         syncEvent.Exit.ShouldBe(1);
         asyncEvent.Exit.ShouldBe(0);
 
+        // CHANGED 2026-08-24 (live materialize-once): this used to assert the live `path` banner reported a
+        // PARTIAL forward slice, because the graph was projected per query from the seed. It is now the
+        // generation's whole materialized graph — the traversal-shaped projection PLUS its delivery edges —
+        // so the banner reports at least the traversal-graph oracle, and strictly more wherever the ruleset
+        // configures delivery (this playground raises a real C# event, so it does). The banner has always
+        // been a documented load DIAGNOSTIC whose value depends on the fact source, never on the answer;
+        // WithoutBanner above is why the parity comparisons are unaffected.
         var rules = RuleSetLoader.Load(playground.WorkingDirectory);
         var fullGraphOracle = new LiveFactSource(await host.GetCurrentFactsAsync(), rules).TraversalGraph;
-        var partialCallEdges = FactGraphCallEdgeCount(dispatch.Out);
-        partialCallEdges.ShouldBeGreaterThan(0);
-        partialCallEdges.ShouldBeLessThan(fullGraphOracle.CallEdges.Count);
+        var materializedCallEdges = FactGraphCallEdgeCount(dispatch.Out);
+        materializedCallEdges.ShouldBeGreaterThan(fullGraphOracle.CallEdges.Count);
     }
 
     [Test]
@@ -106,11 +112,13 @@ public sealed class DemandLivePathTests
         live.DeclineReason.ShouldBeNull();
         live.Exit.ShouldBe(storeExit);
         WithoutBanner(live.Out).ShouldBe(WithoutBanner(storeOut.ToString()));
-        // Store provenance is intentionally absent from a resident answer; every answer-local diagnostic
-        // must still match byte-for-byte.
-        AnswerStreamParity.Canonical(live.Err).ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()));
-        live.Err.ShouldNotContain("traversalGraph");
-        live.Err.ShouldNotContain("eventSites");
+        // Store provenance is intentionally absent from a resident answer, and the host's per-generation cost
+        // note is its twin on the live side (CHANGED 2026-08-24: materializing the graph means the FIRST query
+        // of a generation now genuinely builds traversalGraph/eventSites and honestly says so, so the note is
+        // no longer always empty). Every answer-local diagnostic must still match byte-for-byte.
+        AnswerStreamParity
+            .WithoutLiveCostDisclosure(live.Err)
+            .ShouldBe(AnswerStreamParity.WithoutImmutableStoreDisclosure(storeErr.ToString()));
         return live;
     }
 

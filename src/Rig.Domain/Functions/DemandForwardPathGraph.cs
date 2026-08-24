@@ -38,6 +38,13 @@ public enum DemandForwardLoadMode
 {
     KeyedDemand,
     LegacyWholeGraphFallback,
+
+    // The whole projected call graph, materialized ONCE per fact generation and traversed by the shared
+    // FactPathFinder — the same edge set the store walks out of `call_edges`, tagged by kind and filtered
+    // by traversal MODE rather than projected per query. Distinct from LegacyWholeGraphFallback: that arm
+    // is a flattened compatibility graph with NO delivery edges (hence its async decline), this one carries
+    // them, so an async traversal over it is exact.
+    MaterializedWholeGraph,
 }
 
 public sealed record DemandForwardLoadDiagnostics(DemandForwardLoadMode Mode)
@@ -65,6 +72,14 @@ public sealed record DemandForwardGraphDiagnostics(
             Closure: new DemandForwardClosureDiagnostics(0, 0, 0),
             Load: new DemandForwardLoadDiagnostics(DemandForwardLoadMode.LegacyWholeGraphFallback)
         );
+
+    // The same all-zero counters as LegacyFallback — no keyed read, no closure pass, no monomorphization
+    // budget was spent, because nothing was projected on demand — under the honest load mode.
+    public static DemandForwardGraphDiagnostics Materialized() =>
+        LegacyFallback() with
+        {
+            Load = new DemandForwardLoadDiagnostics(DemandForwardLoadMode.MaterializedWholeGraph),
+        };
 }
 
 public sealed record DemandForwardGraphResult(

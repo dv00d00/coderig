@@ -75,6 +75,8 @@ internal sealed class FactSnapshot : IIndexedFactSnapshotView
 {
     private readonly Lazy<AnalysisResult> _flattenedFacts;
     private readonly Lazy<CompilationHealth?> _compilationHealth;
+    private readonly object _projectedGraphGate = new();
+    private readonly Dictionary<string, FactGraphData> _projectedGraphs = new(StringComparer.Ordinal);
 
     internal FactSnapshot(
         FactRevision revision,
@@ -148,6 +150,58 @@ internal sealed class FactSnapshot : IIndexedFactSnapshotView
         EnumerateReplaced(BaseFacts.AllocationFacts ?? [], a => a.FilePath, slice => slice.Allocations);
 
     public CompilationHealth? GetCompilationHealth() => _compilationHealth.Value;
+
+    // ---- The materialized projected call graph for THIS generation ----
+    //
+    // The generation IS the invalidation model: a snapshot is immutable, an applied edit batch publishes a
+    // NEW snapshot, and the graph a reader materialized against the old one dies with the last reference to
+    // it. There is no version to bump and no staleness window, exactly as for the lazies above.
+    //
+    // WHY HERE and not on the query-side bundle that builds it: the bundle is rebuilt whenever the host
+    // re-wraps a generation, while the SNAPSHOT is the thing a query actually pins. Caching on the snapshot
+    // means the whole-graph projection is paid once per generation no matter how many bundles wrap it.
+    //
+    // KEYED BY SHAPING, not by rule set: the resident ruleset is fixed for the host's lifetime (the live
+    // surface declines `--rules`), so the only reachable variation is a command that deliberately zeroes
+    // shaping slices — `--raw`. Two shapes are reachable today; the cap is a hard ceiling on how much graph
+    // one generation can retain if that ever stops being true, and past it the caller simply builds fresh
+    // rather than the cache growing without bound.
+    //
+    // The build runs UNDER the lock on purpose: two queries racing the same shape should join one build, not
+    // each pay for a whole-graph projection and then discard one of them.
+    private const int MaxProjectedShapes = 4;
+
+    internal FactGraphData ProjectedCallGraph(string shapingKey, Func<FactGraphData> build)
+    {
+        lock (_projectedGraphGate)
+        {
+            if (_projectedGraphs.TryGetValue(shapingKey, out var cached))
+            {
+                return cached;
+            }
+
+            var graph = build();
+            if (_projectedGraphs.Count < MaxProjectedShapes)
+            {
+                _projectedGraphs[shapingKey] = graph;
+            }
+
+            return graph;
+        }
+    }
+
+    // Test/diagnostic seam: how many distinct shapes this generation is holding materialized. A query that
+    // does not move this number paid nothing for its graph.
+    internal int ProjectedCallGraphCount
+    {
+        get
+        {
+            lock (_projectedGraphGate)
+            {
+                return _projectedGraphs.Count;
+            }
+        }
+    }
 
     // Compatibility/oracle boundary. Live query and status paths consume this snapshot as an
     // IFactSnapshotView and therefore leave this lazy uncreated.

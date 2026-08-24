@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Globalization;
+using Rig.Analysis.Inventory;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Commands;
 using Rig.Cli.Deployments;
@@ -85,7 +87,7 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
         int? maxGenericWork = null
     )
     {
-        if (Source.Facts is not IIndexedFactSnapshotView indexed)
+        if (Source.Facts is not IIndexedFactSnapshotView)
         {
             if (mode != FactPathFinder.TraversalMode.SyncCut)
             {
@@ -107,27 +109,18 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
             );
         }
 
+        // MATERIALIZED, not projected per query — see MaterializedGraph. `fromPattern`, `maxDepth`, `mode`,
+        // `classifyEventSubscriptions`, `maxNodes` and `maxGenericWork` were the keyed builder's per-query
+        // PROJECTION inputs and have no analogue here: a whole graph has no seed to expand from, no closure
+        // to bound and no node budget to blow, and the traversal that follows applies depth and mode itself.
+        // EventSubscriptionsClassified is FALSE so the command applies MarkEventSubscriptionHandoffs over the
+        // generation's memoized event-site set — the same order the store path uses, and the order
+        // AddDeliveryEdges requires (it must see the unreclassified `+=` methodGroup edges).
         return Task.FromResult(
-            DemandForwardPathGraph.Build(
-                indexed.GraphView,
-                new DemandForwardGraphRules(
-                    Projection: new ForwardCallProjectionRules(
-                        Handoff: shapedRules.Handoff,
-                        Redirect: shapedRules.Redirect,
-                        Factory: shapedRules.Factory,
-                        ClassifyEventSubscriptions: classifyEventSubscriptions
-                    ),
-                    Cut: shapedRules.Cut,
-                    Context: shapedRules.Context,
-                    Delivery: shapedRules.Delivery
-                ),
-                new DemandForwardGraphRequest(
-                    fromPattern,
-                    maxDepth,
-                    mode,
-                    Monomorphization: maxGenericWork is null ? null : new DemandMonomorphizationLimits(MaxWorkUnits: maxGenericWork.Value),
-                    MaxNodes: maxNodes ?? new DemandForwardGraphRequest(fromPattern, maxDepth, mode).MaxNodes
-                )
+            new DemandForwardGraphResult(
+                Graph: MaterializedGraph(shapedRules),
+                Diagnostics: DemandForwardGraphDiagnostics.Materialized(),
+                EventSubscriptionsClassified: false
             )
         );
     }
@@ -177,15 +170,33 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
         DemandReverseCallersGraphRequest request
     )
     {
-        if (Source.Facts is IIndexedFactSnapshotView indexed)
+        var shapedRules = ShapedRulesFor(rules);
+
+        if (Source.Facts is IIndexedFactSnapshotView)
         {
-            // Caps and unsupported projections fail closed in the keyed builder. Do not turn either into an
-            // undisclosed whole-graph answer: WatchHost owns the decision to decline an exact live query.
+            // MATERIALIZED, not projected per query. The keyed reverse builder ran a fixed point that
+            // re-derived the whole graph index once per pass, so its cost was O(passes x graph) and on a
+            // 227-project monorepo (300,961 nodes / 630,932 call edges) it did not terminate in usable time.
+            // The whole graph fits in memory and the store answers the same question off exactly such a graph
+            // in seconds, so materialize it ONCE per generation and let the shared FactPathFinder narrow it —
+            // the store's own model, and the one this adapter's LoadShapedTraversalGraphAsync already serves.
+            //
+            // request.MaxNodes is deliberately NOT applied. It is a DEMAND BUDGET — how much graph a keyed
+            // projection may expand before it must fail closed rather than serve a partial answer — and there
+            // is nothing partial here: the whole graph IS the answer. Enforcing it would decline every query
+            // on any solution larger than the budget, which is precisely the solutions this exists for.
+            var materialized = MaterializedGraph(shapedRules);
             return Task.FromResult(
-                DemandReverseCallersGraph.Build(
-                    indexed.GraphView,
-                    rules.Delivery is null ? rules with { Delivery = Source.Rules.Delivery } : rules,
-                    request
+                new DemandReverseCallersGraphResult(
+                    materialized,
+                    DemandReverseCallersGraphDiagnostics.Materialized(),
+                    MatchedTargetIds(materialized, request.ToPattern),
+                    // Ownership hints are the keyed projection's account of WHICH fact partitions it read, so
+                    // an exact-refinement planner can bound its debt to them. A whole-graph answer read
+                    // everything and can honestly claim no narrower boundary; the command itself never reads
+                    // this field (only ExactCallersRefinement does, off its own direct builder call).
+                    new DemandReverseOwnershipHints([], []),
+                    EventSubscriptionsClassified: false
                 )
             );
         }
@@ -202,7 +213,23 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
             );
         }
 
-        var shapedRules = Source.Rules with
+        var graph = SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules);
+        return Task.FromResult(
+            new DemandReverseCallersGraphResult(
+                graph,
+                DemandReverseCallersGraphDiagnostics.LegacyFallback(),
+                MatchedTargetIds(graph, request.ToPattern),
+                new DemandReverseOwnershipHints([], []),
+                EventSubscriptionsClassified: false
+            )
+        );
+    }
+
+    // The RuleSet a DemandForwardGraphRules describes, resolved against the generation's own rules for the
+    // slices the demand record does not carry. Lifted out of the flattened arm unchanged so both arms shape
+    // (and therefore cache-key) identically.
+    private RuleSet ShapedRulesFor(DemandForwardGraphRules rules) =>
+        Source.Rules with
         {
             Handoff = rules.Projection.Handoff ?? [],
             Redirect = rules.Projection.Redirect ?? [],
@@ -211,23 +238,52 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
             Context = rules.Context,
             Delivery = rules.Delivery ?? Source.Rules.Delivery,
         };
-        var graph = SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules);
-        var targetIds = FactPathFinder
-            .ReachedBy(graph, request.ToPattern, maxDepth: 0, maxNodes: int.MaxValue, mode: request.DiscoveryMode)
-            .Where(pair => pair.Value == 0)
-            .Select(pair => pair.Key)
-            .OrderBy(id => id, StringComparer.Ordinal)
-            .ToImmutableArray();
-        return Task.FromResult(
-            new DemandReverseCallersGraphResult(
-                graph,
-                DemandReverseCallersGraphDiagnostics.LegacyFallback(),
-                targetIds,
-                new DemandReverseOwnershipHints([], []),
-                EventSubscriptionsClassified: false
-            )
-        );
+
+    // The depth-0 entries of the reverse closure — the nodes the target pattern actually names. Through
+    // FactPathFinder.MatchedNodes, which is the SAME matcher over the same node universe the traversal seeds
+    // with; the previous `ReachedBy(maxDepth: 0).Where(v == 0)` returned exactly this set but also built the
+    // reverse maps (a whole-graph dispatch scan) to answer a question that reads no reverse edge.
+    private static ImmutableArray<string> MatchedTargetIds(FactGraphData graph, string toPattern) =>
+        [.. FactPathFinder.MatchedNodes(graph, toPattern).OrderBy(id => id, StringComparer.Ordinal)];
+
+    // THE MATERIALIZED WHOLE GRAPH for this fact generation: the traversal-shaped projection plus its
+    // delivery edges, built once and cached on the SNAPSHOT (FactSnapshot.ProjectedCallGraph), so every
+    // later query in the generation pays nothing.
+    //
+    // ONE GRAPH, NOT ONE PER MODE. Delivery edges are folded in unconditionally, exactly as the store folds
+    // them into `call_edges` when `rig graph` materializes: they carry Kind=handoff plus a DeliveryPrecision,
+    // and TRAVERSAL decides whether to cross them (FactPathFinder.CutsHandoff — SyncCut cuts all of them,
+    // AsyncExact cuts only the Fanout ones, AsyncInclude keeps all). So `--async` / `--include-delivery` cost
+    // no second materialization, and a sync answer is unaffected because every added edge is one it cuts.
+    //
+    // `--raw` is the one shaping variation the live surface can still ask for (it zeroes Factory/Cut/Context,
+    // and those genuinely change the EDGES: factory monomorphization rewrites them, cut/context ride on the
+    // graph and drive BuildIndex). It cannot share the shaped graph, so it gets its own cache slot rather
+    // than its own per-query build — two slots is the whole reachable space, and FactSnapshot caps it.
+    private FactGraphData MaterializedGraph(RuleSet shapedRules) =>
+        Source.Facts is FactSnapshot snapshot
+            ? snapshot.ProjectedCallGraph(ShapingKey(shapedRules), () => BuildMaterializedGraph(shapedRules))
+            : BuildMaterializedGraph(shapedRules);
+
+    // The projection itself. The shaped half reuses the generation's existing traversalGraph memo when the
+    // shaping matches (so a materialized query and a plain LoadShapedTraversalGraphAsync share one build);
+    // the delivery half is LiveReads.DeliverySites + FactPathFinder.AddDeliveryEdges, the same pair
+    // LiveReads.ShapedGraph runs — and, like it, BEFORE any event-subscription reclassification, which
+    // AddDeliveryEdges depends on not having happened yet.
+    private FactGraphData BuildMaterializedGraph(RuleSet shapedRules)
+    {
+        var traversal = SameShapingAsMemo(shapedRules) ? Source.TraversalGraph : LiveFactSource.TraversalGraphOf(Source.Facts, shapedRules);
+        return FactPathFinder.AddDeliveryEdges(traversal, LiveReads.DeliverySites(Source.Facts, shapedRules.Delivery));
     }
+
+    // The cache key: the shaping slices that change the EDGES, by count — the same discriminator, and the
+    // same standing caveat, as SameShapingAsMemo. Widen both together if the live surface ever gains
+    // `--rules`.
+    private static string ShapingKey(RuleSet rules) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"f{rules.Factory.Count}/c{rules.Cut.Count}/x{rules.Context.Count}/d{rules.Delivery.Count}/h{rules.Handoff.Count}/r{rules.Redirect.Count}"
+        );
 
     // Does `shapedRules` shape the graph the same way the memo was shaped? The memo was built with the rules
     // the FACTS were extracted under, and a caller shaping differently must not be silently served the wrong

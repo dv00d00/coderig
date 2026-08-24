@@ -18,4 +18,20 @@ internal static class AnswerStreamParity
 
     public static string WithoutImmutableStoreDisclosure(string stream) =>
         Canonical(string.Join("\n", Canonical(stream).Split('\n').Where(line => !line.StartsWith("store: ", StringComparison.Ordinal))));
+
+    // The resident host's per-generation COST note ("live: derived layer built this generation: traversalGraph
+    // 1.8ms | eventSites 0.2ms"), which WatchHost.ServeAsync appends to a routed answer. It is the exact twin
+    // of the `store: ` provenance line above — a statement about WHO answered and what that cost, not part of
+    // the answer — so a live/store comparison must drop it for the same reason. It is emitted only by the
+    // FIRST query of a generation (later ones built nothing and the line is omitted entirely), so leaving it
+    // in also makes any parity assertion depend on query ORDER.
+    public static string WithoutLiveCostDisclosure(string stream) =>
+        Canonical(
+            string.Join(
+                "\n",
+                Canonical(stream)
+                    .Split('\n')
+                    .Where(line => !line.StartsWith("live: derived layer built this generation:", StringComparison.Ordinal))
+            )
+        );
 }

@@ -18,8 +18,13 @@ public sealed class LiveAsyncDemandExecutionTests
     private const string Handler = "M:N.Handler.Handle";
     private const string Event = "E:N.Publisher.Changed";
 
+    // CHANGED 2026-08-24 (live materialize-once): the delivery-aware graph is no longer projected per query
+    // off keyed partitions — it is the generation's ONE materialized graph, with the delivery edges folded in
+    // the way the store folds them into `call_edges`. The load-bearing assertions are untouched: async
+    // reaches/tree still cross the producer -> handler delivery hop and still land on Handler.Handle, which is
+    // the only way to know the materialized graph really carries delivery edges.
     [Test]
-    public async Task Reaches_and_tree_execute_the_delivery_aware_demand_graph_without_whole_graph_artifacts()
+    public async Task Reaches_and_tree_execute_the_delivery_aware_materialized_graph()
     {
         using var workspace = new AdhocWorkspace();
         var snapshot = Snapshot(workspace.CurrentSolution);
@@ -35,13 +40,14 @@ public sealed class LiveAsyncDemandExecutionTests
         tree.DeclineReason.ShouldBeNull();
         tree.Answer!.Exit.ShouldBe(0, tree.Answer.Text);
         tree.Answer.Out.ShouldContain("Handler.Handle");
+        // The flattened AnalysisResult is still never forced, and the TWO async queries share ONE graph.
         snapshot.FullMaterializationCount.ShouldBe(0);
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "traversalGraph");
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "eventSites");
+        snapshot.ProjectedCallGraphCount.ShouldBe(1);
+        live.BuildTimes.Count(build => build.Artifact == "traversalGraph").ShouldBe(1);
     }
 
     [Test]
-    public async Task Repeated_async_execution_stays_on_the_same_keyed_generation_and_flattened_async_declines()
+    public async Task Repeated_async_execution_stays_on_the_same_materialized_generation_and_flattened_async_declines()
     {
         using var workspace = new AdhocWorkspace();
         var snapshot = Snapshot(workspace.CurrentSolution);
@@ -55,8 +61,9 @@ public sealed class LiveAsyncDemandExecutionTests
         snapshot.FullMaterializationCount.ShouldBe(0);
         live.BuildTimes.Count(build => build.Artifact == "epData").ShouldBe(1);
         live.BuildTimes.Count(build => build.Artifact == "invocations").ShouldBe(1);
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "traversalGraph");
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "eventSites");
+        // ONCE per generation, not once per query — that is the whole point of materializing.
+        live.BuildTimes.Count(build => build.Artifact == "traversalGraph").ShouldBe(1);
+        snapshot.ProjectedCallGraphCount.ShouldBe(1);
 
         var flattened = new LiveFactSource(Facts(), rules);
         var declined = await LiveQueryRunner.RunRequestAsync(request, flattened, "/repo");
@@ -71,7 +78,7 @@ public sealed class LiveAsyncDemandExecutionTests
     }
 
     [Test]
-    public async Task Async_tree_partial_sidecar_hit_reloads_only_the_keyed_delivery_graph()
+    public async Task Async_tree_partial_sidecar_hit_reuses_the_materialized_delivery_graph()
     {
         using var workspace = new AdhocWorkspace();
         var snapshot = Snapshot(workspace.CurrentSolution);
@@ -86,8 +93,8 @@ public sealed class LiveAsyncDemandExecutionTests
         filterB.DeclineReason.ShouldBeNull();
         filterB.Answer!.Out.ShouldContain("Handler.Handle");
         snapshot.FullMaterializationCount.ShouldBe(0);
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "traversalGraph");
-        live.BuildTimes.ShouldNotContain(build => build.Artifact == "eventSites");
+        snapshot.ProjectedCallGraphCount.ShouldBe(1);
+        live.BuildTimes.Count(build => build.Artifact == "traversalGraph").ShouldBe(1);
     }
 
     private static LiveQueryRequest Request<T>(string verb, T options) =>

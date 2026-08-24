@@ -944,6 +944,15 @@ public static partial class FactPathFinder
         return ReachedByCore(index, rev, toPattern, maxDepth, maxNodes);
     }
 
+    // The graph's MATCHED SEED NODES for a pattern — precisely the depth-0 entries of a ReachedBy closure,
+    // and nothing else. `ReachedBy(graph, p, maxDepth: 0).Where(kv => kv.Value == 0)` returns the same set
+    // (both seed through the one MatchNodes matcher over the same index.Nodes universe), but it additionally
+    // runs BuildReverseMaps — a whole-graph receiver-blind dispatch scan that dominates the call and that a
+    // depth-0 answer never reads a single edge of. Exposed for the callers path, which needs the matched
+    // target ids beside its own traversal and was paying for a second reverse-map build to get them.
+    // Semantics-free: no traversal, no reachability, just "which nodes does this pattern name".
+    public static IReadOnlyList<string> MatchedNodes(FactGraphData graph, string pattern) => MatchNodes(BuildIndex(graph).Nodes, pattern);
+
     // The reverse-BFS core, factored out so a caller that ALREADY holds the index + reverse maps can reuse
     // them instead of rebuilding. EntryRootsReaching builds both for its own no-predecessor root check and
     // then needs this same closure — calling ReachedBy() rebuilt index + reverse maps a second time, and
