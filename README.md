@@ -72,7 +72,7 @@ Stores are **per-commit** — `--at <sha>` reads any previously indexed commit. 
 | `rig derive` | Re-derive effects + entry points from facts (no Roslyn). `--list-providers` dumps the effective vocabulary |
 | `rig tree <pat>` | The call tree from an entry point. `--view paths\|full\|effects\|summary\|hazards` · `--guards` for branch conditions · `--async` for handoffs · `--format llm\|llm-ids\|tsv` |
 | `rig reaches <pat>` | Flat list of effects reachable from an entry point |
-| `rig callers <pat>` | Reverse reachability. `--entrypoints` (precise) or `--roots` (superset) |
+| `rig callers <pat>` | Reverse reachability. `--entrypoints` (precise) or `--roots` (superset); `--no-cache` bypasses the cached entry-point derivation |
 | `rig path <from> <to>` | One concrete call path between two symbols |
 | `rig impact --base <sha> --head <sha>` | Two-store diff: per-EP effect + reach changes. `--structural` for the full ripple · `--expect-no-effect-change` as a CI gate |
 | `rig effects-diff <a> <b>` | Symmetric difference of two entry points' effect sets |
