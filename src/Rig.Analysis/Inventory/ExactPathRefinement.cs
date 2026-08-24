@@ -87,34 +87,71 @@ internal sealed record ExactForwardPlan(
     string? UnavailableReason
 ) : IExactDebtPlan;
 
+// See ExactCallersBoundarySource — the same seam, for the forward planner. The keyed builder is retained
+// ONLY as the differential oracle (PlannerMaterializedGraphTests); the routed path never takes it.
+internal enum ExactForwardBoundarySource
+{
+    MaterializedGraph,
+    KeyedDemand,
+}
+
 internal static class ExactForwardRefinement
 {
-    internal static ExactForwardPlan Plan(FactSnapshot snapshot, ExactForwardDemand demand)
+    internal static ExactForwardPlan Plan(FactSnapshot snapshot, ExactForwardDemand demand) =>
+        Plan(snapshot, demand, ExactForwardBoundarySource.MaterializedGraph);
+
+    internal static ExactForwardPlan Plan(FactSnapshot snapshot, ExactForwardDemand demand, ExactForwardBoundarySource source)
     {
-        DemandForwardGraphResult load;
+        // MATERIALIZED, not projected per query — the same fix ExactCallersRefinement carries, and for the
+        // same measured reason. DemandForwardPathGraph.Build ran a fixed point whose every pass called
+        // FactPathFinder.Reaches over the partial snapshot, and Reaches rebuilds the whole graph index from
+        // scratch on each call: cost O(passes x graph), with passes ~ closure depth. ResidentIndex loops this
+        // planner up to 12 times before the query even starts. The whole projected call graph is materialized
+        // ONCE per fact generation and shared with the query that follows (FactSnapshot.ProjectedCallGraph),
+        // so the planner's traversal costs one BFS instead of thousands of index rebuilds.
+        FactGraphData graph;
+        IReadOnlyDictionary<string, int> reachable;
+        (IReadOnlyCollection<string> SymbolIds, IReadOnlyCollection<string> EmitterFilePaths) delivery;
         try
         {
-            load = DemandForwardPathGraph.Build(
-                snapshot.GraphView,
-                demand.Rules,
-                new DemandForwardGraphRequest(demand.FromPattern, demand.MaxDepth, demand.Mode)
+            if (source == ExactForwardBoundarySource.KeyedDemand)
+            {
+                var load = DemandForwardPathGraph.Build(
+                    snapshot.GraphView,
+                    demand.Rules,
+                    new DemandForwardGraphRequest(demand.FromPattern, demand.MaxDepth, demand.Mode)
+                );
+                graph = load.Graph;
+                delivery = (load.Ownership?.SymbolIds ?? [], load.Ownership?.EmitterFilePaths ?? []);
+            }
+            else
+            {
+                graph = snapshot.ProjectedCallGraph(demand.Rules);
+                delivery = ([], []);
+            }
+
+            reachable = FactPathFinder.Reaches(
+                graph,
+                demand.FromPattern,
+                maxDepth: demand.MaxDepth,
+                maxNodes: int.MaxValue,
+                mode: demand.Mode
             );
+            if (source == ExactForwardBoundarySource.MaterializedGraph)
+            {
+                delivery = DeliveryBoundary(graph, reachable, demand);
+            }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return Unavailable($"demand topology could not be materialized: {exception.Message}");
         }
 
+        // Endpoint matching is UNCHANGED: it never came from the demand load, it matches the pattern against
+        // the generation's whole method catalog. Left exactly as it was.
         var catalog = snapshot.GraphView.MethodSymbolIds.ToArray();
         var fromIds = FactPathFinder.DistinctMatchTargets(catalog, demand.FromPattern);
         IReadOnlyList<string> toIds = demand.ToPattern is null ? [] : FactPathFinder.DistinctMatchTargets(catalog, demand.ToPattern);
-        var reachable = FactPathFinder.Reaches(
-            load.Graph,
-            demand.FromPattern,
-            maxDepth: demand.MaxDepth,
-            maxNodes: int.MaxValue,
-            mode: demand.Mode
-        );
 
         var boundaryProjects = ImmutableHashSet.CreateBuilder<ProjectId>();
         var boundaryFiles = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
@@ -161,7 +198,7 @@ internal static class ExactForwardRefinement
         // Delivery joins read subscription/registration and producer partitions that can sit outside the
         // ordinary call closure. They are query inputs, so their emitters participate in the same exact
         // ownership boundary; otherwise an edited handler/channel could leave a plausible stale answer.
-        foreach (var symbolId in load.Ownership?.SymbolIds ?? [])
+        foreach (var symbolId in delivery.SymbolIds)
         {
             foreach (var row in snapshot.GraphView.SymbolsById(MonomorphizedNodeId.BaseOf(symbolId)))
             {
@@ -171,7 +208,7 @@ internal static class ExactForwardRefinement
                 }
             }
         }
-        foreach (var emitterPath in load.Ownership?.EmitterFilePaths ?? [])
+        foreach (var emitterPath in delivery.EmitterFilePaths)
         {
             if (!TryAddDeliveryOwnership(emitterPath, assemblyName: null, out var reason))
             {
@@ -262,6 +299,57 @@ internal static class ExactForwardRefinement
 
         ExactForwardPlan Unavailable(string reason) =>
             new(ImmutableHashSet<ProjectId>.Empty, ImmutableHashSet<ProjectId>.Empty, false, false, reason);
+    }
+
+    // THE DELIVERY HALF of the boundary — what the keyed builder reported as `Ownership`, and the ONE input
+    // here that is not a straight translation. Its Ownership was a READ LOG of DemandDeliverySiteSource: every
+    // row that source touched while projecting the channels the forward closure produces on, which includes
+    // registration/producer sites the call closure itself never enters. A whole-graph answer has no read log,
+    // so the analogue is reconstructed from the graph's own edges:
+    //
+    //   * a DELIVERY edge (DeliveryPrecision is non-null — AddDeliveryEdges is the only writer) whose PRODUCER
+    //     is in the closure: its FilePath is the publish site, its Callee the handler. Under AsyncExact the
+    //     Fanout half of a channel is cut from the traversal, so the handler is admitted here even when it is
+    //     not reachable — the same over-approximation the keyed read log made by reading the whole channel.
+    //   * a METHODGROUP edge that BINDS a node in the closure: its FilePath is the registration site
+    //     (`someEvent += H`, `Subscribe(H)`), which is exactly what AddDeliveryEdges joins on and is where a
+    //     handler is added or removed. Editing it changes what the producer reaches.
+    //
+    // GATED IDENTICALLY to the keyed builder (ExpandDeliveryChannels returns immediately on SyncCut or with no
+    // delivery rules), so the DEFAULT sync `path`/`reaches`/`tree` plan is a provably empty contribution —
+    // there, the conversion is a pure graph swap with nothing to reconstruct.
+    private static (IReadOnlyCollection<string> SymbolIds, IReadOnlyCollection<string> EmitterFilePaths) DeliveryBoundary(
+        FactGraphData graph,
+        IReadOnlyDictionary<string, int> reachable,
+        ExactForwardDemand demand
+    )
+    {
+        if (demand.Mode == FactPathFinder.TraversalMode.SyncCut || demand.Rules.Delivery is not { Count: > 0 })
+        {
+            return ([], []);
+        }
+
+        var symbols = new HashSet<string>(StringComparer.Ordinal);
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var edge in graph.CallEdges)
+        {
+            var publishesFromClosure = edge.DeliveryPrecision is not null && reachable.ContainsKey(edge.Caller);
+            var bindsIntoClosure =
+                string.Equals(edge.Kind, EdgeKinds.MethodGroup, StringComparison.Ordinal) && reachable.ContainsKey(edge.Callee);
+            if (!publishesFromClosure && !bindsIntoClosure)
+            {
+                continue;
+            }
+
+            symbols.Add(MonomorphizedNodeId.BaseOf(edge.Caller));
+            symbols.Add(MonomorphizedNodeId.BaseOf(edge.Callee));
+            if (!string.IsNullOrWhiteSpace(edge.FilePath))
+            {
+                files.Add(edge.FilePath);
+            }
+        }
+
+        return (symbols, files);
     }
 
     internal static ImmutableHashSet<ProjectId> ProjectDependencyClosure(Solution solution, IEnumerable<ProjectId> seeds, bool reverse)

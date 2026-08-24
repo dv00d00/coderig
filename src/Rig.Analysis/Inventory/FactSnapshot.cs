@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using Microsoft.CodeAnalysis;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 
 namespace Rig.Analysis.Inventory;
 
@@ -187,6 +189,83 @@ internal sealed class FactSnapshot : IIndexedFactSnapshotView
             }
 
             return graph;
+        }
+    }
+
+    // The SAME materialized graph, addressed by a demand's shaping instead of by a caller-computed key —
+    // the form the exact-refinement PLANNERS want. They live in this assembly and never see a RuleSet (a
+    // demand carries only the slices that shape edges), so without this overload a planner would have to
+    // re-derive both the key and the projection and would then miss the query arm's cache slot entirely.
+    //
+    // KEY PARITY WITH THE QUERY ARM IS THE POINT. LiveQueryFactSource.ShapingKey formats exactly this
+    // string from the RuleSet it resolved the demand against, so a planner and the query it precedes share
+    // ONE slot and therefore ONE build per generation: the planner's materialization is not an added cost,
+    // it is the query's cost paid earlier. The one reachable divergence is a demand with a NULL Delivery
+    // slice — the query arm resolves that against the host's own rules while this shapes with none — so the
+    // two take separate slots (correct, just unshared). LiveQueryRunner always supplies the slice; only
+    // hand-built test demands leave it null.
+    internal FactGraphData ProjectedCallGraph(DemandForwardGraphRules rules) =>
+        ProjectedCallGraph(DemandShapingKey(rules), () => BuildProjectedCallGraph(rules));
+
+    // The same two steps LiveQueryFactSource.BuildMaterializedGraph runs, over this generation's segmented
+    // view: the traversal-shaped projection (LiveFactSource.TraversalGraphOf's body) followed by
+    // AddDeliveryEdges — and, like it, deliberately BEFORE any event-subscription reclassification, which
+    // AddDeliveryEdges depends on not having happened yet. Delivery edges are folded in unconditionally
+    // because TRAVERSAL, not materialization, decides whether to cross them: one graph serves every mode.
+    private FactGraphData BuildProjectedCallGraph(DemandForwardGraphRules rules)
+    {
+        var traversal = FactPathFinder.ShapeGraph(
+            graph: FactGraphProjection.FromView(
+                this,
+                handoffRules: rules.Projection.Handoff ?? [],
+                redirectRules: rules.Projection.Redirect ?? []
+            ),
+            factoryRules: rules.Projection.Factory ?? [],
+            cutRules: rules.Cut,
+            contextRules: rules.Context,
+            monomorphizeSignatures: LiveReads.MonomorphizationSignatures(this)
+        );
+        return FactPathFinder.AddDeliveryEdges(traversal, LiveReads.DeliverySites(this, rules.Delivery ?? []));
+    }
+
+    // Byte-for-byte the format LiveQueryFactSource.ShapingKey emits, so both arms address one slot. Widen
+    // BOTH together if the live surface ever gains a flag that shapes edges some other way.
+    private static string DemandShapingKey(DemandForwardGraphRules rules) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"f{rules.Projection.Factory?.Count ?? 0}/c{rules.Cut.Count}/x{rules.Context.Count}/d{rules.Delivery?.Count ?? 0}/h{rules.Projection.Handoff?.Count ?? 0}/r{rules.Projection.Redirect?.Count ?? 0}"
+        );
+
+    // Carry another generation's materialized graphs onto this one, when the two are FACT-IDENTICAL.
+    //
+    // The only caller is ResidentIndex.WithRevision, which rebuilds a snapshot with the same base facts, the
+    // same overlay and the same segmented graph — everything the projection is a function of — and changes
+    // ONLY the revision stamp, so an exact refinement can publish its fixed point through one CAS. Without
+    // this, that publish threw away a graph it had just paid for and the first query on the new generation
+    // rebuilt an identical one: after every edit, TWO whole-graph projections (the planner's and the query's)
+    // where the facts justify one. The guard is reference identity on both fact halves; anything else copies
+    // nothing rather than aliasing a graph to facts it was not projected from.
+    internal void InheritProjectedCallGraphsFrom(FactSnapshot source)
+    {
+        if (!ReferenceEquals(source.BaseFacts, BaseFacts) || !ReferenceEquals(source.Overlay, Overlay))
+        {
+            return;
+        }
+
+        // One lock at a time, never nested: two snapshots can never legitimately inherit from each other,
+        // but a lock-order hazard that only "can't happen" is not worth leaving in a publication path.
+        KeyValuePair<string, FactGraphData>[] carried;
+        lock (source._projectedGraphGate)
+        {
+            carried = [.. source._projectedGraphs];
+        }
+
+        lock (_projectedGraphGate)
+        {
+            foreach (var (key, graph) in carried)
+            {
+                _projectedGraphs[key] = graph;
+            }
         }
     }
 

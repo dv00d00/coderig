@@ -206,10 +206,25 @@ public sealed class LiveCallersExactIntegrationTests
         disclosure.ShouldNotContain("derived layer built this generation");
     }
 
+    // CHANGED 2026-08-24 (planner materialize-once): was `disclosure.ShouldContain("traversalGraph")`.
+    //
+    // This is an INSTRUMENTATION assertion, not a claim about the answer or the plan — both are asserted
+    // unchanged above. It pinned WHICH memo built the generation's graph, and that moved: the exact-callers
+    // PLANNER now derives its debt boundary from the same materialized graph the query traverses
+    // (ExactCallersRefinement -> FactSnapshot.ProjectedCallGraph), and the planner runs BEFORE the query on
+    // the routed path. So the generation's ONE build happens inside the planner and the query finds the
+    // snapshot's cache slot already warm — LiveFactSource's `traversalGraph` memo is never forced and
+    // contributes no BuildTimes row. Asserting its ABSENCE is the same single-build claim, read from the
+    // other side: if the query had built a second graph, this row would be back.
+    //
+    // KNOWN INSTRUMENTATION GAP, recorded rather than papered over: the planner's build is not in
+    // LiveFactSource.BuildTimes, so the "derived layer built this generation" note no longer accounts for
+    // the graph at all. Closing it means recording the snapshot-level build and merging it into BuildTimes,
+    // which is a WatchCommand/LiveFactSource change.
     private static void AssertGraphMaterializedOnce(LiveServeResult answer)
     {
         var disclosure = answer.Disclosure + Environment.NewLine + answer.Err;
-        disclosure.ShouldContain("traversalGraph");
+        disclosure.ShouldNotContain("traversalGraph");
     }
 
     private static string WithoutLoadBanner(string stream) =>

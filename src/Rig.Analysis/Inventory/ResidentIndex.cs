@@ -608,8 +608,9 @@ internal sealed class ResidentIndex : IDisposable
         return ExactForwardRefinementOutcome.Unavailable(basis, $"exact {demand.Verb} refinement did not converge");
     }
 
-    private FactSnapshot WithRevision(FactSnapshot snapshot, FactRevision revision) =>
-        new(
+    private FactSnapshot WithRevision(FactSnapshot snapshot, FactRevision revision)
+    {
+        var stamped = new FactSnapshot(
             revision,
             snapshot.Solution,
             _baseResult,
@@ -620,6 +621,13 @@ internal sealed class ResidentIndex : IDisposable
             _graphBase,
             snapshot.GraphOverlay
         );
+        // Only the revision moved — same base facts, same overlay, same segmented graph — so anything the
+        // refinement already materialized off those facts is still exactly right for this generation. The
+        // exact-callers planner materializes the whole projected call graph to derive its debt boundary; not
+        // carrying it here made the publish discard it and the very next query rebuild an identical one.
+        stamped.InheritProjectedCallGraphsFrom(snapshot);
+        return stamped;
+    }
 
     private sealed record SurfaceCandidateBuild(FactSnapshot Snapshot, ImmutableHashSet<ProjectId> FailedOrigins)
     {
