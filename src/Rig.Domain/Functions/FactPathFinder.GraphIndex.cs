@@ -1,10 +1,106 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
 
 public static partial class FactPathFinder
 {
+    // ── Derived-structure MEMO, keyed on GRAPH IDENTITY ────────────────────────────────────────────
+    //
+    // BuildIndex / BuildReverseMaps are pure functions of (graph, narrowDispatch[, mode]) — they read
+    // ONLY the graph's own collections (CallEdges / Methods / ImplementsEdges / BaseEdges / MinedDispatch
+    // / CutRules / ContextRules). FactGraphData is a positional record with init-only IReadOnlyList
+    // members, and every transform in the pipeline (FactDelegateFieldJoin.Apply, ShapeGraph,
+    // RewriteGenericFactories, GenericMonomorphizer.Materialize, MarkEventSubscriptionHandoffs,
+    // FactHotspotReport's collapse) produces a NEW record via `with` rather than mutating in place —
+    // so object identity is a sound cache key: a graph object's content never changes after construction,
+    // and a changed graph is always a different object.
+    //
+    // Before this memo, BOTH structures were rebuilt from scratch inside EVERY traversal (a whole-graph
+    // scan each: adjacency + sort + dispatch maps, then a receiver-blind/per-edge dispatch inversion). A
+    // resident host serving several queries against one materialized generation paid that repeatedly.
+    //
+    // ConditionalWeakTable holds the graph WEAKLY and the memo entry lives exactly as long as the graph:
+    // a retired generation's graph becomes collectable the moment the host drops it, taking its index and
+    // reverse maps with it. A strong-referenced Dictionary<FactGraphData, …> would pin every generation's
+    // multi-GB derived state forever — the reason this is NOT a plain static dictionary.
+    private static readonly ConditionalWeakTable<FactGraphData, GraphDerivedMemo> DerivedMemo = new();
+
+    // Diagnostics: how many full builds this GRAPH's memo has performed. Graph-scoped (not a global
+    // counter) so a concurrently-running query over a different graph cannot perturb the reading — which
+    // is what lets GraphIndexMemoTests assert "a generation builds each structure once, not once per
+    // traversal" deterministically. Returns (0, 0) for a graph the memo has never seen.
+    private static (long Indexes, long ReverseMaps) DerivedBuildCounts(FactGraphData graph) =>
+        DerivedMemo.TryGetValue(graph, out var memo)
+            ? (Interlocked.Read(ref memo.IndexBuilds), Interlocked.Read(ref memo.ReverseMapBuilds))
+            : (0L, 0L);
+
+    private sealed class GraphDerivedMemo
+    {
+        public long IndexBuilds;
+        public long ReverseMapBuilds;
+
+        // Keyed by narrowDispatch: the flag is READ during traversal (index.NarrowDispatch gates receiver
+        // narrowing in Successors/DispatchTargets), so the two variants are NOT interchangeable and must
+        // not share an entry. Lazy with ExecutionAndPublication: ConcurrentDictionary's value factory can
+        // run concurrently, so the Lazy is what guarantees exactly one build and that no thread can ever
+        // observe a half-built index (racing threads block on the Lazy and get the finished object).
+        public readonly ConcurrentDictionary<bool, Lazy<GraphIndex>> Indexes = new();
+
+        // Keyed by (narrowDispatch, mode): narrowDispatch selects per-edge-narrowed vs receiver-blind
+        // ReverseDispatch, and mode drives CutsHandoff (which caller edges are kept at all).
+        public readonly ConcurrentDictionary<(bool NarrowDispatch, TraversalMode Mode), Lazy<ReverseMaps>> ReverseMapsByKey = new();
+
+        // ONE strict-descendant closure cache per GRAPH, shared by every index built from it. The closure
+        // is a pure function of graph.BaseEdges (identical across every index from this graph), so this is
+        // the graph-scoped generalisation of the old `descendantsFrom` hand-off between the outer index
+        // and BuildReverseMaps' internal one — now every index over the graph shares it by construction.
+        public readonly ConcurrentDictionary<string, HashSet<string>> DescendantsCache = new(StringComparer.Ordinal);
+    }
+
+    // The memoised entry points. Identical results to the Core builders below — this is a pure caching
+    // layer; no traversal semantics change.
+    private static GraphIndex BuildIndex(FactGraphData graph, bool narrowDispatch = true)
+    {
+        var memo = DerivedMemo.GetValue(graph, static _ => new GraphDerivedMemo());
+        return memo
+            .Indexes.GetOrAdd(
+                narrowDispatch,
+                static (nd, state) =>
+                    new Lazy<GraphIndex>(
+                        () =>
+                        {
+                            Interlocked.Increment(ref state.Memo.IndexBuilds);
+                            return BuildIndexCore(state.Graph, nd, state.Memo.DescendantsCache);
+                        },
+                        LazyThreadSafetyMode.ExecutionAndPublication
+                    ),
+                (Graph: graph, Memo: memo)
+            )
+            .Value;
+    }
+
+    private static ReverseMaps BuildReverseMaps(FactGraphData graph, bool narrowDispatch = true, TraversalMode mode = TraversalMode.SyncCut)
+    {
+        var memo = DerivedMemo.GetValue(graph, static _ => new GraphDerivedMemo());
+        return memo
+            .ReverseMapsByKey.GetOrAdd(
+                (narrowDispatch, mode),
+                static (key, state) =>
+                    new Lazy<ReverseMaps>(
+                        () =>
+                        {
+                            Interlocked.Increment(ref state.Memo.ReverseMapBuilds);
+                            return BuildReverseMapsCore(state.Graph, key.NarrowDispatch, key.Mode);
+                        },
+                        LazyThreadSafetyMode.ExecutionAndPublication
+                    ),
+                (Graph: graph, Memo: memo)
+            )
+            .Value;
+    }
+
     private sealed class ReverseMaps
     {
         public Dictionary<string, List<string>> Callers = new(StringComparer.Ordinal);
@@ -31,17 +127,11 @@ public static partial class FactPathFinder
         public bool NarrowDispatch = true;
     }
 
-    // descendantsFrom: when the caller already holds an index built from the SAME graph, its
-    // DescendantsCache is shared into the internal index below — the strict-descendant closure is a pure
-    // function of graph.BaseEdges (identical across every index from this graph), so a set cached via one
-    // index is valid for the other. Lets each type's descendants be computed ONCE per command (the dispatch
-    // scan here + the caller's later Predecessors hops) instead of once per index.
-    private static ReverseMaps BuildReverseMaps(
-        FactGraphData graph,
-        bool narrowDispatch = true,
-        TraversalMode mode = TraversalMode.SyncCut,
-        GraphIndex? descendantsFrom = null
-    )
+    // The uncached build. The old `descendantsFrom` parameter is gone: the strict-descendant closure cache
+    // is now GRAPH-scoped (GraphDerivedMemo.DescendantsCache), so the internal index below and the caller's
+    // own index already share one instance by construction — each type's descendants are still computed
+    // once per command, and now once per GRAPH rather than once per command.
+    private static ReverseMaps BuildReverseMapsCore(FactGraphData graph, bool narrowDispatch, TraversalMode mode)
     {
         var rev = new ReverseMaps { NarrowDispatch = narrowDispatch };
 
@@ -50,12 +140,6 @@ public static partial class FactPathFinder
         // the per-edge narrowed inversion (true mode, passing the real receiver) and the per-node blind
         // inversion (false mode, passing null) — exactly mirroring the forward walk.
         var index = BuildIndex(graph, narrowDispatch: false);
-        // Share the caller's descendant-closure cache (see descendantsFrom note) so the dispatch resolution
-        // here and the caller's later Descendants() hops compute each type's strict descendants once.
-        if (descendantsFrom is not null)
-        {
-            index.DescendantsCache = descendantsFrom.DescendantsCache;
-        }
 
         // Memoise DispatchTargets per (hub B, stripped receiver R) — the god-seam has ~49 distinct receivers
         // across ~3,000 call edges into the same hub, so this collapses ~3,000 resolutions to ~49. A distinct
@@ -188,6 +272,8 @@ public static partial class FactPathFinder
     // caller like ImpactEngine holds a TraversalSession and cannot construct or poke at the index itself.
     internal sealed class GraphIndex
     {
+        public GraphIndex(ConcurrentDictionary<string, HashSet<string>> descendantsCache) => DescendantsCache = descendantsCache;
+
         public Dictionary<string, List<CallEdge>> Adjacency = new(StringComparer.Ordinal);
 
         // Methods keyed by the GENERIC-STRIPPED containing type (Foo`2 / Foo{A,B} -> Foo), so
@@ -222,8 +308,10 @@ public static partial class FactPathFinder
         // Memoised strict-descendant closure per (stripped) base type, so transitive override dispatch
         // doesn't re-BFS the hierarchy on every visit during the main traversal. Concurrent so ONE index
         // can be shared across threads (ReachesFromEachSeed's parallel per-seed reach): the cache is pure
-        // idempotent memoization — a racing double-compute yields the same set, harmless.
-        public ConcurrentDictionary<string, HashSet<string>> DescendantsCache = new(StringComparer.Ordinal);
+        // idempotent memoization — a racing double-compute yields the same set, harmless. Supplied by
+        // BuildIndexCore from the GRAPH-scoped memo, so every index over one graph shares a single cache;
+        // readonly because the index is now itself memoised and shared — nothing may swap it out.
+        public readonly ConcurrentDictionary<string, HashSet<string>> DescendantsCache;
         public HashSet<string> Nodes = new(StringComparer.Ordinal);
 
         // When true (the default for the in-memory traversal), virtual/base/interface dispatch is
@@ -280,13 +368,18 @@ public static partial class FactPathFinder
         }
     }
 
-    private static GraphIndex BuildIndex(FactGraphData graph, bool narrowDispatch = true)
+    // The uncached build. Reached only through the memoising BuildIndex above.
+    private static GraphIndex BuildIndexCore(
+        FactGraphData graph,
+        bool narrowDispatch,
+        ConcurrentDictionary<string, HashSet<string>> descendantsCache
+    )
     {
-        var index = new GraphIndex { NarrowDispatch = narrowDispatch };
+        var index = new GraphIndex(descendantsCache) { NarrowDispatch = narrowDispatch };
         // Pre-size the two collections that fill to the full graph size, so they don't resize/rehash ~log2(N)
-        // times from empty as edges/nodes are added (each resize reallocates the backing arrays — pure churn,
-        // and BuildIndex runs on EVERY traversal). Capacities are safe upper bounds (distinct callers <=
-        // edges; distinct nodes <= methods + edge endpoints).
+        // times from empty as edges/nodes are added (each resize reallocates the backing arrays — pure churn).
+        // Capacities are safe upper bounds (distinct callers <= edges; distinct nodes <= methods + edge
+        // endpoints). (This build used to run on EVERY traversal; BuildIndex now memoises it per graph.)
         index.Adjacency.EnsureCapacity(graph.CallEdges.Count);
         index.Nodes.EnsureCapacity(graph.Methods.Count + graph.CallEdges.Count);
         foreach (var edge in graph.CallEdges)
@@ -308,9 +401,10 @@ public static partial class FactPathFinder
         // order is store-independent: same-line edges that share even the callee id are distinguished by
         // Kind/ReceiverType, so a re-index (which reshuffles SQLite rowids) or a parallel-load (which
         // does not preserve insertion order) cannot change child ordering. Line stays primary, so
-        // distinct-line children are unaffected. Adjacency is immutable after this build, and BuildIndex
-        // finishes single-threaded before any (possibly parallel, e.g. ReachesFromEachSeed) traversal
-        // reads the shared index, so the in-place sort is race-free.
+        // distinct-line children are unaffected. Adjacency is immutable after this build, and the build
+        // completes (under the memo's Lazy, so exactly once and fully published) before any (possibly
+        // parallel, e.g. ReachesFromEachSeed) traversal reads the shared index — the in-place sort is
+        // race-free, and no thread can observe a partially-sorted adjacency list.
         foreach (var list in index.Adjacency.Values)
         {
             list.Sort(
