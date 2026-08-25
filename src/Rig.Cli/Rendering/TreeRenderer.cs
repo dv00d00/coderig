@@ -28,6 +28,100 @@ internal sealed record TreeRenderContext(
     internal IReadOnlyDictionary<string, List<string>>? EffectLeavesByMethod { get; init; }
     internal IReadOnlyDictionary<string, string>? HazardsByMethod { get; init; }
     internal bool Guards { get; init; }
+
+    // Prune's elided-edge oracle. A "⋯elided" node carries no children of its own — the subtree is drawn
+    // under the occurrence that WAS expanded — so the per-node SubtreeHasEffect walk cannot see what lies
+    // under it and answers "effectless" for every shared callee. Pruning on that answer deletes the EDGE,
+    // and an edge is where the per-call information lives: its ⎇ guard and its ×N call count. Two sibling
+    // edges to one callee under COMPLEMENTARY guards (`if (p) F(); else F();`) then lose one of the pair,
+    // and the survivor's guard reads as the only condition under which the callee runs — the exact opposite
+    // of the truth (it runs unconditionally). This scope answers the question at SYMBOL level over the whole
+    // rendered forest instead, so an elided edge is kept whenever the callee it names reaches an effect.
+    // Populated by RenderTreeNode (prune only); shared across the forest's roots because one context
+    // instance serves them all, in the same order BuildTree walked them.
+    internal ElidedEffectScope ElidedEffects { get; init; } = new ElidedEffectScope();
+}
+
+// Symbol-level "does this callee reach an effect?" over the rendered forest — the only sound way to answer
+// that for a "⋯elided" node, whose own child list is empty by construction. Deliberately keyed on SYMBOL,
+// not on node identity: an elided node is a REFERENCE to the subtree rendered under another occurrence of
+// the same symbol, so the union over occurrences is precisely the information the placeholder stands for.
+// Node-level pruning of EXPANDED nodes is unchanged (still the exact per-position walk); this only decides
+// the elided placeholders.
+internal sealed class ElidedEffectScope
+{
+    private readonly HashSet<string> _reachesEffect = new HashSet<string>(StringComparer.Ordinal);
+
+    internal bool ReachesEffect(string symbolId) => _reachesEffect.Contains(symbolId);
+
+    // Whole-forest seed — the preferred form when the caller holds the forest (the llm/llm-ids renderers do),
+    // since it is order-independent: every root is folded in before the first prune question is asked.
+    internal void Observe(IReadOnlyList<TraceNode> forest, IReadOnlyDictionary<string, List<string>> effectsByMethod)
+    {
+        foreach (var root in forest)
+        {
+            Observe(root, effectsByMethod);
+        }
+    }
+
+    // Folds one root's symbol graph in: seed every symbol that carries an effect (or that a previously
+    // observed root already proved effect-reaching), then propagate BACKWARDS over caller edges — a symbol
+    // reaches an effect iff it calls one that does. Child edges are collected from EVERY node including
+    // truncated ones, which is what lets a chain of elided hops resolve. Bounded by the rendered node count.
+    internal void Observe(TraceNode root, IReadOnlyDictionary<string, List<string>> effectsByMethod)
+    {
+        var callers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var symbols = new List<string>();
+
+        void Walk(TraceNode n)
+        {
+            symbols.Add(n.SymbolId);
+            foreach (var c in n.Children)
+            {
+                if (!callers.TryGetValue(c.SymbolId, out var parents))
+                {
+                    callers[c.SymbolId] = parents = new List<string>();
+                }
+
+                parents.Add(n.SymbolId);
+                Walk(c);
+            }
+        }
+
+        Walk(root);
+
+        var queue = new Queue<string>();
+        foreach (var sym in symbols)
+        {
+            if (effectsByMethod.ContainsKey(sym))
+            {
+                _reachesEffect.Add(sym);
+            }
+
+            // Already known effect-reaching (own effect above, or carried over from an earlier root): it must
+            // still be re-propagated through THIS root's caller edges, so it seeds the walk either way.
+            if (_reachesEffect.Contains(sym))
+            {
+                queue.Enqueue(sym);
+            }
+        }
+
+        while (queue.Count > 0)
+        {
+            if (!callers.TryGetValue(queue.Dequeue(), out var parents))
+            {
+                continue;
+            }
+
+            foreach (var parent in parents)
+            {
+                if (_reachesEffect.Add(parent))
+                {
+                    queue.Enqueue(parent);
+                }
+            }
+        }
+    }
 }
 
 // The call-tree renderer: the box-drawing tree (RenderTreeNode), the single-impl-hop fold, the effect
@@ -189,19 +283,35 @@ internal static class TreeRenderer
         }
     }
 
-    // True when this node directly has an effect or any descendant does. A "⋯elided" (Truncated) node
-    // has no children here, so only its own effect counts — that's sound: the effects under the
-    // method's real subtree are printed under its first (expanded) occurrence, so nothing is lost.
-    internal static bool SubtreeHasEffect(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
+    // True when this node directly has an effect or any descendant does — the prune predicate.
+    //
+    // A "⋯elided" (Truncated) node has no children here, so the walk below can see nothing under it. The
+    // old rule stopped there and called it effectless, on the reasoning that "the effects under the method's
+    // real subtree are printed under its first (expanded) occurrence, so nothing is lost". Effects are not
+    // lost — but the EDGE is, and an edge carries information no other occurrence can supply: its ⎇ guard,
+    // its ×N call count, the plain fact that THIS caller calls that callee. `if (p) F(); else F();` yields
+    // two sibling edges under complementary guards; dropping the elided one leaves `F ⎇ [p]` — a call that
+    // in fact runs on BOTH paths, rendered as conditional. So an elided node consults the forest-wide,
+    // symbol-level scope instead. Passing no scope keeps the old (placeholder-local) answer.
+    internal static bool SubtreeHasEffect(
+        TraceNode node,
+        IReadOnlyDictionary<string, List<string>> effectsByMethod,
+        ElidedEffectScope? elided = null
+    )
     {
         if (effectsByMethod.ContainsKey(node.SymbolId))
         {
             return true;
         }
 
+        if (node.Truncated)
+        {
+            return elided is not null && elided.ReachesEffect(node.SymbolId);
+        }
+
         foreach (var c in node.Children)
         {
-            if (SubtreeHasEffect(c, effectsByMethod))
+            if (SubtreeHasEffect(c, effectsByMethod, elided))
             {
                 return true;
             }
@@ -212,8 +322,19 @@ internal static class TreeRenderer
 
     // Renders the call tree with box-drawing connectors (├─ └─ │). When pruning, a node's VISIBLE
     // children are filtered first so the last visible child gets └─ correctly. The root prints flush-left.
-    internal static void RenderTreeNode(TraceNode node, TreeRenderContext context) =>
+    internal static void RenderTreeNode(TraceNode node, TreeRenderContext context)
+    {
+        // Prune only: fold this root into the elided-edge scope BEFORE rendering it, so a "⋯elided" edge is
+        // judged by what its callee actually reaches rather than by its (always empty) placeholder children.
+        // Roots are observed in render order — the same order BuildTree walked them, so the occurrence that
+        // got expanded is always observed no later than the elided edges that refer to it.
+        if (context.Prune)
+        {
+            context.ElidedEffects.Observe(node, context.EffectsByMethod);
+        }
+
         RenderTreeNode(node, context, TreeRenderPosition.Root);
+    }
 
     private static void RenderTreeNode(TraceNode node, TreeRenderContext context, TreeRenderPosition position)
     {
@@ -241,7 +362,9 @@ internal static class TreeRenderer
         // Compute visible children first — the fan-out label must reflect how many branches are
         // actually rendered (pruning may drop effectless children, making ×2 fan-out misleading
         // when only 1 child survives).
-        var children = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)).ToList() : node.Children.ToList();
+        var children = prune
+            ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod, context.ElidedEffects)).ToList()
+            : node.Children.ToList();
         // Plain mode: pure indentation, no vertical guides — children indent 2 spaces per level (the root prints
         // flush-left, but ITS children still indent). Box-drawing mode: the standard ├─/└─ guides with the │
         // continuation lane, and the root contributes no prefix (its children align under it).
@@ -400,7 +523,7 @@ internal static class TreeRenderer
         {
             // Lines-hidden is the rendered subtree size; the effect union is the REALISTIC reach-closure
             // set (precomputed), falling back to the subtree walk when no closure was supplied.
-            var (subtreeEffects, hidden) = SummarizeSubtrees(children, prune, effectsByMethod);
+            var (subtreeEffects, hidden) = SummarizeSubtrees(children, prune, effectsByMethod, context.ElidedEffects);
             var effects = seamEffects.TryGetValue(node.SymbolId, out var realistic) ? realistic : subtreeEffects;
             // Aggregated provider:operation tallies are few; the cap mainly bounds the raw-subtree fallback.
             const int cap = 30;
@@ -506,7 +629,8 @@ internal static class TreeRenderer
     private static (List<string> Effects, int Nodes) SummarizeSubtrees(
         IReadOnlyList<TraceNode> nodes,
         bool prune,
-        IReadOnlyDictionary<string, List<string>> effectsByMethod
+        IReadOnlyDictionary<string, List<string>> effectsByMethod,
+        ElidedEffectScope? elided = null
     )
     {
         var effects = new List<string>();
@@ -527,7 +651,7 @@ internal static class TreeRenderer
                 }
             }
 
-            var kids = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)) : node.Children;
+            var kids = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod, elided)) : node.Children;
             foreach (var child in kids)
             {
                 Walk(child);

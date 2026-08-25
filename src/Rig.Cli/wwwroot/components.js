@@ -19,11 +19,49 @@ export function filterEffects(effs, mode, tokens) {
     ? effs.filter((e) => toks.some((t) => effMatch(e, t)))
     : effs.filter((e) => !toks.some((t) => effMatch(e, t)));
 }
+// Symbol-level "does this callee reach an effect?" over the whole forest — the only sound answer for a
+// `truncated` node, whose own `children` is empty by construction (its subtree is drawn under the occurrence
+// that WAS expanded). Filter-dependent, so it is memoised on the ctx built for this render. Mirrors
+// ElidedEffectScope in Rendering/TreeRenderer.cs; the server sends every edge, the prune below is ours.
+function elidedScope(ctx) {
+  if (ctx._elided) return ctx._elided;
+  const callers = new Map(),
+    reach = new Set(),
+    queue = [];
+  const walk = (n) => {
+    if (
+      filterEffects(n.effects, ctx.mode, ctx.tokens).length &&
+      !reach.has(n.id)
+    ) {
+      reach.add(n.id);
+      queue.push(n.id);
+    }
+    for (const c of n.children) {
+      if (!callers.has(c.id)) callers.set(c.id, []);
+      callers.get(c.id).push(n.id);
+      walk(c);
+    }
+  };
+  (ctx.roots || []).forEach(walk);
+  // Propagate BACKWARDS over caller edges: a symbol reaches an effect iff it calls one that does.
+  while (queue.length) {
+    for (const parent of callers.get(queue.pop()) || [])
+      if (!reach.has(parent)) {
+        reach.add(parent);
+        queue.push(parent);
+      }
+  }
+  ctx._elided = reach;
+  return reach;
+}
+// The paths-view prune predicate. A `truncated` (⋯elided) node answers from elidedScope, NOT from its empty
+// child list: pruning on the placeholder drops the EDGE, and the edge is what carries the per-call guard and
+// call count — so `if (p) F(); else F();` lost one of its two complementary edges and the survivor's
+// guard read as the only condition under which F runs. Same rule, same reason, as the CLI renderers.
 function subtreeHasEffect(node, ctx) {
-  return (
-    filterEffects(node.effects, ctx.mode, ctx.tokens).length > 0 ||
-    node.children.some((c) => subtreeHasEffect(c, ctx))
-  );
+  if (filterEffects(node.effects, ctx.mode, ctx.tokens).length > 0) return true;
+  if (node.truncated) return elidedScope(ctx).has(node.id);
+  return node.children.some((c) => subtreeHasEffect(c, ctx));
 }
 
 // ---- small components ------------------------------------------------------------------------------------
@@ -478,6 +516,8 @@ export function ctxOf(s) {
     effAdded: new Set(ov ? ov.effAdded : []),
     effRemoved: new Set(ov ? ov.effRemoved : []),
     changedOnly: !!(ov && ov.changedOnly),
+    // The forest itself, so the prune can answer an elided edge at symbol level (see elidedScope).
+    roots: s.tree ? s.tree.roots : [],
   };
 }
 

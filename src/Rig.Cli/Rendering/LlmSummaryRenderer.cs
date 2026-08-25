@@ -121,11 +121,16 @@ internal static class LlmSummaryRenderer
     )
     {
         var rules = renderRules ?? FactRenderRules.Empty;
+        // The prune's elided-edge oracle, over the WHOLE forest before any row is emitted: a "⋯elided" node
+        // has no children of its own, so only a symbol-level answer can tell whether the callee it names
+        // reaches an effect. Without it the prune drops the elided edge along with its ⎇ guard and ×N count.
+        var elided = new ElidedEffectScope();
+        elided.Observe(roots, rawEffectsByMethod);
         output.WriteLine(Header(projection, guards));
         foreach (var root in roots)
         {
             // EffectfulPaths: prune roots with no downstream effect (same as the terminal default).
-            if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(root, rawEffectsByMethod))
+            if (projection == LlmProjection.EffectfulPaths && !TreeRenderer.SubtreeHasEffect(root, rawEffectsByMethod, elided))
             {
                 continue;
             }
@@ -138,6 +143,7 @@ internal static class LlmSummaryRenderer
                 projection: projection,
                 output: output,
                 suppress: suppress,
+                elided: elided,
                 guards: guards,
                 renderRules: rules
             );
@@ -167,6 +173,9 @@ internal static class LlmSummaryRenderer
     )
     {
         var rules = renderRules ?? FactRenderRules.Empty;
+        // See Render: the elided-edge oracle, forest-wide, built before the first row.
+        var elided = new ElidedEffectScope();
+        elided.Observe(roots, rawEffectsByMethod);
         output.WriteLine(guards ? LlmIdsHeader + "\tguards" : LlmIdsHeader);
 
         // Counter for the next id to emit (1-based, monotonic).
@@ -179,7 +188,7 @@ internal static class LlmSummaryRenderer
 
         foreach (var root in roots)
         {
-            if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(root, rawEffectsByMethod))
+            if (projection == LlmProjection.EffectfulPaths && !TreeRenderer.SubtreeHasEffect(root, rawEffectsByMethod, elided))
             {
                 continue;
             }
@@ -192,6 +201,7 @@ internal static class LlmSummaryRenderer
                 projection: projection,
                 output: output,
                 suppress: suppress,
+                elided: elided,
                 nextId: ref nextId,
                 firstEmissionId: firstEmissionId,
                 parentIdAtDepth: parentIdAtDepth,
@@ -431,25 +441,11 @@ internal static class LlmSummaryRenderer
     // then strips Roslyn generic arity markers (e.g. `N / ``N) from the result.
     internal static string LlmName(string symbolId) => StripArityMarkers(ShortNamePreservingLambda(symbolId));
 
-    // True when this node directly has an effect OR any descendant does (mirrors SubtreeHasEffect in
-    // TreeRenderer — duplicated here to keep the renderer self-contained without a cross-type dependency).
-    private static bool SubtreeHasEffect(TraceNode node, IReadOnlyDictionary<string, List<string>> rawEffectsByMethod)
-    {
-        if (rawEffectsByMethod.ContainsKey(node.SymbolId))
-        {
-            return true;
-        }
-
-        foreach (var c in node.Children)
-        {
-            if (SubtreeHasEffect(c, rawEffectsByMethod))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    // The spine prune is TreeRenderer.SubtreeHasEffect — ONE implementation, not a copy. It used to be
+    // duplicated here "to keep the renderer self-contained"; the copy then had to be fixed twice when the
+    // rule turned out to be wrong for "⋯elided" nodes (it pruned the EDGE and with it that edge's ⎇ guard,
+    // so `if (p) F(); else F();` rendered as a single conditional call). A prune rule that decides which
+    // edges a reader ever sees is a correctness rule, so the llm/llm-ids formats share it by reference.
 
     // Collect all direct effects from a suppressed node and its suppressed-chain descendants,
     // appending into `acc`. Used to roll up effects from suppressed nodes onto the nearest
@@ -492,6 +488,8 @@ internal static class LlmSummaryRenderer
         LlmProjection projection,
         TextWriter output,
         SuppressSet suppress,
+        // Forest-wide elided-edge oracle for the EffectfulPaths prune (see Render).
+        ElidedEffectScope elided,
         bool guards = false,
         FactRenderRules? renderRules = null
     )
@@ -510,7 +508,7 @@ internal static class LlmSummaryRenderer
             foreach (var child in node.Children)
             {
                 // EffectfulPaths: only descend into children whose subtree reaches an effect (spine prune).
-                if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(child, rawEffectsByMethod))
+                if (projection == LlmProjection.EffectfulPaths && !TreeRenderer.SubtreeHasEffect(child, rawEffectsByMethod, elided))
                 {
                     continue;
                 }
@@ -523,6 +521,7 @@ internal static class LlmSummaryRenderer
                     projection: projection,
                     output: output,
                     suppress: suppress,
+                    elided: elided,
                     guards: guards,
                     renderRules: rules
                 );
@@ -634,7 +633,7 @@ internal static class LlmSummaryRenderer
         foreach (var child in node.Children)
         {
             // EffectfulPaths: only descend into children whose subtree reaches an effect (spine prune).
-            if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(child, rawEffectsByMethod))
+            if (projection == LlmProjection.EffectfulPaths && !TreeRenderer.SubtreeHasEffect(child, rawEffectsByMethod, elided))
             {
                 continue;
             }
@@ -647,6 +646,7 @@ internal static class LlmSummaryRenderer
                 projection: projection,
                 output: output,
                 suppress: suppress,
+                elided: elided,
                 guards: guards,
                 renderRules: rules
             );
@@ -709,6 +709,8 @@ internal static class LlmSummaryRenderer
         LlmProjection projection,
         TextWriter output,
         SuppressSet suppress,
+        // Forest-wide elided-edge oracle for the EffectfulPaths prune (see Render).
+        ElidedEffectScope elided,
         ref int nextId,
         Dictionary<string, int> firstEmissionId,
         List<int> parentIdAtDepth,
@@ -727,7 +729,7 @@ internal static class LlmSummaryRenderer
 
             foreach (var child in node.Children)
             {
-                if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(child, rawEffectsByMethod))
+                if (projection == LlmProjection.EffectfulPaths && !TreeRenderer.SubtreeHasEffect(child, rawEffectsByMethod, elided))
                 {
                     continue;
                 }
@@ -740,6 +742,7 @@ internal static class LlmSummaryRenderer
                     projection: projection,
                     output: output,
                     suppress: suppress,
+                    elided: elided,
                     nextId: ref nextId,
                     firstEmissionId: firstEmissionId,
                     parentIdAtDepth: parentIdAtDepth,
@@ -898,7 +901,7 @@ internal static class LlmSummaryRenderer
         var childParentName = LlmName(node.SymbolId);
         foreach (var child in node.Children)
         {
-            if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(child, rawEffectsByMethod))
+            if (projection == LlmProjection.EffectfulPaths && !TreeRenderer.SubtreeHasEffect(child, rawEffectsByMethod, elided))
             {
                 continue;
             }
@@ -911,6 +914,7 @@ internal static class LlmSummaryRenderer
                 projection: projection,
                 output: output,
                 suppress: suppress,
+                elided: elided,
                 nextId: ref nextId,
                 firstEmissionId: firstEmissionId,
                 parentIdAtDepth: parentIdAtDepth,
