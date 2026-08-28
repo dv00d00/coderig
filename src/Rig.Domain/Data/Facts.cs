@@ -616,16 +616,44 @@ public sealed record HandoffEntryPoint(
 // RedirectClassifier. The mapping is authored from the decompiled trampoline bodies (offline aid).
 public sealed record FactRedirectRule(string Method, string RedirectTo);
 
-// FR-7 (cache coherence), reframed as a cache-specific INSTANCE of the generic effect-correlation deriver
-// (FactCorrelationDeriver). The bulk-write/invalidation METHOD names moved out to ordinary effect rules
-// (llblgen:bulk_write / cache:invalidate); this section now only carries the cache-coherence POLICY: the
-// DECLARED-contract cached entities (high-certainty in-scope keys) and an optional generated-ORM-noise
-// namespace-suffix filter (overriding the wiring default). Rule data, not code; projected from the
-// `cacheCoherence` section by FactCacheCoherenceRuleProvider. A single object (not a list).
+// A rule-authored effect selector: a provider, optionally narrowed to one operation (null = any operation of
+// that provider). The RULE-side twin of the domain EffectPredicate the correlation deriver takes — kept in the
+// Data layer so a rule section can name an effect without the Data layer depending on Functions.
+public sealed record FactEffectSelector(string Provider, string? Operation = null);
+
+// FR-7 (cache coherence), a cache-specific INSTANCE of the generic effect-correlation deriver
+// (FactCorrelationDeriver). EVERY effect name this instance needs is rule data — the anchor (the durable write
+// whose cache bust may be missing), the companion (the invalidation), the resource-key normalizers that make
+// the two comparable, and the discovery read that widens the in-scope key set. Core supplies only the
+// correlation MACHINERY; it names no provider, so pointing the detector at another stack (efcore + redis,
+// dapper + inproc_cache) is a rules edit.
+//
+// Anchor and Companion are REQUIRED — a section without both projects to null (detector off). There is
+// deliberately NO built-in fallback pair: a default anchor would silently make one project's ORM the anchor
+// for every other codebase, matching nothing and reporting "no findings" as if the code were clean.
+//
+//   * AnchorStripSuffix / CompanionStripSuffix — the resource-name suffixes stripped before the two keys are
+//     compared (an ORM's generated collection/DAO naming vs the cache type's). Empty = compare simple names.
+//   * DiscoveryRead — the MEDIUM-tier in-scope key source: an effect that READS the cache, whose resource
+//     (suffix-stripped) is taken as evidence that entity is cached. Null = declared entities only.
+//   * ExcludeEnclosingNamespaceSuffix — generated-ORM-noise filter. Null/empty = no filtering.
+//
+// Rule data, not code; projected from the `cacheCoherence` section by FactCacheCoherenceRuleProvider. A
+// single object (not a list).
 public sealed record FactCacheCoherenceRule(
+    FactEffectSelector Anchor,
+    FactEffectSelector Companion,
     IReadOnlyList<string> CachedEntities,
-    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
+    IReadOnlyList<string> AnchorStripSuffix,
+    IReadOnlyList<string> CompanionStripSuffix,
+    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null,
+    FactCacheDiscoveryRead? DiscoveryRead = null
 );
+
+// The DISCOVERY (medium-certainty) in-scope key source for cache_coherence: the cache-READ effect whose
+// resource names a cached entity, plus the suffixes stripped to land it on the bare entity name that the
+// anchor and companion keys normalize to. Keyed off READS, never off the companion — see CorrelationSpec.
+public sealed record FactCacheDiscoveryRead(string Provider, string Operation, IReadOnlyList<string> StripSuffix);
 
 // cross_method_amplification POLICY: which effects count as a WITNESS beneath a per-iteration call, and how
 // far to look. Opt-in — the detector fires ONLY when this section is present, mirroring cacheCoherence.

@@ -244,8 +244,12 @@ internal static class EffectDerivation
         // (no rule gate) — exactly as DeriveCommand does.
         findings.AddRange(DeriveCommand.EventCycleFindings(FactCycleDeriver.DeriveEventCycles(shapedGraph)));
 
-        // cache_coherence (FR-7): an anchor bulk_write whose forward closure lacks a same-key cache:invalidate.
-        // Opt-in: only when the `cacheCoherence` rule section is present. Spec replicated from DeriveCommand.
+        // cache_coherence (FR-7): an anchor durable write whose forward closure lacks a same-key invalidation.
+        // Opt-in AND fully rule-described: the section is projected only when it names both an anchor and a
+        // companion (FactCacheCoherenceRuleProvider), so an absent/incomplete section leaves the detector off
+        // rather than pointing a built-in anchor at a codebase that has no such provider. Every effect name
+        // below arrives from `cc`; the only policy in C# is SimpleTypeName normalization (compare simple type
+        // names, not DocIDs), which is generic key handling, not vocabulary.
         if (rules.CacheCoherence is { } cc)
         {
             findings.AddRange(
@@ -254,15 +258,12 @@ internal static class EffectDerivation
                         graph: shapedGraph,
                         effects: unfilteredEffects,
                         spec: new CorrelationSpec(
-                            Anchor: new EffectPredicate(Provider: "llblgen", Operation: "bulk_write"),
-                            Companion: new EffectPredicate(Provider: "cache", Operation: "invalidate"),
-                            AnchorNormalize: new NormalizeSpec(
-                                SimpleTypeName: true,
-                                StripSuffix: ["EntityCollection", "Collection", "DAO"]
-                            ),
-                            CompanionNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["Cache"]),
-                            ExcludeEnclosingNamespaceSuffix: cc.ExcludeEnclosingNamespaceSuffix ?? ["CollectionClasses", "DaoClasses"],
-                            InScopeKeys: DeriveCommand.BuildCacheInScopeKeys(cachedEntities: cc.CachedEntities, effects: unfilteredEffects)
+                            Anchor: new EffectPredicate(Provider: cc.Anchor.Provider, Operation: cc.Anchor.Operation),
+                            Companion: new EffectPredicate(Provider: cc.Companion.Provider, Operation: cc.Companion.Operation),
+                            AnchorNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: cc.AnchorStripSuffix),
+                            CompanionNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: cc.CompanionStripSuffix),
+                            ExcludeEnclosingNamespaceSuffix: cc.ExcludeEnclosingNamespaceSuffix,
+                            InScopeKeys: DeriveCommand.BuildCacheInScopeKeys(rule: cc, effects: unfilteredEffects)
                         )
                     )
                 )

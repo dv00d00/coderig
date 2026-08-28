@@ -271,12 +271,19 @@ public sealed class RuleSetLoaderTests
     {
         // Regression mirror of the redirectRules test: the cascade Merge must carry the local `cacheCoherence`
         // section (a single object, last-writer-wins) into RuleSet.CacheCoherence. A section omitted from Merge
-        // silently vanishes from the cascade.
+        // silently vanishes from the cascade. Now covers the WHOLE detector spec — anchor, companion, both
+        // normalizers and the discovery read are rule data (core-purity F1+F2), so a field dropped in the
+        // projection would silently retarget or disarm the detector.
         using var workspace = TempRulesWorkspace.Create(
             // lang=json
             """
             {
               "cacheCoherence": {
+                "anchor": { "provider": "orm", "operation": "bulk_write" },
+                "companion": { "provider": "cache", "operation": "invalidate" },
+                "anchorStripSuffix": ["EntityCollection", "DAO"],
+                "companionStripSuffix": ["Cache"],
+                "discoveryRead": { "provider": "entity_cache", "operation": "read", "stripSuffix": ["Cache", "Entity"] },
                 "cachedEntities": ["Account", "Person"],
                 "excludeEnclosingNamespaceSuffix": ["CollectionClasses", "DaoClasses"]
               }
@@ -289,6 +296,66 @@ public sealed class RuleSetLoaderTests
         cacheCoherence.ShouldNotBeNull();
         cacheCoherence!.CachedEntities.ShouldBe(["Account", "Person"]);
         cacheCoherence.ExcludeEnclosingNamespaceSuffix.ShouldBe(["CollectionClasses", "DaoClasses"]);
+        cacheCoherence.Anchor.Provider.ShouldBe("orm");
+        cacheCoherence.Anchor.Operation.ShouldBe("bulk_write");
+        cacheCoherence.Companion.Provider.ShouldBe("cache");
+        cacheCoherence.Companion.Operation.ShouldBe("invalidate");
+        cacheCoherence.AnchorStripSuffix.ShouldBe(["EntityCollection", "DAO"]);
+        cacheCoherence.CompanionStripSuffix.ShouldBe(["Cache"]);
+        cacheCoherence.DiscoveryRead.ShouldNotBeNull();
+        cacheCoherence.DiscoveryRead!.Provider.ShouldBe("entity_cache");
+        cacheCoherence.DiscoveryRead.Operation.ShouldBe("read");
+        cacheCoherence.DiscoveryRead.StripSuffix.ShouldBe(["Cache", "Entity"]);
+    }
+
+    // Core ships NO anchor/companion pair, because either one would be a single project's provider vocabulary
+    // shipped as every codebase's default — where it matches nothing and the detector reports "no findings" as
+    // if the code were clean. A section that names neither must therefore project to null (detector OFF), not
+    // to a built-in spec.
+    [Test]
+    public void CacheCoherence_without_an_anchor_and_companion_leaves_the_detector_off()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            // lang=json
+            """
+            {
+              "cacheCoherence": {
+                "cachedEntities": ["Account", "Person"],
+                "excludeEnclosingNamespaceSuffix": ["CollectionClasses", "DaoClasses"]
+              }
+            }
+            """
+        );
+
+        RuleSetLoader.Load(workspace.DirectoryPath).CacheCoherence.ShouldBeNull();
+    }
+
+    // The discovery tier is independently optional: an anchor+companion with no `discoveryRead` is a VALID,
+    // ON detector running the declared-contract tier alone — it must not fall back to a built-in cache-read
+    // provider (the F2 literal), and it must not disarm the whole section either.
+    [Test]
+    public void CacheCoherence_without_a_discovery_read_stays_on_with_declared_entities_only()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            // lang=json
+            """
+            {
+              "cacheCoherence": {
+                "anchor": { "provider": "orm", "operation": "bulk_write" },
+                "companion": { "provider": "cache", "operation": "invalidate" },
+                "cachedEntities": ["Account"]
+              }
+            }
+            """
+        );
+
+        var cacheCoherence = RuleSetLoader.Load(workspace.DirectoryPath).CacheCoherence;
+
+        cacheCoherence.ShouldNotBeNull();
+        cacheCoherence!.DiscoveryRead.ShouldBeNull();
+        cacheCoherence.AnchorStripSuffix.ShouldBeEmpty();
+        cacheCoherence.CompanionStripSuffix.ShouldBeEmpty();
+        cacheCoherence.CachedEntities.ShouldBe(["Account"]);
     }
 
     private sealed class TempRulesWorkspace : IDisposable

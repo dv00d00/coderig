@@ -129,16 +129,42 @@ internal sealed record HandoffDispatcherRule(
 // FactRedirectRule for the Domain RedirectClassifier.
 internal sealed record RedirectRule(string Method, string RedirectTo);
 
-// FR-7 (cache coherence), now a cache-specific INSTANCE of the generic effect-correlation deriver. The
-// bulk-write + invalidation method names moved out to ordinary effect rules (llblgen:bulk_write /
-// cache:invalidate); the single `cacheCoherence` section now carries only the POLICY: `cachedEntities` (the
-// DECLARED contract — high-certainty in-scope keys) and an optional `excludeEnclosingNamespaceSuffix`
-// (generated-ORM-noise filter, overriding the wiring default). Projected to FactCacheCoherenceRule. One
-// object, not a list (last-writer-wins).
+// FR-7 (cache coherence), a cache-specific INSTANCE of the generic effect-correlation deriver. The whole
+// detector is described HERE, including every effect name it correlates — core names no provider:
+//
+//   "cacheCoherence": {
+//     "anchor":    { "provider": "llblgen", "operation": "bulk_write" },   // REQUIRED
+//     "companion": { "provider": "cache",   "operation": "invalidate" },   // REQUIRED
+//     "anchorStripSuffix":    ["EntityCollection", "Collection", "DAO"],
+//     "companionStripSuffix": ["Cache"],
+//     "discoveryRead": { "provider": "entity_cache", "operation": "read", "stripSuffix": ["Cache", "Entity"] },
+//     "cachedEntities": ["Account", …],
+//     "excludeEnclosingNamespaceSuffix": ["CollectionClasses", "DaoClasses"]
+//   }
+//
+// `anchor` + `companion` are REQUIRED and have NO built-in default: a section missing either projects to null
+// and the detector is OFF. That is deliberate — a defaulted anchor would make one project's ORM the shipped
+// anchor for every other codebase, where it matches nothing and reports "no findings" as if the code were
+// clean. `discoveryRead` absent = declared `cachedEntities` only (the discovery tier is off, not defaulted).
+// Projected to FactCacheCoherenceRule. One object, not a list (last-writer-wins across the cascade — an
+// overlay that declares this section RESTATES it whole).
 internal sealed record CacheCoherenceRule(
-    IReadOnlyList<string> CachedEntities,
-    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
+    IReadOnlyList<string>? CachedEntities = null,
+    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null,
+    EffectSelectorDocument? Anchor = null,
+    EffectSelectorDocument? Companion = null,
+    IReadOnlyList<string>? AnchorStripSuffix = null,
+    IReadOnlyList<string>? CompanionStripSuffix = null,
+    DiscoveryReadDocument? DiscoveryRead = null
 );
+
+// {"provider": "x", "operation": "y"} — the JSON authoring shape of an effect selector. `operation` absent =
+// any operation of that provider. Projected to FactEffectSelector.
+internal sealed record EffectSelectorDocument(string Provider, string? Operation = null);
+
+// {"provider": "x", "operation": "y", "stripSuffix": [...]} — the cache_coherence discovery-read source.
+// Projected to FactCacheDiscoveryRead.
+internal sealed record DiscoveryReadDocument(string Provider, string Operation, IReadOnlyList<string>? StripSuffix = null);
 
 // cross_method_amplification POLICY (JSON authoring shape of the `crossMethodAmplification` section): the
 // witness gate (`witnesses`, same {providers, operations} groups as `observations.amplification`) that

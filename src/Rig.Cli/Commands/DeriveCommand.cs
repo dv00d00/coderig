@@ -695,43 +695,48 @@ internal static class DeriveCommand
 
     // Build the tiered in-scope key map for the cache_coherence correlation instance: resource key -> certainty
     // token. Two sources, declared wins on overlap:
-    //   * MEDIUM tier (DISCOVERY): every entity that the code READS from its cache (entity_cache:read effect),
-    //     normalized to its simple entity name (strip a trailing "Entity"). Keyed off READS — NOT off the
-    //     companion (invalidation) — on purpose: if an accidental merge deletes every cache bust, the reads
-    //     remain, so the entity stays in scope and the missing-invalidation still flags. Keying off the
-    //     companion would self-silence the detector exactly when the bug is worst.
+    //   * MEDIUM tier (DISCOVERY): every entity the code READS from its cache — the effect named by the rule's
+    //     `discoveryRead` — normalized by that rule's `stripSuffix` to the bare entity name. Keyed off READS —
+    //     NOT off the companion (invalidation) — on purpose: if an accidental merge deletes every cache bust,
+    //     the reads remain, so the entity stays in scope and the missing-invalidation still flags. Keying off
+    //     the companion would self-silence the detector exactly when the bug is worst. A rule with no
+    //     `discoveryRead` runs the DECLARED tier alone (no discovery), rather than falling back to a built-in
+    //     provider name — the cache-read effect is one project's vocabulary, so it lives in the rule.
     //   * HIGH tier (DECLARED CONTRACT): every entity named in the rule's `cachedEntities`. This is the
     //     intentional invariant ("X is cached and MUST be invalidated"); declared overwrites a discovered key.
+    //
+    // The stripped suffixes matter because one cache read resolves to a MIX of resource forms (a `*Cache` type
+    // via resource:receiver_type and the bare entity via a generic factory's resource:type_argument); stripping
+    // both lands them on the same key as the anchor (from a `*EntityCollection`) and the companion.
     internal static IReadOnlyDictionary<string, string> BuildCacheInScopeKeys(
-        IReadOnlyList<string> cachedEntities,
+        FactCacheCoherenceRule rule,
         IReadOnlyList<DerivedEffect> effects
     )
     {
         var keys = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        // entity_cache:read resolves to a MIX on the real store: "AccountCache" (the *Cache.New rule,
-        // resource:receiver_type) AND "Account" (the generic Entity.New<T> factory, resource:type_argument).
-        // Strip BOTH "Cache" and "Entity" so either form lands on the bare entity name ("Account"), aligning
-        // with the anchor key (from "AccountEntityCollection") and the companion key (from "AccountCache").
-        var readNormalize = new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["Cache", "Entity"]);
-        foreach (var e in effects)
+        if (rule.DiscoveryRead is { } read)
         {
-            if (
-                !string.Equals(e.Provider, "entity_cache", StringComparison.Ordinal)
-                || !string.Equals(e.Operation, "read", StringComparison.Ordinal)
-            )
+            var readNormalize = new NormalizeSpec(SimpleTypeName: true, StripSuffix: read.StripSuffix);
+            foreach (var e in effects)
             {
-                continue;
-            }
+                if (
+                    !string.Equals(e.Provider, read.Provider, StringComparison.Ordinal)
+                    || !string.Equals(e.Operation, read.Operation, StringComparison.Ordinal)
+                )
+                {
+                    continue;
+                }
 
-            var key = ResourceKey.Of(e.ResourceType, readNormalize);
-            if (key is not null && !keys.ContainsKey(key))
-            {
-                keys[key] = "medium";
+                var key = ResourceKey.Of(e.ResourceType, readNormalize);
+                if (key is not null && !keys.ContainsKey(key))
+                {
+                    keys[key] = "medium";
+                }
             }
         }
 
-        foreach (var entity in cachedEntities)
+        foreach (var entity in rule.CachedEntities)
         {
             keys[entity] = "high"; // declared wins on overlap
         }

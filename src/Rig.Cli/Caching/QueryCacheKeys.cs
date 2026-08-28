@@ -54,7 +54,12 @@ internal static class QueryCacheKeys
     // v1->v2: remove the corpus-global generic-instantiation cap and preserve generic-factory type arity.
     // v2->v3: cache_coherence runs FactCorrelationDeriver over forward reach sets, and reach is now resolved
     // per dispatch context — a companion invalidate behind a second receiver's override is no longer missed.
-    internal const int GraphHazSchema = 3;
+    // v3->v4: cache_coherence's anchor/companion/normalizers/discovery-read are RULE DATA (core-purity F1+F2)
+    // and event_cycle's delivery tags + join confidence come from `deliveryRules` (F6). Same store, same rules
+    // file, DIFFERENT findings: a ruleset that does not declare them now yields no cache_coherence anchors and
+    // no event_cycle edges, and a warm v3 blob would keep serving findings derived from the deleted built-in
+    // literals forever (the rulesHash cannot see a C#-side derivation change).
+    internal const int GraphHazSchema = 4;
 
     // The FINDING-VIEW payload/logic version: how the hazard-augmented effect set is CLASSIFIED and PROJECTED
     // into displayed findings (the /api/hazards mark stream, the derive Hazards/Amplification split), as opposed
