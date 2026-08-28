@@ -1,6 +1,6 @@
 # A virtual hub devirtualizes only for the FIRST receiver that reaches it — the expansion memo is keyed by symbol, not by dispatch context
 
-**Status:** OPEN · **Priority: HIGH** (silent, order-dependent loss of devirtualization in `tree`/`reaches`/`impact`;
+**Status:** SHIPPED 2026-08-28 · **Priority: HIGH** (silent, order-dependent loss of devirtualization in `tree`/`reaches`/`impact`;
 the overrides that go missing are exactly the effect-bearing ones, so real hazards inside loops produce no
 finding) · **Found:** 2026-08-28, on MedDBase, from the `WizardBase.Book` booking storm ·
 **Family:** query correctness / dispatch
@@ -100,6 +100,44 @@ Bounded by `MaxDispatchContexts` per node, mirroring `MaxBinding`.
 
 Not a widening of dispatch: every fan is still the narrowed set `NarrowByReceiver` already computed. This
 recovers overrides that narrowing had *correctly* resolved and the memo then threw away.
+
+## Shipped
+
+`ResolveDispatch` (`FactPathFinder.Dispatch.cs`) is the single place both traversals and the memo agree on what
+a context dispatches to; `DispatchContextKey` turns that fan into the memo key; `Successors` takes the
+already-resolved fan back so it is resolved once per visit.
+
+Resolving a fan is *not* free even for a method that has none — it parses the DocID and scans every descendant
+of the declaring type — and the key must now be computed for elided visits too, which previously did no
+dispatch work at all. That cost **+18%** on the `BuildTree` benchmark. `GraphIndex.DispatchCapableCache` gates
+it behind a memoized receiver-blind bool, sound because narrowing only ever *filters* the blind candidate set,
+so a method with no blind target has none under any receiver. That more than pays for the fix.
+
+| `TreeComputeBenchmarks.BuildTree` (rig's own store) | Mean | Allocated |
+|---|---|---|
+| baseline (pre-fix) | 1.380 ms | 3.16 MB |
+| fix, no capability gate | 1.626 ms | 3.65 MB |
+| **fix as shipped** | **1.051 ms** | **2.43 MB** |
+
+### Validation
+
+* New fixture `tests/Rig.Tests/Domain/ReceiverContextExpansionTests.cs` — 6 tests over a synthetic graph
+  mirroring the MedDBase shape (external `Ext.EntityBase.Save`; `CommonEntityBase.Save` override that `Alpha`
+  inherits; `Beta.Save` a more-derived override with its own effect-bearing body; two sites, one per receiver).
+  **5 of the 6 failed before the fix, all 6 pass after.** They cover: per-receiver devirtualization, the
+  override's body reaching the caller, loop context composing with the recovered override, the reachability
+  arm, order-independence, and a recall guard that narrowing did not widen.
+* Full suite green (1383 tests). `scripts/mini-ci.ps1` green end-to-end — format, build, all four suites, pack
+  portable, reinstall (`rig 0.1.1-ci.20260828122748`).
+* Forest size for `rig tree RunIndexAsync --depth 12` over rig's own store is unchanged at 308 lines, i.e. the
+  fix does not widen a tree that has no multi-receiver hub — the growth is confined to where it should be.
+
+Cache bumps: `TreeSchema` 6→7, `GraphHazSchema` 2→3, `ImpactSchema` 6→7, `EffectsDiffSchema` 1→2.
+`HazardEffectsSchema` deliberately not bumped (`hazardfx` is keyed on store+rules and derives per enclosing
+symbol, reach-independent).
+
+**End-to-end revalidation on the MedDBase store has NOT been done here** and is the open follow-up — it needs
+only a re-query, not a reindex.
 
 ## Out of scope / residual
 
