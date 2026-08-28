@@ -38,6 +38,7 @@ internal static class Root
             DispatchFansCommand.Build(output, error, workingDirectory),
             HotspotsCommand.Build(output, error, workingDirectory),
             DeriveCommand.Build(output, error, workingDirectory),
+            AmplifyCommand.Build(output, error, workingDirectory),
             EffectsDiffCommand.Build(output, error, workingDirectory),
             EntryPointsCommand.Build(output, error, workingDirectory),
             ImpactCommand.Build(output, error, workingDirectory),
