@@ -66,8 +66,8 @@ Implemented detectors (intra-method / effect-local, tier 1):
 | `lazy_init_race` | `race_window` whose shape is lazy-init / do-once (single write + getter/init/ctor context) | low (heuristic) |
 | `thread_local_context` | a `race_window`-shaped RMW on a `[ThreadStatic]` cell — thread-confined, so NOT a cross-thread race; rerouted here as the context-propagation surface (a value lost across an `await`/thread boundary). Detected via the attribute's ctor reference (no dedicated attribute fact). | low (disclosed — can't prove the await-crossing) |
 | `n_plus_1` | a read inside an ITERATION CONTEXT whose key varies per iteration. Three context kinds bind a per-iteration identifier and so can carry the varying-key discriminator: a `foreach` (its iteration variable), a LINQ **query expression** body clause (every range variable it binds — `let`/`from`/`join`/`into`; the PRIMARY `from` source is excluded, being evaluated once), and a rule-declared **enumerating lambda** (`ids.Select(id => …)` — its parameters). `for`/`while`/`do` amplify too but bind no identifier, so they stay `looped_effect`-only rather than emitting a keyless guess. The enumerating-lambda set is rule DATA (`observations.enumeratingMethods`), gated on the resolved target's DECLARING type so single-shot lambda takers are excluded — `LanguageExt.Option<A>.Map` is 4.4× more common than `Seq<A>.Map` on MedDBase (5,167 vs 1,181 sites), so a name-only gate would bury the real findings. | high |
-| `unserializable_payload` | a store/serialize whose payload type is serializer-unsupported (e.g. `Option<T>`) | high |
-| `dual_write` | a method writing to ≥2 distinct durable systems (db/queue/search/cache/http/…) | medium (no-outbox-check disclosed) |
+| `unserializable_payload` | a store/serialize whose payload type is serializer-unsupported (e.g. `Option<T>`). Which types those are is a property of the analyzed stack's serializer, so `observations.serializationHazard` ships EMPTY and the project ruleset declares it | high |
+| `dual_write` | a method writing to ≥2 distinct durable systems (db/queue/search/cache/http/…). Which write `provider:operation` belongs to which system class is RULE DATA (`dualWrite.systemClassMap`); the builtin map covers the providers builtin-rules.json declares, a project's ruleset adds its own, and with no map the detector is off | medium (no-outbox-check disclosed) |
 | `sync_over_async` | a blocking wait (`Task.Wait()`/`.GetAwaiter().GetResult()`, bare or `.ConfigureAwait(false)`) inside a method declared `async` — threadpool starvation / deadlock risk; the fix is always "just await" | high (disclosed gap: `Task<T>.Result` is a property access, not a method invocation, and is NOT covered — the effect-rule engine only matches method invocations) |
 
 Backlog detectors:
@@ -95,7 +95,7 @@ different things by mechanism* — sometimes a symbol, sometimes a type, **often
 |---|---|---|---|
 | C# event raise → subscribers | the event | a **symbol** (`E:` DocID) | exact |
 | MediatR publish/send → handler | the message | a **type** (arg-0 type, `argument_type`) | exact (type-relation) |
-| Echo actor tell/ask → spawn handler | the process | a **parameter** (process name, arg-0 `argument_name`) | `~heuristic` (resolves through a static field) |
+| Echo actor tell/ask → spawn handler *(MedDBase ruleset, not builtin)* | the process | a **parameter** (process name, arg-0 `argument_name`) | `~heuristic` (resolves through a static field) |
 | HTTP / arbitrary RPC → endpoint | the route | a **parameter** (route/URL string, `string_argument`) | `~heuristic` (interpolated client URL vs route template) |
 | db / io / cache write ↔ read | the cell | a **parameter** (table / path / key) | `~heuristic` |
 
