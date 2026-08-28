@@ -40,7 +40,11 @@ internal static class QueryCacheKeys
     // v4->v5: --limit now excludes never-visited staged siblings, making cached forests strictly node-bounded.
     // v5->v6: exact open-generic identities now include their monomorphized executions instead of retaining a
     // warm forest rooted only at the open fallback body.
-    internal const int TreeSchema = 6;
+    // v6->v7: the expansion memo is keyed by DISPATCH CONTEXT, not by bare symbol, so a virtual hub reached
+    // under several receivers devirtualizes per receiver instead of the first occurrence winning and every
+    // later one collapsing to "⋯elided". Same store, same rules, MORE forest: a warm v6 blob would keep
+    // serving trees whose child overrides (and their effects) are invisible.
+    internal const int TreeSchema = 7;
 
     // v1->v2 EnclosingGuards; v2->v3 lazy_init_race lock-enclosed tier; v3->v4 the n_plus_1 read gate gained
     // object_store + the `execute` operation (a BUILTIN-rules edit, which the rulesHash — computed over the
@@ -48,7 +52,9 @@ internal static class QueryCacheKeys
     internal const int HazardEffectsSchema = 4;
 
     // v1->v2: remove the corpus-global generic-instantiation cap and preserve generic-factory type arity.
-    internal const int GraphHazSchema = 2;
+    // v2->v3: cache_coherence runs FactCorrelationDeriver over forward reach sets, and reach is now resolved
+    // per dispatch context — a companion invalidate behind a second receiver's override is no longer missed.
+    internal const int GraphHazSchema = 3;
 
     // The FINDING-VIEW payload/logic version: how the hazard-augmented effect set is CLASSIFIED and PROJECTED
     // into displayed findings (the /api/hazards mark stream, the derive Hazards/Amplification split), as opposed
@@ -66,7 +72,9 @@ internal static class QueryCacheKeys
 
     // v1: effects-diff joins canonical generic-method effects through concrete monomorphized executions and
     // fails closed on overload unions. The web comparison is client-cached, so its derivation token must move.
-    internal const int EffectsDiffSchema = 1;
+    // v1->v2: the per-EP reach sets it diffs are now resolved per dispatch context, so an EP's effect set can
+    // legitimately GROW with no store or rule change.
+    internal const int EffectsDiffSchema = 2;
 
     // v1: transparent whole-store method hotspot metrics. v1->v2: persisted lambdas joined the method
     // universe and monomorphized graph/effect/hazard identities now aggregate onto their source method.
@@ -78,7 +86,9 @@ internal static class QueryCacheKeys
     // added to the payload — a warm v4 blob decodes with empty amplification lists and would silently render a
     // newly-looped effect as "no change".
     // v5->v6: remove the global mono cap and preserve factory type arity in both shaped graphs in the diff.
-    internal const int ImpactSchema = 6;
+    // v6->v7: per-EP reach is resolved per dispatch context on BOTH sides of the diff, so an EP's footprint
+    // now includes overrides reached through a receiver that was not the first to arrive at a virtual hub.
+    internal const int ImpactSchema = 7;
 
     // The composite token the CLIENT keys its cache by (hashed with the rules fingerprint in /api/meta). It
     // folds in EVERY per-artifact schema version, so bumping ANY one above also moves the client's derivation
