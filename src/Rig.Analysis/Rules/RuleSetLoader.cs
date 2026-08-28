@@ -269,6 +269,11 @@ public static class RuleSetLoader
             // Amplification (looped_effect display scope) concatenates like every other observation list, so a
             // project overlay can APPEND providers to the shipped network-crossing default without restating it.
             Amplification = Concat(a.Amplification, b.Amplification),
+            // AmplificationCategories: display grouping/ranking/exclusion. Concatenates too — and it MUST,
+            // because core ships none, so the categories only ever arrive from an overlay. Omitting this line
+            // is silent: the feature keeps producing findings, they just all land unranked in the main
+            // section (walked into exactly that during review — the third occurrence of the trap below).
+            AmplificationCategories = Concat(a.AmplificationCategories, b.AmplificationCategories),
             // EnumeratingMethods was MISSING here: two non-null observations sections merged to a section with
             // EnumeratingMethods == null, silently dropping the builtin enumerating-lambda iteration contexts as
             // soon as ANY overlay declared an `observations` key. Latent so far (no shipped overlay declares one),

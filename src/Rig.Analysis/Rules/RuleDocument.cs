@@ -253,6 +253,27 @@ internal sealed record NPlusOneObservationRule(IReadOnlyList<string>? Providers,
 // admits). Display-only: the looped_effect observation itself is always derived.
 internal sealed record AmplificationObservationRule(IReadOnlyList<string>? Providers, IReadOnlyList<string>? Operations);
 
+// DISPLAY CATEGORIES for amplification findings (JSON authoring shape of `observations.amplificationCategories`)
+// — how findings are grouped, ranked and excluded, as opposed to `amplification`, which decides what is in
+// scope at all. This is DATA because the vocabulary is PROJECT-SPECIFIC: whether an effect is a blocking round
+// trip, fire-and-forget queueing, or lock contention is a property of a codebase's providers, and no effect
+// name may appear in rig core C#. Absent = a NEUTRAL default (no weighting, no separate sections, no
+// exclusions), never a built-in table.
+//
+// Ordered list, FIRST MATCH WINS — put the more specific rule first. `providers`/`operations` empty or absent =
+// "any" for that dimension. `weight` orders within a section (lower first); `separate` renders the category in
+// its own section under `label`; `excluded` drops it from display entirely. Projected to
+// FactAmplificationCategoryRule.
+internal sealed record AmplificationCategoryObservationRule(
+    string? Name,
+    int? Weight,
+    bool? Separate,
+    string? Label,
+    bool? Excluded,
+    IReadOnlyList<string>? Providers,
+    IReadOnlyList<string>? Operations
+);
+
 // A higher-order method that ENUMERATES its receiver, so its lambda body runs once per element and an
 // effect inside it is amplified exactly as a loop body is (`ids.Select(id => Fetch(id))`).
 // `declaringTypes` gates on the resolved target's containing type — the one dimension separating these
@@ -342,6 +363,11 @@ internal sealed class ObservationsSection
     // Section key "amplification": the DISPLAYED provider:operation scope of looped_effect (see
     // AmplificationObservationRule). Absent = empty scope = the feature is off for that rule cascade.
     public List<AmplificationObservationRule>? Amplification { get; set; }
+
+    // Section key "amplificationCategories": display grouping/ranking/exclusion for amplification findings
+    // (see AmplificationCategoryObservationRule). Absent = neutral ordering; core ships NO default categories,
+    // because every category name would be one project's effect vocabulary.
+    public List<AmplificationCategoryObservationRule>? AmplificationCategories { get; set; }
 
     public List<EnumeratingMethodObservationRule>? EnumeratingMethods { get; set; }
 }

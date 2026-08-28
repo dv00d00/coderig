@@ -26,32 +26,20 @@ namespace Rig.Cli.Commands;
 // and rendering only.
 internal static class AmplifyCommand
 {
-    // DISPLAY ORDER for the effect-kind tiebreak, most-expensive-per-iteration first: a database round trip
-    // multiplied N² times is the finding worth reading before an http call multiplied N² times, and both
-    // before a queue publish.
+    // DISPLAY GROUPING/RANKING/EXCLUSION is entirely rules data — `observations.amplificationCategories`,
+    // projected to FactAmplificationCategoryRule and applied through AmplificationCategories. NOTHING here
+    // names an effect provider or operation.
     //
-    // This is PRESENTATION ONLY and deliberately NOT a scope gate — WHICH effects are eligible is rules data
-    // (`observations.amplification`, applied through AmplificationScope), and nothing here can admit or
-    // suppress a finding. A provider absent from this list is not dropped: it simply sorts after every listed
-    // one, alphabetically, so a new effect rule ranks sanely the day it ships without a code change.
-    private static readonly string[] KindOrder =
-    [
-        "llblgen",
-        "db_command",
-        "db_connection",
-        "db_reader",
-        "efcore",
-        "http",
-        "object_store",
-        "queue",
-    ];
-
-    // Fire-and-forget queueing: the call returns immediately and the work is absorbed by a mailbox, so ×N² of
-    // it is a throughput question, not N² blocking round trips. Ranking it beside synchronous IO would put the
-    // cheapest amplification at the top on volume alone, so it gets its own section instead of a place in the
-    // main list. Named as a provider:operation PAIR (not a provider) because `actor:ask` is synchronous and
-    // belongs in the main ranking.
-    private const string FireAndForget = "actor:tell";
+    // Why this may not be a C# table, even a presentation-only one: provider and operation tokens are the
+    // vocabulary of a particular codebase's RULESET, not of rig. Whether an effect is a blocking round trip,
+    // fire-and-forget queueing, or lock contention is a property of that project's providers — Echo actors
+    // exist in exactly one repo — so a ranking array or a default exclusion list in core would bake one
+    // project's domain into the tool. Core implements only "rank / group / exclude BY CONFIGURED CATEGORY".
+    //
+    // With no categories configured the output is NEUTRAL, not wrong: one implicit group, ordered by degree
+    // then site. A project ruleset adds opinion — which categories cost most per iteration (`weight`), which
+    // are fire-and-forget and belong in their own section rather than beside synchronous IO (`separate` +
+    // `label`), and which are historically noisy enough to hide (`excluded`).
 
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
@@ -183,7 +171,8 @@ internal static class AmplifyCommand
         deriveWatch.Stop();
         timing.Record("degree", deriveWatch.Elapsed);
 
-        var (main, fireAndForget, recursion) = Sections(findings, opts.MinDegree, opts.Top);
+        var categories = rules.Observations.AmplificationCategoriesOrEmpty;
+        var (main, fireAndForget, recursion) = Sections(findings, opts.MinDegree, opts.Top, categories);
 
         var epWatch = Stopwatch.StartNew();
         var attributed = await AttributeAsync(
@@ -199,9 +188,9 @@ internal static class AmplifyCommand
         // Entry-point count is the LAST sort key of the required ranking, so it can only be applied once the
         // attribution above exists. Selection above already used (degree, kind, site) — a stable prefix of the
         // same order — so re-sorting here reorders ties, never the set.
-        var ranked = Rerank(main, attributed);
-        var ffRanked = Rerank(fireAndForget, attributed);
-        var recRanked = Rerank(recursion, attributed);
+        var ranked = Rerank(main, attributed, categories);
+        var ffRanked = Rerank(fireAndForget, attributed, categories);
+        var recRanked = Rerank(recursion, attributed, categories);
 
         var renderWatch = Stopwatch.StartNew();
         if (CommonOptions.IsTsv(opts.Format))
@@ -210,7 +199,7 @@ internal static class AmplifyCommand
         }
         else
         {
-            WriteHuman(io.TextOutput.Output, opts, ranked, ffRanked, recRanked);
+            WriteHuman(io.TextOutput.Output, opts, ranked, ffRanked, recRanked, categories);
         }
 
         renderWatch.Stop();
@@ -227,7 +216,12 @@ internal static class AmplifyCommand
         IReadOnlyList<FactAmplificationDegreeDeriver.Finding> Main,
         IReadOnlyList<FactAmplificationDegreeDeriver.Finding> FireAndForget,
         IReadOnlyList<FactAmplificationDegreeDeriver.Finding> Recursion
-    ) Sections(IReadOnlyList<FactAmplificationDegreeDeriver.Finding> findings, int minDegree, int top)
+    ) Sections(
+        IReadOnlyList<FactAmplificationDegreeDeriver.Finding> findings,
+        int minDegree,
+        int top,
+        IReadOnlyList<FactAmplificationCategoryRule> categories
+    )
     {
         var cap = Math.Max(0, top);
         var main = new List<FactAmplificationDegreeDeriver.Finding>();
@@ -235,6 +229,15 @@ internal static class AmplifyCommand
         var recursion = new List<FactAmplificationDegreeDeriver.Finding>();
         foreach (var f in findings)
         {
+            // An EXCLUDED category is dropped from every bucket, recursion included: the ruleset is saying
+            // this effect kind is not worth showing at all (historically-noisy contention/assembly-load
+            // amplifiers), and a recursive instance of it is no more actionable.
+            var category = Category(categories, f);
+            if (category.Excluded)
+            {
+                continue;
+            }
+
             if (f.Recursion)
             {
                 recursion.Add(f);
@@ -243,7 +246,7 @@ internal static class AmplifyCommand
             {
                 continue;
             }
-            else if (string.Equals(f.EffectKind, FireAndForget, StringComparison.Ordinal))
+            else if (category.Separate)
             {
                 fireAndForget.Add(f);
             }
@@ -253,47 +256,41 @@ internal static class AmplifyCommand
             }
         }
 
-        return (Order(main).Take(cap).ToList(), Order(fireAndForget).Take(cap).ToList(), Order(recursion).Take(cap).ToList());
+        return (
+            Order(main, categories).Take(cap).ToList(),
+            Order(fireAndForget, categories).Take(cap).ToList(),
+            Order(recursion, categories).Take(cap).ToList()
+        );
     }
 
-    // degree desc, then effect kind (db round trips first — see KindOrder), then the site, so selection is
-    // deterministic before entry-point counts exist.
+    private static FactAmplificationCategoryRule Category(
+        IReadOnlyList<FactAmplificationCategoryRule> categories,
+        FactAmplificationDegreeDeriver.Finding f
+    ) => AmplificationCategories.For(categories, f.EffectProvider, f.EffectOperation);
+
+    // degree desc, then configured category weight, then the site, so selection is deterministic before
+    // entry-point counts exist. With no categories configured the weight term is constant and the order
+    // collapses to degree-then-site — neutral, not wrong.
     private static IEnumerable<FactAmplificationDegreeDeriver.Finding> Order(
-        IEnumerable<FactAmplificationDegreeDeriver.Finding> findings
+        IEnumerable<FactAmplificationDegreeDeriver.Finding> findings,
+        IReadOnlyList<FactAmplificationCategoryRule> categories
     ) =>
         findings
             .OrderByDescending(f => f.Degree == FactAmplificationDegreeDeriver.Unbounded ? int.MaxValue : f.Degree)
-            .ThenBy(KindRank)
+            .ThenBy(f => AmplificationCategories.Rank(categories, f.EffectProvider, f.EffectOperation))
             .ThenBy(f => f.EffectKind, StringComparer.Ordinal)
             .ThenBy(f => f.Head.FilePath, StringComparer.Ordinal)
             .ThenBy(f => f.Head.Line);
 
-    // Position in KindOrder, matched on provider:operation first then bare provider; an unlisted provider
-    // sorts after every listed one (and then alphabetically, via the ThenBy above).
-    private static int KindRank(FactAmplificationDegreeDeriver.Finding f)
-    {
-        for (var i = 0; i < KindOrder.Length; i++)
-        {
-            if (
-                string.Equals(KindOrder[i], f.EffectKind, StringComparison.Ordinal)
-                || string.Equals(KindOrder[i], f.EffectProvider, StringComparison.Ordinal)
-            )
-            {
-                return i;
-            }
-        }
-
-        return KindOrder.Length;
-    }
-
     private static IReadOnlyList<Attributed> Rerank(
         IReadOnlyList<FactAmplificationDegreeDeriver.Finding> findings,
-        IReadOnlyDictionary<FactAmplificationDegreeDeriver.Finding, Attributed> attributed
+        IReadOnlyDictionary<FactAmplificationDegreeDeriver.Finding, Attributed> attributed,
+        IReadOnlyList<FactAmplificationCategoryRule> categories
     ) =>
         findings
             .Select(f => attributed[f])
             .OrderByDescending(a => a.Finding.Degree == FactAmplificationDegreeDeriver.Unbounded ? int.MaxValue : a.Finding.Degree)
-            .ThenBy(a => KindRank(a.Finding))
+            .ThenBy(a => AmplificationCategories.Rank(categories, a.Finding.EffectProvider, a.Finding.EffectOperation))
             .ThenBy(a => a.Finding.EffectKind, StringComparer.Ordinal)
             .ThenByDescending(a => a.EntryPointCount)
             .ThenBy(a => a.Finding.Head.FilePath, StringComparer.Ordinal)
@@ -492,7 +489,8 @@ internal static class AmplifyCommand
         Options opts,
         IReadOnlyList<Attributed> main,
         IReadOnlyList<Attributed> fireAndForget,
-        IReadOnlyList<Attributed> recursion
+        IReadOnlyList<Attributed> recursion,
+        IReadOnlyList<FactAmplificationCategoryRule> categories
     )
     {
         output.WriteLine($"Amplification degree (min {opts.MinDegree}, top {opts.Top} per section, anchor reach <= {opts.MaxDepth} hops)");
@@ -501,7 +499,16 @@ internal static class AmplifyCommand
         );
 
         WriteSection(output, $"Super-linear ({main.Count})", main);
-        WriteSection(output, $"Fire-and-forget queueing — {FireAndForget} ({fireAndForget.Count})", fireAndForget);
+        // Heading comes from the CATEGORY that asked for its own section (`label`, falling back to `name`),
+        // so the wording is the ruleset's, not core's.
+        var separateLabel = fireAndForget.Count == 0 ? "" : Category(categories, fireAndForget[0].Finding).Label;
+        WriteSection(
+            output,
+            string.IsNullOrWhiteSpace(separateLabel)
+                ? $"Separate category ({fireAndForget.Count})"
+                : $"{separateLabel} ({fireAndForget.Count})",
+            fireAndForget
+        );
         WriteSection(output, $"Recursive — unbounded degree ({recursion.Count})", recursion);
 
         if (main.Count == 0 && fireAndForget.Count == 0 && recursion.Count == 0)

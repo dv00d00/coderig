@@ -1010,6 +1010,26 @@ public sealed record FactAmplificationRule(
     IReadOnlyList<string> Operations // operations in scope (e.g. "read", "POST"); empty = any operation
 );
 
+// How amplification findings are GROUPED, RANKED and EXCLUDED for display — data, for the same reason the
+// scope above is data, but load-bearing for a different reason: the vocabulary is PROJECT-SPECIFIC. Which
+// effects are "a blocking round trip" vs "fire-and-forget queueing" vs "contention" is a property of a
+// codebase's providers, not of rig — Echo actors (`actor:tell`) exist in exactly one codebase. So no effect
+// name may appear in core C#, not even as a ranking table or a default exclusion list; core implements only
+// "rank / group / exclude BY CONFIGURED CATEGORY", and the categories arrive from the rule cascade.
+//
+// An ABSENT section is a NEUTRAL default: one implicit category, no weighting, no separate section, nothing
+// excluded — findings then order by degree and site alone. That is deliberately boring rather than wrong:
+// a rig with no project ruleset must still produce a correct (if unopinionated) ranking.
+public sealed record FactAmplificationCategoryRule(
+    string Name, // category id, e.g. "round-trip" — rule-authored, never interpreted by core
+    int Weight, // display rank within a section; LOWER sorts first
+    bool Separate, // render in its OWN section rather than the main ranking
+    string Label, // section heading when Separate; falls back to Name
+    bool Excluded, // drop from display entirely (historically-noisy categories)
+    IReadOnlyList<string> Providers, // empty = any provider
+    IReadOnlyList<string> Operations // empty = any operation
+);
+
 public sealed record FactObservationRules(
     IReadOnlyList<FactResilienceRetryRule> ResilienceRetry,
     IReadOnlyList<FactConcurrencyHandledRule> ConcurrencyHandled,
@@ -1020,10 +1040,13 @@ public sealed record FactObservationRules(
     IReadOnlyList<FactEnumeratingMethodRule> EnumeratingMethods,
     // Defaulted so the ONE construction site is the only place that must supply it, and a hand-built rule set
     // in a test projects to an EMPTY (= no findings) amplification scope rather than failing to compile.
-    IReadOnlyList<FactAmplificationRule>? Amplification = null
+    IReadOnlyList<FactAmplificationRule>? Amplification = null,
+    IReadOnlyList<FactAmplificationCategoryRule>? AmplificationCategories = null
 )
 {
     public IReadOnlyList<FactAmplificationRule> AmplificationOrEmpty => Amplification ?? [];
+
+    public IReadOnlyList<FactAmplificationCategoryRule> AmplificationCategoriesOrEmpty => AmplificationCategories ?? [];
 }
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).

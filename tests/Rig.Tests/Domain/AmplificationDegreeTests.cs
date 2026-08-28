@@ -288,7 +288,7 @@ public sealed class AmplificationDegreeTests
         recursive.Chain.ShouldHaveSingleItem().Caller.ShouldBe("M:N.Tree.Walk");
 
         // A recursive finding is never mixed into the ranked super-linear list, at any --min-degree.
-        var (main, _, recursion) = AmplifyCommand.Sections(findings, minDegree: 2, top: 50);
+        var (main, _, recursion) = AmplifyCommand.Sections(findings, minDegree: 2, top: 50, categories: []);
         main.ShouldBeEmpty();
         recursion.ShouldHaveSingleItem();
     }
@@ -364,7 +364,7 @@ public sealed class AmplificationDegreeTests
 
         findings.ShouldHaveSingleItem().Degree.ShouldBe(1);
 
-        var (main, fireAndForget, recursion) = AmplifyCommand.Sections(findings, minDegree: 2, top: 50);
+        var (main, fireAndForget, recursion) = AmplifyCommand.Sections(findings, minDegree: 2, top: 50, categories: []);
         main.ShouldBeEmpty();
         fireAndForget.ShouldBeEmpty();
         recursion.ShouldBeEmpty();
@@ -415,9 +415,83 @@ public sealed class AmplificationDegreeTests
             scope: [new FactAmplificationRule(Providers: ["actor"], Operations: ["tell"])]
         );
 
-        var (main, fireAndForget, _) = AmplifyCommand.Sections(findings, minDegree: 2, top: 50);
+        // The separate section is RULES-DRIVEN: core names no effect. Without a category declaring
+        // actor:tell separate, the finding ranks in the MAIN list; with one, it moves to its own section.
+        var (mainNoCategories, ffNoCategories, _) = AmplifyCommand.Sections(findings, minDegree: 2, top: 50, categories: []);
+        mainNoCategories.ShouldHaveSingleItem().Degree.ShouldBe(2);
+        ffNoCategories.ShouldBeEmpty();
+
+        var (main, fireAndForget, _) = AmplifyCommand.Sections(
+            findings,
+            minDegree: 2,
+            top: 50,
+            categories:
+            [
+                new FactAmplificationCategoryRule(
+                    Name: "fire-and-forget",
+                    Weight: 10,
+                    Separate: true,
+                    Label: "Fire-and-forget queueing",
+                    Excluded: false,
+                    Providers: ["actor"],
+                    Operations: ["tell"]
+                ),
+            ]
+        );
         main.ShouldBeEmpty();
         fireAndForget.ShouldHaveSingleItem().Degree.ShouldBe(2);
+    }
+
+    // An EXCLUDED category is dropped from display entirely. This is the escape hatch for historically-noisy
+    // amplifiers (contention, assembly-load) — and it lives in the ruleset, because which effects are noise is
+    // a property of a project's providers, not of rig. Core must never carry a default exclusion list.
+    [Test]
+    public async Task An_excluded_category_is_dropped_from_every_section()
+    {
+        var invocations = new[]
+        {
+            Call("M:N.A.Run", "M:N.B.Each", "A.cs", 10, loopKind: "foreach", loopDetail: "a in items"),
+            Call("M:N.B.Each", "M:N.C.Grab", "B.cs", 20, loopKind: "foreach", loopDetail: "b in rows"),
+        };
+        var graph = Graph(
+            new CallEdge("M:N.A.Run", "M:N.B.Each", "invocation", "A.cs", 10, "foreach", "a in items"),
+            new CallEdge("M:N.B.Each", "M:N.C.Grab", "invocation", "B.cs", 20, "foreach", "b in rows")
+        );
+        var findings = FactAmplificationDegreeDeriver.Derive(
+            invocations: invocations,
+            graph: graph,
+            effects: [Read("M:N.C.Grab") with { Provider = "lock", Operation = "acquire" }],
+            observationRules: Rules,
+            scope: [new FactAmplificationRule(Providers: ["lock"], Operations: ["acquire"])]
+        );
+
+        // Two findings: the degree-2 chain and its degree-1 interior tail (interior hops are their own
+        // findings by design). Both are `lock:acquire`, so an excluded category must remove BOTH.
+        findings.Count.ShouldBe(2);
+        findings.Max(f => f.Degree).ShouldBe(2);
+
+        var (main, fireAndForget, recursion) = AmplifyCommand.Sections(
+            findings,
+            minDegree: 2,
+            top: 50,
+            categories:
+            [
+                new FactAmplificationCategoryRule(
+                    Name: "contention",
+                    Weight: 0,
+                    Separate: false,
+                    Label: "",
+                    Excluded: true,
+                    Providers: ["lock"],
+                    Operations: []
+                ),
+            ]
+        );
+        main.ShouldBeEmpty();
+        fireAndForget.ShouldBeEmpty();
+        recursion.ShouldBeEmpty();
+
+        await Task.CompletedTask;
     }
 
     // A multi-line LINQ query detail carries raw newlines. Emitting one into a tsv row SPLITS the row —

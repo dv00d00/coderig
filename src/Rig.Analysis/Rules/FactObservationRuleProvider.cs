@@ -51,6 +51,20 @@ internal static class FactObservationRuleProvider
         var amplification = (doc.Observations?.Amplification ?? [])
             .Select(r => new FactAmplificationRule(Providers: r.Providers ?? [], Operations: r.Operations ?? []))
             .ToArray();
+        // Amplification DISPLAY categories: grouping/ranking/exclusion. An absent section yields an empty list,
+        // which AmplificationCategories reads as the NEUTRAL default — core ships no categories of its own,
+        // because naming one would bake a single project's effect vocabulary into the tool.
+        var amplificationCategories = (doc.Observations?.AmplificationCategories ?? [])
+            .Select(r => new FactAmplificationCategoryRule(
+                Name: r.Name ?? "",
+                Weight: r.Weight ?? 0,
+                Separate: r.Separate ?? false,
+                Label: string.IsNullOrWhiteSpace(r.Label) ? r.Name ?? "" : r.Label,
+                Excluded: r.Excluded ?? false,
+                Providers: r.Providers ?? [],
+                Operations: r.Operations ?? []
+            ))
+            .ToArray();
         var enumeratingMethods = (doc.Observations?.EnumeratingMethods ?? [])
             .Select(r => new FactEnumeratingMethodRule(Methods: r.Methods ?? [], DeclaringTypes: r.DeclaringTypes ?? []))
             .ToArray();
@@ -63,7 +77,8 @@ internal static class FactObservationRuleProvider
             serializationHazard,
             nPlusOne,
             enumeratingMethods,
-            amplification
+            amplification,
+            amplificationCategories
         );
     }
 }

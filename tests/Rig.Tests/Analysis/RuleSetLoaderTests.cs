@@ -5,6 +5,53 @@ namespace Rig.Tests.Analysis;
 
 public sealed class RuleSetLoaderTests
 {
+    // A project overlay's amplification display CATEGORIES must survive the cascade merge. Core ships none
+    // (naming one would bake a project's effect vocabulary into rig), so if this section is dropped during the
+    // merge the failure is SILENT: `amplify` still emits findings, they just all land unranked in the main
+    // section with no separate/excluded handling. That is exactly what happened in review, and it is the third
+    // time an observations list has been forgotten in MergeObservations — hence a pinned test.
+    [Test]
+    public void Amplification_categories_survive_the_cascade_merge()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            // lang=json
+            """
+            {
+              "observations": {
+                "amplificationCategories": [
+                  {
+                    "name": "fire-and-forget",
+                    "label": "Fire-and-forget queueing",
+                    "weight": 50,
+                    "separate": true,
+                    "providers": ["actor"],
+                    "operations": ["tell"]
+                  },
+                  { "name": "contention", "excluded": true, "providers": ["lock"] }
+                ]
+              }
+            }
+            """
+        );
+
+        var ruleSet = RuleSetLoader.LoadForSolution(workspace.SolutionPath);
+
+        var categories = ruleSet.Observations.AmplificationCategoriesOrEmpty;
+        var separate = categories.Where(c => c.Separate).ShouldHaveSingleItem();
+        separate.Name.ShouldBe("fire-and-forget");
+        separate.Label.ShouldBe("Fire-and-forget queueing");
+        separate.Weight.ShouldBe(50);
+        separate.Providers.ShouldContain("actor");
+        separate.Operations.ShouldContain("tell");
+
+        categories.ShouldContain(c => c.Excluded && c.Name == "contention");
+
+        // The builtin observation lists must still be there — a merge that drops a sibling section is the
+        // same bug wearing a different hat.
+        ruleSet.Observations.AmplificationOrEmpty.ShouldNotBeEmpty();
+        ruleSet.Observations.EnumeratingMethods.ShouldNotBeEmpty();
+    }
+
     [Test]
     public void LoadForSolution_allows_comments_and_trailing_commas()
     {
