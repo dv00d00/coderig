@@ -145,8 +145,10 @@ public static class ProductionFixCorpus
         // path is (Reads.LoadThreadStaticFieldIdsAsync): the field DocIDs decorated with [ThreadStatic].
         effects = FactHazardDeriver.DeriveRaceWindows(effects, ThreadStaticCells(result));
         // FR-8 dual_write post-pass: ≥2 distinct durable systems written in one method. Mirrors the shipped
-        // derive path (EffectDerivation.DeriveEffects runs both hazard passes when deriveHazards:true).
-        effects = FactHazardDeriver.DeriveDualWrites(effects);
+        // derive path (EffectDerivation.DeriveEffects runs both hazard passes when deriveHazards:true), map
+        // included — the system-class table is rule data (`dualWrite.systemClassMap`), so the corpus reads it
+        // from the SHIPPED builtin rules exactly as production does.
+        effects = FactHazardDeriver.DeriveDualWrites(effects, rules.DualWrite?.SystemClassMap);
         return new CorpusResult(effects);
     }
 

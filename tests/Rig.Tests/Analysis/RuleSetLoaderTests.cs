@@ -52,6 +52,66 @@ public sealed class RuleSetLoaderTests
         ruleSet.Observations.EnumeratingMethods.ShouldNotBeEmpty();
     }
 
+    // The FR-8 dual_write system-class map must survive the cascade merge, and it must merge PER KEY: an
+    // overlay adds its own providers ON TOP of the shipped generic ones instead of replacing the section. A
+    // section forgotten in Merge is the recurring silent failure — dual_write would keep classifying only the
+    // builtin providers, so a project's own writes (its ORM, its actor mailbox) would never pair and the
+    // detector would report nothing while looking configured.
+    [Test]
+    public void DualWrite_system_class_map_survives_the_cascade_merge()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            // lang=json
+            """
+            {
+              "dualWrite": {
+                "systemClassMap": {
+                  "orm:write": "db",
+                  "mailbox:tell": "queue",
+                  "efcore:commit": "relational"
+                }
+              }
+            }
+            """
+        );
+
+        var map = RuleSetLoader.Load(workspace.DirectoryPath).DualWrite?.SystemClassMap;
+
+        map.ShouldNotBeNull();
+        // The overlay's own providers arrived…
+        map!["orm:write"].ShouldBe("db");
+        map["mailbox:tell"].ShouldBe("queue");
+        // …the builtin generic entries are still there (a whole-object merge would have dropped them)…
+        map["rabbitmq:publish"].ShouldBe("queue");
+        map["smtp:send"].ShouldBe("email");
+        map["http:POST"].ShouldBe("http");
+        // …and a key the overlay RESTATES wins, which is what makes the map overridable at all.
+        map["efcore:commit"].ShouldBe("relational");
+        // Keys are compared ordinally: `http:POST` is not `http:post`.
+        map.ContainsKey("http:post").ShouldBeFalse();
+    }
+
+    // Core ships no system-class map of its own: the shipped builtin JSON carries the entries for the providers
+    // IT declares, and a ruleset that drops the section leaves dual_write OFF rather than classifying against
+    // some other project's vocabulary.
+    [Test]
+    public void The_shipped_builtin_dual_write_map_names_only_generic_providers()
+    {
+        using var workspace = TempRulesWorkspace.Create("{}");
+
+        var map = RuleSetLoader.Load(workspace.DirectoryPath).DualWrite?.SystemClassMap;
+
+        map.ShouldNotBeNull();
+        map!.ShouldNotBeEmpty();
+        var providers = map.Keys.Select(k => k.Split(':')[0]).Distinct().ToList();
+        // The MedDBase overlay's providers must NOT ship with the tool (core-purity F3/F5).
+        providers.ShouldNotContain("llblgen");
+        providers.ShouldNotContain("entity_cache");
+        providers.ShouldNotContain("echo_publish");
+        providers.ShouldNotContain("eventbus");
+        providers.ShouldNotContain("actor");
+    }
+
     [Test]
     public void LoadForSolution_allows_comments_and_trailing_commas()
     {

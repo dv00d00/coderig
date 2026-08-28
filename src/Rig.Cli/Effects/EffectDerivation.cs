@@ -49,7 +49,12 @@ internal static class EffectDerivation
         // presentation/inventory filtering: race_window is unaffected (its matcher already only pairs same-cell
         // read+write, so an unpaired read contributes nothing). `--no-gate` flips this off (emit every read).
         bool gate = true,
-        IReadOnlyList<AllocationFact>? allocationFacts = null
+        IReadOnlyList<AllocationFact>? allocationFacts = null,
+        // FR-8 dual_write: the durable-write `provider:operation` -> system-class map, from the `dualWrite`
+        // rules section (`rules.DualWrite?.SystemClassMap`). Null/empty = no dual_write findings. Required on
+        // any `deriveHazards: true` path — there is no built-in map to fall back to, because every entry in one
+        // would be a project's own effect vocabulary shipped as the tool's default.
+        IReadOnlyDictionary<string, string>? dualWriteSystemClassMap = null
     )
     {
         // Pre-filter the static-field READ refs to cells that are also WRITTEN somewhere (the gate). An unpaired
@@ -89,7 +94,7 @@ internal static class EffectDerivation
         }
 
         effects = FactHazardDeriver.DeriveRaceWindows(effects, threadStaticCells, volatileCells);
-        effects = FactHazardDeriver.DeriveDualWrites(effects);
+        effects = FactHazardDeriver.DeriveDualWrites(effects, dualWriteSystemClassMap);
         effects = FactHazardDeriver.DeriveSyncOverAsync(effects, asyncMethodIds);
         return effects;
     }
@@ -139,7 +144,8 @@ internal static class EffectDerivation
             volatileCells: volatileCells,
             asyncMethodIds: asyncMethodIds,
             gate: gate,
-            allocationFacts: allocationFacts
+            allocationFacts: allocationFacts,
+            dualWriteSystemClassMap: rules.DualWrite?.SystemClassMap
         );
     }
 

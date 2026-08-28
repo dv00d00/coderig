@@ -348,7 +348,8 @@ internal sealed class LiveFactSource
             gate: gate,
             // AllocationFacts needs no LiveReads twin: Reads.LoadAllocationFactsAsync (whole-store) applies no
             // filter and no dedup, so the extracted list already IS its return value.
-            allocationFacts: allocationFacts
+            allocationFacts: allocationFacts,
+            dualWriteSystemClassMap: rules.DualWrite?.SystemClassMap
         );
     }
 

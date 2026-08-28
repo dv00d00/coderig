@@ -68,6 +68,7 @@ public static class RuleSetLoader
             Handoff = FactHandoffRuleProvider.Project(doc),
             Redirect = FactRedirectRuleProvider.Project(doc),
             CacheCoherence = FactCacheCoherenceRuleProvider.Project(doc),
+            DualWrite = FactDualWriteRuleProvider.Project(doc),
             CrossMethodAmplification = FactCrossMethodAmplificationRuleProvider.Project(doc),
             StaticInitCapture = FactStaticInitCaptureRuleProvider.Project(doc),
             Factory = FactGenericFactoryRuleProvider.Project(doc),
@@ -189,6 +190,11 @@ public static class RuleSetLoader
         acc.HandoffDispatchers = Concat(acc.HandoffDispatchers, next.HandoffDispatchers);
         acc.RedirectRules = Concat(acc.RedirectRules, next.RedirectRules);
         acc.CacheCoherence = next.CacheCoherence ?? acc.CacheCoherence;
+        // dualWrite merges PER KEY (not last-object-wins): an overlay adds its own providers to the builtin
+        // generic map instead of restating it. Forgetting this line is the recurring cascade trap — the
+        // detector keeps running against builtin-only classes with no error. Pinned by
+        // DualWrite_system_class_map_survives_the_cascade_merge.
+        acc.DualWrite = MergeDualWrite(acc.DualWrite, next.DualWrite);
         acc.CrossMethodAmplification = next.CrossMethodAmplification ?? acc.CrossMethodAmplification;
         acc.StaticInitCapture = next.StaticInitCapture ?? acc.StaticInitCapture;
         acc.DeliveryRules = Concat(acc.DeliveryRules, next.DeliveryRules);
@@ -294,6 +300,37 @@ public static class RuleSetLoader
             CollapseSeams = Concat(a.CollapseSeams, b.CollapseSeams),
             OpaqueTypes = Concat(a.OpaqueTypes, b.OpaqueTypes),
         };
+    }
+
+    // Fold `next`'s system-class map into `acc`'s, per key (later cascade file wins a key it restates; every
+    // earlier key survives). Same semantics as MergeEmoji — the section is a MAP, so concatenating whole
+    // objects would make an overlay's three entries replace the builtin's thirty.
+    private static DualWriteSection? MergeDualWrite(DualWriteSection? a, DualWriteSection? b)
+    {
+        if (a is null || b is null)
+        {
+            return a ?? b;
+        }
+
+        return new DualWriteSection { SystemClassMap = MergeSystemClasses(a.SystemClassMap, b.SystemClassMap) };
+    }
+
+    private static Dictionary<string, string>? MergeSystemClasses(Dictionary<string, string>? existing, Dictionary<string, string>? incoming)
+    {
+        if (incoming is null || incoming.Count == 0)
+        {
+            return existing;
+        }
+
+        // Ordinal, NOT OrdinalIgnoreCase: the keys are `provider:operation` tokens compared ordinally against
+        // derived effects (`http:POST` and `http:post` are different operations in a ruleset's vocabulary).
+        var merged = new Dictionary<string, string>(existing ?? [], StringComparer.Ordinal);
+        foreach (var kv in incoming)
+        {
+            merged[kv.Key] = kv.Value;
+        }
+
+        return merged;
     }
 
     private static Dictionary<string, string>? MergeEmoji(Dictionary<string, string>? existing, Dictionary<string, string>? incoming)

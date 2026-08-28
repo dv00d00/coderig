@@ -209,7 +209,8 @@ internal static class ImpactEngine
             volatileCells: volatileCells,
             asyncMethodIds: asyncMethodIds,
             gate: gate,
-            allocationFacts: allocationFacts
+            allocationFacts: allocationFacts,
+            dualWriteSystemClassMap: rules.DualWrite?.SystemClassMap
         );
         // The branch's enclosing→field/property-access-targets lookup, built ONCE so ComputeReachSets can union
         // each reachable method's read/write targets as degenerate `R:` nodes at O(reach) cost.
@@ -1198,7 +1199,8 @@ internal static class ImpactEngine
             volatileCells: volatileCells,
             asyncMethodIds: asyncMethodIds,
             gate: gate,
-            allocationFacts: allocationFacts
+            allocationFacts: allocationFacts,
+            dualWriteSystemClassMap: rules.DualWrite?.SystemClassMap
         );
 
         // Phase 3: union the base's field/property-access targets into its reach sets too, so the per-EP

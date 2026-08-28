@@ -7,7 +7,8 @@ namespace Rig.Tests.Analysis;
 // method performs durable writes to ≥2 DIFFERENT system classes (DB + queue, DB + search, DB + cache, DB +
 // external HTTP, …) in a single unit of work. If the second write fails after the first commits, the systems
 // diverge with no atomicity; the classic mitigation is an outbox/inbox/CDC. The matcher (FactHazardDeriver
-// .DeriveDualWrites) maps each method's durable WRITE effects to a system class via the DefaultSystemClassMap
+// .DeriveDualWrites) maps each method's durable WRITE effects to a system class via the system-class map from
+// the `dualWrite.systemClassMap` RULES section (the corpus loads the shipped builtin one, as production does)
 // and, when ≥2 distinct classes co-occur, attaches ONE dual_write observation (medium, naming the systems) to
 // a representative write effect — annotate-only, suppressing nothing.
 //

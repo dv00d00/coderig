@@ -166,6 +166,19 @@ internal sealed record EffectSelectorDocument(string Provider, string? Operation
 // Projected to FactCacheDiscoveryRead.
 internal sealed record DiscoveryReadDocument(string Provider, string Operation, IReadOnlyList<string>? StripSuffix = null);
 
+// FR-8 dual_write POLICY (JSON authoring shape of the top-level `dualWrite` section):
+//
+//   "dualWrite": { "systemClassMap": { "efcore:commit": "db", "rabbitmq:publish": "queue", "queue": "queue" } }
+//
+// A flat `provider:operation` (or bare `provider`) -> system-class map. Unlike the other single-object
+// sections this merges PER KEY across the cascade (later files win a key, earlier keys survive) — so a project
+// overlay ADDS its own providers without restating the builtin's, the same reason `effectEmoji` merges that
+// way. Projected to FactDualWriteRule; absent/empty = the dual_write detector is off.
+internal sealed class DualWriteSection
+{
+    public Dictionary<string, string>? SystemClassMap { get; set; }
+}
+
 // cross_method_amplification POLICY (JSON authoring shape of the `crossMethodAmplification` section): the
 // witness gate (`witnesses`, same {providers, operations} groups as `observations.amplification`) that
 // decides what counts as an amplified effect beneath a per-iteration call, the reach bound `maxDepth`, and
@@ -323,6 +336,10 @@ internal sealed class AnalysisRulesDocument
     // Top-level key "cacheCoherence": a SINGLE object (not a list) declaring the cached entities + bulk-write +
     // invalidation method names for the FR-7 cache-coherence graph hazard (see CacheCoherenceRule).
     public CacheCoherenceRule? CacheCoherence { get; set; }
+
+    // Top-level key "dualWrite": the durable-write provider:operation -> system-class map for the FR-8
+    // dual_write hazard (see DualWriteSection). Absent = detector off; core ships no default map.
+    public DualWriteSection? DualWrite { get; set; }
 
     // Top-level key "crossMethodAmplification": a SINGLE object declaring the read gate + reach bound for the
     // cross_method_amplification presence correlation (see CrossMethodAmplificationRule). Absent = detector off.

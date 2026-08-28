@@ -31,6 +31,12 @@ public sealed record RuleSet
     // the `crossMethodAmplification` section is absent. Opt-in — absent section = detector off.
     public FactCrossMethodAmplificationRule? CrossMethodAmplification { get; init; }
 
+    // FR-8 dual_write POLICY: the durable-write `provider:operation` -> system-class map (threaded into
+    // FactHazardDeriver.DeriveDualWrites by the effect-derivation callers). A single object; null when the
+    // `dualWrite` section is absent, which leaves the detector off — core ships no default map, because every
+    // key in one is a project's own effect vocabulary.
+    public FactDualWriteRule? DualWrite { get; init; }
+
     // static_init_capture POLICY (the project-specific mutable-source resource patterns) for the
     // static-init-capture detector (wired in DeriveCommand). A single object; null when the
     // `staticInitCapture` section is absent. Opt-in — the detector fires only when this is present.

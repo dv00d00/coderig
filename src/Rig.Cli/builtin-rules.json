@@ -1827,6 +1827,59 @@
       "reason": "msdi_servicedescriptor_singleton"
     }
   ],
+  // dualWrite.systemClassMap — FR-8: which durable WRITE `provider:operation` commits to which SYSTEM CLASS.
+  // The pairing logic (>=2 distinct classes written in one enclosing method = a distributed-consistency
+  // candidate, no atomicity) is generic code; this table is the only part that names effects, so it is rule
+  // data and core ships no default. Entries cover the providers THIS file declares; a project overlay adds its
+  // own — the map merges PER KEY across the cascade, so adding never means restating.
+  //
+  // WRITES/MUTATIONS ONLY, never reads: a read of two systems is not a dual write. Keyed
+  // `provider:operation`, with a bare `provider` key as the fallback for providers whose every operation is a
+  // write. An entry that matches no effect in a given codebase is inert.
+  "dualWrite": {
+    "systemClassMap": {
+      "db_command:execute": "db",
+      "efcore:commit": "db",
+      "efcore:pending_write": "db",
+      "efcore:raw_sql": "db",
+      "repository:write": "db",
+      "yessql:write": "db",
+      "yessql:delete": "db",
+
+      "rabbitmq:publish": "queue",
+      "mediatr:publish": "queue",
+
+      "elasticsearch:write": "search",
+      "elasticsearch:delete": "search",
+      "elasticsearch:index_write": "search",
+      "elasticsearch:index_delete": "search",
+      "azure_search:write": "search",
+      "azure_search:delete": "search",
+      "azure_search:index_write": "search",
+      "azure_search:index_delete": "search",
+
+      "redis:write": "cache",
+      "redis:delete": "cache",
+      "inproc_cache:write": "cache",
+      "inproc_cache:delete": "cache",
+
+      "http:POST": "http",
+      "http:PUT": "http",
+      "http:PATCH": "http",
+      "http:DELETE": "http",
+      "soap:invoke": "http",
+      "soap:submit": "http",
+
+      "aws_s3:write": "blob",
+      "aws_s3:delete": "blob",
+      "azure_blob:write": "blob",
+      "azure_blob:delete": "blob",
+
+      "object_store:write": "object_store",
+
+      "smtp:send": "email"
+    }
+  },
   "deliveryRules": [
     {
       "id": "csharp-event",

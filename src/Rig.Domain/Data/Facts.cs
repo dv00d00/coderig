@@ -655,6 +655,14 @@ public sealed record FactCacheCoherenceRule(
 // anchor and companion keys normalize to. Keyed off READS, never off the companion — see CorrelationSpec.
 public sealed record FactCacheDiscoveryRead(string Provider, string Operation, IReadOnlyList<string> StripSuffix);
 
+// FR-8 dual_write POLICY: the SYSTEM-CLASS MAP — which durable write `provider:operation` commits to which
+// system class ("db", "queue", "cache", "search", "http", "blob", "email", …). The pairing logic (≥2 distinct
+// classes written in one method = a distributed-consistency candidate) is generic code in FactHazardDeriver;
+// the map is the only part that names effects, so it is rule data (`dualWrite.systemClassMap`) and core ships
+// no default. Keyed `provider:operation`, with a bare `provider` key as the fallback for providers whose every
+// operation is a write. WRITES ONLY — a read of two systems is not a dual write. Absent = detector off.
+public sealed record FactDualWriteRule(IReadOnlyDictionary<string, string> SystemClassMap);
+
 // cross_method_amplification POLICY: which effects count as a WITNESS beneath a per-iteration call, and how
 // far to look. Opt-in — the detector fires ONLY when this section is present, mirroring cacheCoherence.
 // N+1 (a repeated read) is just the subset where every witness is a read: the general finding is "a looped

@@ -296,10 +296,12 @@ public static class FactHazardDeriver
     //
     // Like DeriveRaceWindows this is a CODED matcher over the flat effect list, and ANNOTATE-ONLY: it appends
     // a dual_write observation to ONE representative write effect of the qualifying method and returns the list
-    // otherwise untouched — it suppresses nothing and changes no effect. What is DATA is only the SYSTEM-CLASS
-    // MAP (which write `provider:operation` belongs to which durable system class) — defaulted to
-    // DefaultSystemClassMap and overridable by the caller, so the grouping can be retargeted without touching
-    // the pairing logic.
+    // otherwise untouched — it suppresses nothing and changes no effect. What is DATA is the SYSTEM-CLASS MAP
+    // (which write `provider:operation` belongs to which durable system class): it is supplied by the CALLER
+    // from the `dualWrite.systemClassMap` rules section, so the grouping can be retargeted without touching the
+    // pairing logic. Core carries NO default map — every key in it would be one project's effect vocabulary,
+    // and a shipped map naming another codebase's providers classifies nothing while looking configured. An
+    // empty/absent map therefore yields NO findings (the detector is off), which is the honest state.
     //
     // v1 is INTRA-METHOD (consistent with race_window): the ≥2 distinct systems must be written in ONE
     // enclosing method, so the co-occurrence is an exact, cheap proof. The widening — cross-method / per-EP
@@ -311,81 +313,26 @@ public static class FactHazardDeriver
     public const string DualWriteType = "dual_write";
     private const string ReasonDualWriteNoOutbox = "dual_write_no_outbox_checked";
 
-    // The DEFAULT system-class map: each durable WRITE/MUTATION `provider:operation` mapped to the SYSTEM
-    // CLASS it commits to. DATA (a grouping table), not pairing logic — the pairing (≥2 distinct classes in
-    // one method) is the code below. Only writes/mutations are listed (NEVER reads): a read of two systems is
-    // not a dual write. Keyed `provider:operation`; a provider with no operation-specific entry is matched by
-    // a bare `provider` fallback. Covers the providers that exist in the shipped builtin-rules.json PLUS the
-    // MedDBase-local overlay providers (llblgen / entity_cache / echo_publish / eventbus / queue) — entries
-    // that never match any effect are harmless.
-    public static readonly IReadOnlyDictionary<string, string> DefaultSystemClassMap = new Dictionary<string, string>(
-        StringComparer.Ordinal
-    )
-    {
-        // db — relational durable store
-        ["db_command:execute"] = "db",
-        ["efcore:commit"] = "db",
-        ["efcore:pending_write"] = "db",
-        ["efcore:raw_sql"] = "db",
-        ["repository:write"] = "db",
-        ["yessql:write"] = "db",
-        ["yessql:delete"] = "db",
-        ["llblgen:write"] = "db",
-        ["llblgen:delete"] = "db",
-        ["llblgen:tx_commit"] = "db",
-        // queue — async messaging / event publish / actor mailbox
-        ["rabbitmq:publish"] = "queue",
-        ["mediatr:publish"] = "queue",
-        ["actor:tell"] = "queue",
-        ["actor:ask"] = "queue",
-        ["echo_publish"] = "queue",
-        ["eventbus"] = "queue",
-        ["queue"] = "queue",
-        // search — search index
-        ["elasticsearch:write"] = "search",
-        ["elasticsearch:delete"] = "search",
-        ["elasticsearch:index_write"] = "search",
-        ["elasticsearch:index_delete"] = "search",
-        ["azure_search:write"] = "search",
-        ["azure_search:delete"] = "search",
-        ["azure_search:index_write"] = "search",
-        ["azure_search:index_delete"] = "search",
-        // cache — distributed / in-proc cache
-        ["redis:write"] = "cache",
-        ["redis:delete"] = "cache",
-        ["inproc_cache:write"] = "cache",
-        ["inproc_cache:delete"] = "cache",
-        ["entity_cache:write"] = "cache",
-        // http — external HTTP mutation (NOT GET)
-        ["http:POST"] = "http",
-        ["http:PUT"] = "http",
-        ["http:PATCH"] = "http",
-        ["http:DELETE"] = "http",
-        ["soap:invoke"] = "http",
-        ["soap:submit"] = "http",
-        // blob — blob storage
-        ["aws_s3:write"] = "blob",
-        ["aws_s3:delete"] = "blob",
-        ["azure_blob:write"] = "blob",
-        ["azure_blob:delete"] = "blob",
-        // object_store — keyed object store
-        ["object_store:write"] = "object_store",
-        // email — outbound mail
-        ["smtp:send"] = "email",
-    };
-
     // Returns `effects` with a dual_write observation appended to ONE representative write effect of every
-    // enclosing method whose durable writes span ≥2 DISTINCT system classes (per `systemClassMap`). The
+    // enclosing method whose durable writes span ≥2 DISTINCT system classes (per `systemClassMap` — the
+    // `dualWrite.systemClassMap` rules section, keyed `provider:operation` with a bare-`provider` fallback for
+    // providers whose every operation is a write; only writes/mutations belong in it, never reads, since a read
+    // of two systems is not a dual write). A null or empty map yields no findings. The
     // representative is the LAST write by line (the latest commit point — the most useful anchor). Context is
     // the sorted, '+'-joined system set (e.g. "db+queue"); Detail is the comma-joined write SITES; Confidence
     // is medium; Reason is dual_write_no_outbox_checked. The input list is not mutated; effects without a new
     // finding are returned by reference. A null enclosing id is skipped (not a call-graph node, never pairs).
     public static IReadOnlyList<DerivedEffect> DeriveDualWrites(
         IReadOnlyList<DerivedEffect> effects,
-        IReadOnlyDictionary<string, string>? systemClassMap = null
+        IReadOnlyDictionary<string, string>? systemClassMap
     )
     {
-        var map = systemClassMap ?? DefaultSystemClassMap;
+        if (systemClassMap is null || systemClassMap.Count == 0)
+        {
+            return effects;
+        }
+
+        var map = systemClassMap;
 
         // Per enclosing method, collect the write effects with their system class — preserving list order so
         // the "last by line" representative is found in one pass. Methods touching <2 distinct classes drop out.
