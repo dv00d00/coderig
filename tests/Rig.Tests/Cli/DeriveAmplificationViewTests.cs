@@ -119,14 +119,13 @@ public sealed class DeriveAmplificationViewTests
         var scope = BuiltinRules().Observations.AmplificationOrEmpty;
         scope.ShouldNotBeEmpty("builtin-rules.json must ship an observations.amplification section");
 
-        // In: the effects where x N means N round trips.
+        // In: the effects where x N means N round trips — and ONLY providers this file itself declares.
         AmplificationScope.Includes(scope, "http", "POST").ShouldBeTrue();
         AmplificationScope.Includes(scope, "http", "GET").ShouldBeTrue();
-        AmplificationScope.Includes(scope, "llblgen", "write").ShouldBeTrue();
         AmplificationScope.Includes(scope, "db_command", "execute").ShouldBeTrue();
+        AmplificationScope.Includes(scope, "efcore", "commit").ShouldBeTrue();
         AmplificationScope.Includes(scope, "object_store", "read").ShouldBeTrue();
         AmplificationScope.Includes(scope, "queue", "read").ShouldBeTrue();
-        AmplificationScope.Includes(scope, "actor", "tell").ShouldBeTrue();
 
         // Out (staged, deliberately — x N is CPU/contention, not round trips). These are also the two
         // HIGHEST-volume looped providers on the real store, so admitting them would dominate the section.
@@ -135,6 +134,12 @@ public sealed class DeriveAmplificationViewTests
         AmplificationScope.Includes(scope, "lock", "acquire").ShouldBeFalse();
         AmplificationScope.Includes(scope, "alloc", "object").ShouldBeFalse();
         AmplificationScope.Includes(scope, "throw", "throw").ShouldBeFalse();
+
+        // Out because they are ONE PROJECT'S vocabulary (core-purity F5): the shipped scope must not name a
+        // codebase-specific ORM or actor framework — those arrive from that project's own ruleset, which
+        // APPENDS to this list. A regression here means the MedDBase overlay leaked back into the tool.
+        AmplificationScope.Includes(scope, "llblgen", "write").ShouldBeFalse();
+        AmplificationScope.Includes(scope, "actor", "tell").ShouldBeFalse();
     }
 
     [Test]
@@ -150,7 +155,7 @@ public sealed class DeriveAmplificationViewTests
     {
         var effects = new[]
         {
-            Looped("llblgen", "write", "M:App.Svc.Save"), // in scope   -> Amplification section
+            Looped("db_command", "execute", "M:App.Svc.Save"), // in scope   -> Amplification section
             Looped("entity_cache", "read", "M:App.Svc.Get"), // out of scope -> generic block
         };
         var scope = BuiltinRules().Observations.AmplificationOrEmpty;
@@ -158,7 +163,7 @@ public sealed class DeriveAmplificationViewTests
         // Only the in-scope one becomes a finding...
         var findings = DeriveCommand.AmplificationFindings(effects, scope);
         findings.Count.ShouldBe(1);
-        findings[0].Provider.ShouldBe("llblgen");
+        findings[0].Provider.ShouldBe("db_command");
 
         // ...and the out-of-scope one is still reported, as a count, so narrowing the scope loses nothing.
         var groups = DeriveCommand.GenericObservationGroups(effects, scope, amplification: true);
@@ -170,7 +175,7 @@ public sealed class DeriveAmplificationViewTests
     [Test]
     public void No_amplification_suppresses_the_section_and_restores_the_generic_count()
     {
-        var effects = new[] { Looped("llblgen", "write", "M:App.Svc.Save"), Looped("http", "POST", "M:App.Svc.Push") };
+        var effects = new[] { Looped("db_command", "execute", "M:App.Svc.Save"), Looped("http", "POST", "M:App.Svc.Push") };
         var scope = BuiltinRules().Observations.AmplificationOrEmpty;
 
         // ON (default): both are findings, and NEITHER is left in the generic block.
@@ -195,8 +200,8 @@ public sealed class DeriveAmplificationViewTests
         // One effect carrying BOTH a hazard (n_plus_1) and the structural looped_effect — the common case for an
         // in-scope looped READ. It must appear ONCE in each section, under its own type, and nowhere twice.
         var effect = new DerivedEffect(
-            Provider: "llblgen",
-            Operation: "read",
+            Provider: "db_command",
+            Operation: "execute",
             ResourceType: "AccountEntity",
             EnclosingSymbolId: "M:App.Svc.Load",
             FilePath: "C:/repo/App/Svc.cs",
@@ -226,7 +231,7 @@ public sealed class DeriveAmplificationViewTests
         text.ShouldContain("Hazards (pattern findings): 1");
         text.ShouldContain("Amplification (looped effects — structural inventory): 1");
         text.ShouldContain("n_plus_1: 1 site(s)");
-        text.ShouldContain("llblgen:read: 1 site(s)");
+        text.ShouldContain("db_command:execute: 1 site(s)");
         // The generic block sees NEITHER (both have their own section).
         DeriveCommand.GenericObservationGroups([effect], scope, amplification: true).ShouldBeEmpty();
     }

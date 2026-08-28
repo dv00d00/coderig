@@ -230,12 +230,20 @@ internal sealed record ContextDispatchRule(string Interface, string BindingBase,
 // mechanism (C# events / Echo actors) by composing the identity primitives, so the loader is generic over
 // it rather than inferring the actor case from the actor:* effect rules. Projected to FactPathFinder's
 // DeliveryRule. `confidence` (exact|heuristic) is disclosure carried onto the emitted handoff.
+// `cycleDelivery` + `joinConfidence` (core-purity F6) declare whether this mechanism's edges are ones an
+// event_cycle may close through, and how EXACT the producer→handler join is ("high" = an exact symbol join,
+// "low" = a heuristic/over-approximate one, which caps a cycle's confidence). FactCycleDeriver reads the set
+// from here instead of knowing any tag: before this it hardcoded `actor_tell` (a tag ASSIGNED by rule data) and
+// the rule "any actor_tell edge ⇒ low". A ruleset declaring no cycleDelivery rule yields no event_cycle
+// findings — there is no built-in tag to fall back to.
 internal sealed record DeliveryRuleDocument(
     string Id,
     string Tag,
     string Confidence,
     DeliveryEndpointDocument Producer,
-    DeliveryEndpointDocument Registration
+    DeliveryEndpointDocument Registration,
+    bool CycleDelivery = false,
+    string? JoinConfidence = null
 );
 
 // One side of a delivery rule. `source` selects which facts the loader scans ("event-symbol" | "arg") and
@@ -263,12 +271,19 @@ internal sealed record ConcurrencyHandledObservationRule(IReadOnlyList<string> C
 
 internal sealed record ResilienceRetryObservationRule(IReadOnlyList<string> WrapperMethods, IReadOnlyList<string> ReceiverTypePatterns);
 
+// A resource-span observation rule. `id` is OPTIONAL and merge-only (never projected): a later cascade file
+// declaring a rule with the SAME id REPLACES this one in place instead of appending a second rule. That is the
+// one merge mode `excludeProviders` requires — it is a SUPPRESSION list, and an appended rule cannot subtract
+// (both rules would fire, and the one without the exclusion would annotate the effect anyway). So a project
+// that needs its own ORM excluded from the transaction span restates the builtin rule under its id. Rules
+// without an id always append, exactly as before.
 internal sealed record ResourceSpanObservationRule(
     string ScopeKind,
     IReadOnlyList<string> ScopeTypePatterns,
     IReadOnlyList<string> ExcludeProviders,
     string ObservationType,
-    string Context
+    string Context,
+    string? Id = null
 );
 
 // FR-6 (RCA #1646): flag a store/serialize effect whose payload type argument is a serializer-

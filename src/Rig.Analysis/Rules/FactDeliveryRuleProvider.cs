@@ -15,7 +15,12 @@ internal static class FactDeliveryRuleProvider
             Tag: rule.Tag,
             Confidence: rule.Confidence,
             Producer: Project(rule.Producer),
-            Registration: Project(rule.Registration)
+            Registration: Project(rule.Registration),
+            CycleDelivery: rule.CycleDelivery,
+            // A cycleDelivery rule that omits joinConfidence is treated as an EXACT join ("high"): the
+            // heuristic case is the one worth declaring, and defaulting the other way would silently downgrade
+            // every exact mechanism's cycles.
+            JoinConfidence: string.IsNullOrWhiteSpace(rule.JoinConfidence) ? null : rule.JoinConfidence
         );
 
     private static DeliveryEndpoint Project(DeliveryEndpointDocument endpoint) =>

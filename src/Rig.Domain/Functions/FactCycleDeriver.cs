@@ -32,22 +32,40 @@ public static class FactCycleDeriver
     // The hazard finding TYPE this deriver emits (re-stated in HazardKinds, the closed catalog).
     public const string EventCycleType = "event_cycle";
 
-    // The default delivery-edge dispatchers — the HandoffDispatcher tags whose edges are the publish→consumer
-    // DELIVERY hops a feedback cycle must traverse to qualify. DATA, not code: a future delivery resolver
-    // (another dispatcher kind) joins the cycle hunt by being added to this set without touching the SCC walk.
-    //   - event_raise  : a C# event raise resolved to its subscribers by EXACT event symbol — an exact join.
-    //   - actor_tell   : an Echo tell resolved to handlers by PROCESS-NAME string — a heuristic (over-approx) join.
-    public const string EventRaiseDispatcher = "event_raise";
-    public const string ActorTellDispatcher = "actor_tell";
-    public static readonly IReadOnlySet<string> DefaultDeliveryDispatchers = new HashSet<string>(StringComparer.Ordinal)
-    {
-        EventRaiseDispatcher,
-        ActorTellDispatcher,
-    };
-
     private const string HandoffKind = "handoff";
     private const string ConfidenceHigh = "high";
     private const string ConfidenceLow = "low";
+
+    // The delivery-edge dispatchers this deriver hunts through, taken from RULE DATA (core-purity F6): every
+    // `deliveryRules` entry marked `cycleDelivery: true`, mapped to its `joinConfidence`. Core names NO tag —
+    // the tags (`event_raise`, `actor_tell`, …) are ASSIGNED by the ruleset that declares the mechanism, so a
+    // constant here would hardcode knowledge of one ruleset's vocabulary AND of how exact its join is. A
+    // ruleset that marks no rule cycleDelivery therefore yields no event_cycle findings, which is honest: rig
+    // does not know what a delivery hop is in that codebase.
+    //
+    // joinConfidence semantics: "low" = the producer→handler join is heuristic/over-approximate (e.g. resolved
+    // by a shared name), so a cycle traversing such an edge is a CANDIDATE — any low edge caps the cycle at
+    // low. Anything else (including an omitted value) is an exact join.
+    public static IReadOnlyDictionary<string, string> CycleDeliveryDispatchers(IReadOnlyList<DeliveryRule> deliveryRules)
+    {
+        var dispatchers = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var rule in deliveryRules)
+        {
+            if (!rule.CycleDelivery || string.IsNullOrEmpty(rule.Tag))
+            {
+                continue;
+            }
+
+            // Two rules sharing a tag: the more doubtful join wins, so disclosure never gets upgraded away.
+            var confidence = string.Equals(rule.JoinConfidence, ConfidenceLow, StringComparison.OrdinalIgnoreCase) ? ConfidenceLow : ConfidenceHigh;
+            if (!dispatchers.TryGetValue(rule.Tag, out var existing) || string.Equals(existing, ConfidenceHigh, StringComparison.Ordinal))
+            {
+                dispatchers[rule.Tag] = confidence;
+            }
+        }
+
+        return dispatchers;
+    }
 
     // Returns every feedback cycle in `graph` that closes through at least one delivery edge. A cycle is one
     // strongly-connected component (SCC) of the Caller→Callee call graph that CONTAINS a delivery edge — a
@@ -55,14 +73,24 @@ public static class FactCycleDeriver
     // are members of that same SCC (so the delivery hop is genuinely part of the cycle, not merely incident to
     // it). A size-1 SCC qualifies on a SELF delivery edge (a method raising an event it itself handles).
     //
-    // Confidence is "low" when ANY qualifying delivery edge in the SCC is an actor_tell (a heuristic process-
-    // name join, over-approximate on a shared name); "high" when they are all event_raise (exact symbol joins).
+    // `deliveryDispatchers` maps each qualifying delivery TAG to its join confidence (see
+    // CycleDeliveryDispatchers, which builds it from the `deliveryRules` marked cycleDelivery). Confidence is
+    // "low" when ANY qualifying delivery edge in the SCC came from a "low"-join mechanism (a heuristic join,
+    // over-approximate on a shared name); "high" when they are all exact joins. An empty/null map means no
+    // mechanism was declared as cycle-carrying, so there are NO findings — core knows no tag of its own.
     //
     // Determinism (for stable tests + a future cache): SCC members sorted Ordinal; DeliveryEdges sorted by
     // (Caller, Callee, Line); the returned cycles ordered by their first member Ordinal.
-    public static IReadOnlyList<EventCycle> DeriveEventCycles(FactGraphData graph, IReadOnlySet<string>? deliveryDispatchers = null)
+    public static IReadOnlyList<EventCycle> DeriveEventCycles(
+        FactGraphData graph,
+        IReadOnlyDictionary<string, string>? deliveryDispatchers
+    )
     {
-        var dispatchers = deliveryDispatchers ?? DefaultDeliveryDispatchers;
+        var dispatchers = deliveryDispatchers;
+        if (dispatchers is null || dispatchers.Count == 0)
+        {
+            return [];
+        }
 
         // The full edge topology for the SCC is ALL call edges — the delivery handoff edges are PART of the
         // graph here (we are hunting cycles that traverse them), unlike the sync-cut reachability traversal
@@ -103,7 +131,7 @@ public static class FactCycleDeriver
             if (
                 !string.Equals(edge.Kind, HandoffKind, StringComparison.Ordinal)
                 || edge.HandoffDispatcher is null
-                || !dispatchers.Contains(edge.HandoffDispatcher)
+                || !dispatchers.ContainsKey(edge.HandoffDispatcher)
             )
             {
                 continue;
@@ -171,11 +199,16 @@ public static class FactCycleDeriver
                 }
             );
 
-            // Confidence: low if ANY qualifying delivery edge is an actor_tell (heuristic process-name join);
-            // high when they are all event_raise (exact symbol joins).
-            var anyActorTell = deliveryEdges.Any(e => string.Equals(e.HandoffDispatcher, ActorTellDispatcher, StringComparison.Ordinal));
+            // Confidence: low if ANY qualifying delivery edge came from a mechanism the RULES declare as a
+            // heuristic join (joinConfidence "low"); high when every one of them is an exact join. The
+            // exactness is a property of the declared mechanism, not of a tag core recognizes.
+            var anyHeuristicJoin = deliveryEdges.Any(e =>
+                e.HandoffDispatcher is { } tag
+                && dispatchers.TryGetValue(tag, out var join)
+                && string.Equals(join, ConfidenceLow, StringComparison.Ordinal)
+            );
             cycles.Add(
-                new EventCycle(Members: members, DeliveryEdges: deliveryEdges, Confidence: anyActorTell ? ConfidenceLow : ConfidenceHigh)
+                new EventCycle(Members: members, DeliveryEdges: deliveryEdges, Confidence: anyHeuristicJoin ? ConfidenceLow : ConfidenceHigh)
             );
         }
 

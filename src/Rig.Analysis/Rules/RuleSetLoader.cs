@@ -269,7 +269,10 @@ public static class RuleSetLoader
             ReadBeforeCommit = Concat(a.ReadBeforeCommit, b.ReadBeforeCommit),
             ConcurrencyHandled = Concat(a.ConcurrencyHandled, b.ConcurrencyHandled),
             ResilienceRetry = Concat(a.ResilienceRetry, b.ResilienceRetry),
-            ResourceSpan = Concat(a.ResourceSpan, b.ResourceSpan),
+            // resourceSpan merges by ID where one is declared (later file REPLACES that rule), appending the
+            // rest. `excludeProviders` is a suppression list, so an overlay cannot extend it by appending a
+            // second rule — both would fire and the un-suppressed one would annotate anyway.
+            ResourceSpan = MergeResourceSpan(a.ResourceSpan, b.ResourceSpan),
             SerializationHazard = Concat(a.SerializationHazard, b.SerializationHazard),
             NPlusOne = Concat(a.NPlusOne, b.NPlusOne),
             // Amplification (looped_effect display scope) concatenates like every other observation list, so a
@@ -300,6 +303,33 @@ public static class RuleSetLoader
             CollapseSeams = Concat(a.CollapseSeams, b.CollapseSeams),
             OpaqueTypes = Concat(a.OpaqueTypes, b.OpaqueTypes),
         };
+    }
+
+    // Fold `b`'s resource-span rules into `a`'s: a rule whose `id` matches one already present REPLACES it in
+    // place (keeping cascade position); a rule with no id, or an id not seen before, appends. See
+    // ResourceSpanObservationRule for why a suppression list needs replace rather than append.
+    private static List<ResourceSpanObservationRule> MergeResourceSpan(
+        List<ResourceSpanObservationRule>? a,
+        List<ResourceSpanObservationRule>? b
+    )
+    {
+        var merged = new List<ResourceSpanObservationRule>(a ?? []);
+        foreach (var rule in b ?? [])
+        {
+            var index = string.IsNullOrWhiteSpace(rule.Id)
+                ? -1
+                : merged.FindIndex(existing => string.Equals(existing.Id, rule.Id, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0)
+            {
+                merged[index] = rule;
+            }
+            else
+            {
+                merged.Add(rule);
+            }
+        }
+
+        return merged;
     }
 
     // Fold `next`'s system-class map into `acc`'s, per key (later cascade file wins a key it restates; every

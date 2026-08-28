@@ -246,9 +246,15 @@ internal static class EffectDerivation
     {
         var findings = new List<DeriveCommand.HazardFinding>();
 
-        // event_cycle: a feedback cycle that closes through ≥1 publish→consumer delivery edge. Always derived
-        // (no rule gate) — exactly as DeriveCommand does.
-        findings.AddRange(DeriveCommand.EventCycleFindings(FactCycleDeriver.DeriveEventCycles(shapedGraph)));
+        // event_cycle: a feedback cycle that closes through ≥1 publish→consumer delivery edge. Which delivery
+        // TAGS qualify — and how exact each one's producer→handler join is — comes from the `deliveryRules`
+        // marked `cycleDelivery` (core-purity F6); a ruleset declaring none yields no findings, since core
+        // recognizes no tag of its own.
+        findings.AddRange(
+            DeriveCommand.EventCycleFindings(
+                FactCycleDeriver.DeriveEventCycles(shapedGraph, FactCycleDeriver.CycleDeliveryDispatchers(rules.Delivery))
+            )
+        );
 
         // cache_coherence (FR-7): an anchor durable write whose forward closure lacks a same-key invalidation.
         // Opt-in AND fully rule-described: the section is projected only when it names both an anchor and a

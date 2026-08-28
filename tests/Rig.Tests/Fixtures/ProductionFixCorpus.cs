@@ -100,7 +100,11 @@ public static class ProductionFixCorpus
             ObservationsIn(enclosingMarker, FactHazardDeriver.ThreadLocalContextType);
     }
 
-    public static CorpusResult Analyze(string source)
+    // `projectRulesJson` (optional) is a rig.rules.json body layered OVER the shipped builtin rules, exactly
+    // as an analyzed codebase's own ruleset is. Needed for detectors whose vocabulary is legitimately
+    // project-side — e.g. which payload types a serializer cannot round-trip (core-purity F5: the builtin
+    // serializationHazard section ships EMPTY, because the answer is a property of the analyzed stack).
+    public static CorpusResult Analyze(string source, string? projectRulesJson = null)
     {
         var tree = CSharpSyntaxTree.ParseText(source, path: "Corpus.cs");
         var compilation = CSharpCompilation.Create(
@@ -125,7 +129,7 @@ public static class ProductionFixCorpus
             DispatchFacts: extraction.Dispatch
         );
 
-        var rules = LoadBuiltinRules();
+        var rules = LoadRules(projectRulesJson);
         var epData = FactProjection.EntryPointData(result);
         var effects = FactEffectDeriver.Derive(
             FactProjection.Invocations(result),
@@ -152,13 +156,19 @@ public static class ProductionFixCorpus
         return new CorpusResult(effects);
     }
 
-    // Builtin-only rule set (no colocated/global overlay): load rooted at an empty temp dir so the only rules
-    // are the shipped builtin-rules.json — the corpus measures what we SHIP, not a dev's local rules.
-    private static Rig.Domain.Data.RuleSet LoadBuiltinRules()
+    // The shipped builtin rules, plus an OPTIONAL project ruleset layered on top: load rooted at a temp dir so
+    // a dev's own colocated/global rules can never leak in — the corpus measures what we SHIP (plus exactly the
+    // project rules a test declares), not a machine's local state.
+    private static Rig.Domain.Data.RuleSet LoadRules(string? projectRulesJson)
     {
         var tempDir = Directory.CreateTempSubdirectory("rig-corpus-rules-").FullName;
         try
         {
+            if (projectRulesJson is not null)
+            {
+                File.WriteAllText(Path.Combine(tempDir, "rig.rules.json"), projectRulesJson);
+            }
+
             return RuleSetLoader.Load(tempDir);
         }
         finally

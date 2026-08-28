@@ -435,7 +435,21 @@ public sealed record DeliverySite(
 // Projected from the `deliveryRules` JSON section; consumed by Reads.LoadDeliverySitesAsync, which emits the
 // uniform DeliverySite the framework-blind FactPathFinder.AddDeliveryEdges joins. Tag becomes the emitted
 // handoff's HandoffDispatcher; Confidence (exact|heuristic) is disclosure that feeds the FR-10 cycle tier.
-public sealed record DeliveryRule(string Id, string Tag, string Confidence, DeliveryEndpoint Producer, DeliveryEndpoint Registration);
+// CycleDelivery + JoinConfidence (core-purity F6) are what make `event_cycle` rule-driven: the deriver takes
+// the set of delivery TAGS a feedback cycle may close through — and each tag's join exactness — from the rules
+// instead of naming a tag in C#. JoinConfidence "low" means the producer→handler join is heuristic
+// (over-approximate), which caps any cycle traversing such an edge at low confidence; "high" (the default for
+// a cycleDelivery rule that omits it) means an exact symbol join. A ruleset with no cycleDelivery rule
+// produces no event_cycle findings.
+public sealed record DeliveryRule(
+    string Id,
+    string Tag,
+    string Confidence,
+    DeliveryEndpoint Producer,
+    DeliveryEndpoint Registration,
+    bool CycleDelivery = false,
+    string? JoinConfidence = null
+);
 
 // One side of a delivery rule. Source selects which facts the loader scans + how the channel identity is
 // found: "event-symbol" = C# event reads (target E:), identity is the event DocID, Role=ByColocation (the

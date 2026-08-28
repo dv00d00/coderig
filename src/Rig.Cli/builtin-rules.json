@@ -1365,50 +1365,10 @@
       "basis": "compilation",
       "reason": "legacy_asmx_soap_invoke: any generated ASMX proxy's wrapper body calls the inherited SoapHttpClientProtocol.Invoke(\"operation\", args); the first string literal IS the SOAP operation name. One base-type rule covers every WSDL proxy (Healthcode + Labs/Mirth/LabsServer), where per-method project rules only cover the ones explicitly enumerated."
     },
-    {
-      "provider": "actor",
-      "operation": "spawn",
-      "methods": [ "spawn", "spawnUnit", "spawnMany" ],
-      "declaringTypes": [ "Echo.Process" ],
-      "resource": "argument_name",
-      "argumentIndex": 0,
-      "confidence": "high",
-      "basis": "compilation",
-      "reason": "echo_actor_spawn: Echo.Process.spawn<…>(ProcessName Name, …) creates an actor named by its FIRST argument. The name is referenced through a static-readonly ProcessName/ProcessId field in a per-service ProcessDns/EchoConfig.ProcessNames table — NOT a compile-time const — so argument_name (the member/identifier path, e.g. ProcessDns.AccountService) attributes the spawn to the actual process rather than the declaring type, which would collapse every spawn to one node. (string_argument would miss these: static-readonly is not const.)"
-    },
-    {
-      "provider": "actor",
-      "operation": "register",
-      "methods": [ "register" ],
-      "declaringTypes": [ "Echo.Process" ],
-      "resource": "argument_name",
-      "argumentIndex": 0,
-      "confidence": "high",
-      "basis": "compilation",
-      "reason": "echo_actor_register: Echo.Process.register(ProcessName name, …) binds a name to a process; arg 0 is the registered name (a ProcessName field path). Same argument_name rationale as spawn."
-    },
-    {
-      "provider": "actor",
-      "operation": "tell",
-      "methods": [ "tell", "tellSystem" ],
-      "declaringTypes": [ "Echo.Process" ],
-      "resource": "argument_name",
-      "argumentIndex": 0,
-      "confidence": "medium",
-      "basis": "compilation",
-      "reason": "echo_actor_tell: Echo.Process.tell(ProcessId pid, msg, …) / tellSystem(ProcessId pid, …) fire-and-forget sends to the actor at arg 0. The routing target is usually a ProcessId DNS field (tell(ProcessDns.AccountService, msg)) → argument_name names the destination; medium confidence because a bare local-var pid resolves only to the variable name, not the process. Implicit-target variants (tellSelf/tellChildren/tellParent) are excluded: their arg 0 is the MESSAGE, not a ProcessId."
-    },
-    {
-      "provider": "actor",
-      "operation": "ask",
-      "methods": [ "ask", "askAsync", "askIfAlive" ],
-      "declaringTypes": [ "Echo.Process" ],
-      "resource": "argument_name",
-      "argumentIndex": 0,
-      "confidence": "medium",
-      "basis": "compilation",
-      "reason": "echo_actor_ask: Echo.Process.ask<T>(ProcessId pid, msg, …) / askAsync / askIfAlive request-response to the actor at arg 0. Same routing-target rationale as tell; implicit-target askChildren/askParent excluded (arg 0 is the message)."
-    },
+    // NOTE: the Echo actor effect rules (actor:spawn/register/tell/ask, declaringTypes Echo.Process) lived
+    // here until the core-purity pass. Echo.Process exists in exactly ONE analyzed codebase, and this file
+    // ships with the tool into every other one, so they moved to the MedDBase ruleset. A codebase using
+    // another actor framework declares its own actor:* rules the same way.
     {
       "provider": "http",
       "operation": "route",
@@ -1885,30 +1845,19 @@
       "id": "csharp-event",
       "tag": "event_raise",
       "confidence": "exact",
+      // cycleDelivery: an event raise resolved to its subscribers is a publish->consumer hop an event_cycle
+      // (re-entrancy / event-storm) can close through. joinConfidence high: the join is by EXACT event symbol,
+      // so a cycle traversing it is a proof, not a candidate. Core names no tag of its own — omit these and
+      // event_cycle simply finds nothing through C# events.
+      "cycleDelivery": true,
+      "joinConfidence": "high",
       "producer": { "source": "event-symbol", "resolve": "symbol" },
       "registration": { "source": "event-symbol", "resolve": "symbol" }
-    },
-    {
-      "id": "echo-actor",
-      "tag": "actor_tell",
-      "confidence": "heuristic",
-      "_reason": "Echo actors as a publish→consumer DELIVERY mechanism: a spawn/register binds a name to a handler, a tell/ask publishes to that name. The method lists deliberately DUPLICATE those in the actor:* EFFECT rules — different consumers (delivery edges here vs effect derivation + the dual_write hazard there), so the two are kept independent rather than one inferred from the other. resolve:leaf takes the LAST member-path segment so a tell through ProcessDns.X bridges the spawn through ProcessNames.X (parallel registries naming the same process X by leaf) — the full path never matches because the class prefixes differ; ~heuristic (a leaf shared by two unrelated channels over-joins). The spawn's handler delegate is reclassified by the async-handoff machinery into a handoff edge tagged meddbase.echo.spawn BEFORE the delivery join runs, so the registration's handlerDispatcher names that dispatcher to locate its handler at the spawn site (rather than via methodGroup, which the spawn delegate no longer is).",
-      "producer": {
-        "source": "arg",
-        "resolve": "leaf",
-        "argumentIndex": 0,
-        "methods": ["tell", "tellSystem", "ask", "askAsync", "askIfAlive"],
-        "declaringTypes": ["Echo.Process"]
-      },
-      "registration": {
-        "source": "arg",
-        "resolve": "leaf",
-        "argumentIndex": 0,
-        "methods": ["spawn", "spawnUnit", "spawnMany", "register"],
-        "declaringTypes": ["Echo.Process"],
-        "handlerDispatcher": "meddbase.echo.spawn"
-      }
     }
+    // NOTE: the Echo actor delivery rule ("echo-actor", tag actor_tell, declaringTypes Echo.Process, handler
+    // dispatcher "meddbase.echo.spawn" — a literal project identifier in a SHIPPED default ruleset) lived here
+    // until the core-purity pass and now lives in the MedDBase ruleset. Any actor framework joins the
+    // event_cycle hunt the same way: declare a delivery rule with cycleDelivery:true.
   ],
   "files": {
     "exclude": [
@@ -1973,12 +1922,16 @@
         "receiverTypePatterns": ["ResiliencePipeline", "ExecutionStrategy", "IExecutionStrategy"]
       }
     ],
+    // resourceSpan rules carry an optional `id`. A later cascade file declaring the SAME id REPLACES this rule
+    // rather than appending a second one — the one merge mode a NEGATIVE list needs, since `excludeProviders`
+    // is a suppression and an appended rule cannot subtract (both rules would fire and the un-suppressed one
+    // would annotate anyway). That is how a project adds its own ORM to the transaction-span exclusions.
     "resourceSpan": [
       {
+        "id": "transaction-span",
         "scopeKind": "using",
         "scopeTypePatterns": ["Transaction"],
         "excludeProviders": [
-          "llblgen",
           "efcore",
           "db_transaction",
           "db_connection",
@@ -1993,6 +1946,7 @@
         "context": "transaction"
       },
       {
+        "id": "lock-span",
         "scopeKind": "lock",
         "scopeTypePatterns": [],
         "excludeProviders": ["lock", "async_lock", "inproc_cache", "app_state", "session_state", "inproc_timer"],
@@ -2000,22 +1954,18 @@
         "context": "lock"
       }
     ],
-    "serializationHazard": [
-      {
-        "providers": ["object_store"],
-        "unsupportedTypePatterns": ["LanguageExt.Option", "LanguageExt.Either"]
-      }
-    ],
+    // serializationHazard ships EMPTY: which payload types a serializer cannot round-trip is a property of the
+    // analyzed stack's serializer, not of rig (the original entry named LanguageExt.Option/Either for one
+    // codebase's object store). Declare the rule in the project ruleset.
+    "serializationHazard": [],
     "nPlusOne": [
       {
         "providers": [
           "http",
           "redis",
           "inproc_cache",
-          "entity_cache",
           "db_reader",
           "db_command",
-          "llblgen",
           "object_store",
           "repository",
           "efcore",
@@ -2037,11 +1987,9 @@
     //   (the intrinsics are additionally hidden by the existing --intrinsic mechanism, which still governs them).
     "amplification": [
       { "providers": ["http"] },
-      { "providers": ["llblgen"], "operations": ["read", "write", "delete", "bulk_write", "fetch"] },
       { "providers": ["db_command", "db_connection", "db_reader", "efcore"] },
       { "providers": ["object_store"], "operations": ["read", "write"] },
-      { "providers": ["queue"] },
-      { "providers": ["actor"], "operations": ["tell", "ask", "spawn"] }
+      { "providers": ["queue"] }
     ],
     "enumeratingMethods": [
       {
@@ -2143,19 +2091,13 @@
       }
     ]
   },
+  // Emoji for the providers THIS file declares. The map merges per key across the cascade, so a project ruleset
+  // gives its own providers an icon without restating these (the llblgen / echo_publish / eventbus /
+  // entity_cache entries that used to ship here moved to the MedDBase ruleset with their providers).
   "effectEmoji": {
-    "llblgen:write": "💾",
-    "llblgen:read": "🔍",
-    "llblgen:fetch": "📥",
-    "llblgen:tx_commit": "✅",
-    "llblgen:tx_rollback": "↩️",
-    "llblgen": "🗄️",
     "soap": "☎️",
     "http": "🌐",
     "queue": "📤",
-    "echo_publish": "📣",
-    "eventbus": "📡",
-    "entity_cache": "🗃️",
     "object_store": "📦",
     "io": "📁",
     "throw": "↯",

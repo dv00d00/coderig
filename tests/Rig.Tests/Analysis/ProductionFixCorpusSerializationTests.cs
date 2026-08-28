@@ -7,11 +7,29 @@ namespace Rig.Tests.Analysis;
 // object store. The store's serializer CAN serialize Option but CANNOT deserialize it (None must be
 // modeled as null), so the stored payload threw on read — a latent serialization-contract defect,
 // invisible until the object is read back. The detector flags a store/serialize effect whose payload
-// TYPE ARGUMENT matches a serializer-unsupported pattern (data-driven; builtin-rules.json carries
-// LanguageExt.Option / Either). ANNOTATE-only: the effect is untouched, a unserializable_payload
-// observation is ADDED. Kept in its own file (the SHIPPED builtin rules must fire this).
+// TYPE ARGUMENT matches a serializer-unsupported pattern — data-driven, and the patterns are PROJECT data
+// (core-purity F5): which types a serializer cannot round-trip is a property of the analyzed stack's
+// serializer + FP library, so the builtin `serializationHazard` section ships EMPTY and the ruleset below
+// declares the rule, exactly as the MedDBase ruleset does. ANNOTATE-only: the effect is untouched, a
+// unserializable_payload observation is ADDED. Kept in its own file (the SHIPPED object_store effect rule +
+// generic observation machinery must fire this from nothing but rule data).
 public sealed class ProductionFixCorpusSerializationTests
 {
+    // The project-side rule the analyzed codebase declares: this object store's serializer cannot round-trip
+    // LanguageExt Option/Either. Core ships no such pattern — it cannot know another codebase's serializer.
+    private const string ProjectRules = """
+        {
+          "observations": {
+            "serializationHazard": [
+              {
+                "providers": ["object_store"],
+                "unsupportedTypePatterns": ["LanguageExt.Option", "LanguageExt.Either"]
+              }
+            ]
+          }
+        }
+        """;
+
     // BUG vs FIX in one snippet: Store_Bug serializes Option<int> (hazard); Store_Fix serializes a plain
     // serializable type (no hazard). Both hit the same object-store write boundary, so the ONLY difference
     // the assertions can latch onto is the payload type — exactly the FR-6 signal.
@@ -19,7 +37,8 @@ public sealed class ProductionFixCorpusSerializationTests
     public void _1646_option_payload_into_object_store_is_a_unserializable_payload_plain_payload_is_not()
     {
         var result = ProductionFixCorpus.Analyze(
-            ProductionFixCorpus.LanguageExtStub
+            projectRulesJson: ProjectRules,
+            source: ProductionFixCorpus.LanguageExtStub
                 + """
                 namespace Storage
                 {
