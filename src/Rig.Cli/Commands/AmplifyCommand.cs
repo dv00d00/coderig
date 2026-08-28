@@ -504,9 +504,7 @@ internal static class AmplifyCommand
         var separateLabel = separate.Count == 0 ? "" : Category(categories, separate[0].Finding).Label;
         WriteSection(
             output,
-            string.IsNullOrWhiteSpace(separateLabel)
-                ? $"Separate category ({separate.Count})"
-                : $"{separateLabel} ({separate.Count})",
+            string.IsNullOrWhiteSpace(separateLabel) ? $"Separate category ({separate.Count})" : $"{separateLabel} ({separate.Count})",
             separate
         );
         WriteSection(output, $"Recursive — unbounded degree ({recursion.Count})", recursion);

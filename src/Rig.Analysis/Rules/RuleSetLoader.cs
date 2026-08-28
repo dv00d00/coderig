@@ -345,7 +345,10 @@ public static class RuleSetLoader
         return new DualWriteSection { SystemClassMap = MergeSystemClasses(a.SystemClassMap, b.SystemClassMap) };
     }
 
-    private static Dictionary<string, string>? MergeSystemClasses(Dictionary<string, string>? existing, Dictionary<string, string>? incoming)
+    private static Dictionary<string, string>? MergeSystemClasses(
+        Dictionary<string, string>? existing,
+        Dictionary<string, string>? incoming
+    )
     {
         if (incoming is null || incoming.Count == 0)
         {

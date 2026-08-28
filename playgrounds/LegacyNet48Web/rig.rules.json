@@ -91,7 +91,76 @@
       "consumerPatterns": ["Echo.Process.spawn"]
     }
   ],
+  "deliveryRules": [
+    {
+      "id": "echo-actor",
+      "tag": "actor_tell",
+      "confidence": "heuristic",
+      "cycleDelivery": true,
+      "joinConfidence": "low",
+      "_reason": "Echo actors as a publish->consumer DELIVERY mechanism, declared by the ANALYZED codebase (rig core ships no actor vocabulary: builtin-rules.json knows only C# events). resolve:leaf joins a tell through ProcessDns.X to the spawn through ProcessNames.X; ~heuristic, hence joinConfidence low - an event_cycle closing through such an edge is a candidate, not a proof.",
+      "producer": {
+        "source": "arg",
+        "resolve": "leaf",
+        "argumentIndex": 0,
+        "methods": ["tell", "tellSystem", "ask", "askAsync", "askIfAlive"],
+        "declaringTypes": ["Echo.Process"]
+      },
+      "registration": {
+        "source": "arg",
+        "resolve": "leaf",
+        "argumentIndex": 0,
+        "methods": ["spawn", "spawnUnit", "spawnMany", "register"],
+        "declaringTypes": ["Echo.Process"],
+        "handlerDispatcher": "playground.echo.spawn"
+      }
+    }
+  ],
   "effects": [
+    {
+      "provider": "actor",
+      "operation": "spawn",
+      "methods": [ "spawn", "spawnUnit", "spawnMany" ],
+      "declaringTypes": [ "Echo.Process" ],
+      "resource": "argument_name",
+      "argumentIndex": 0,
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "echo_actor_spawn: the actor name is arg 0, referenced through a static-readonly ProcessDns field, so argument_name attributes the spawn to the actual process. Declared HERE, not in builtin-rules.json: Echo.Process is one codebase's actor framework."
+    },
+    {
+      "provider": "actor",
+      "operation": "register",
+      "methods": [ "register" ],
+      "declaringTypes": [ "Echo.Process" ],
+      "resource": "argument_name",
+      "argumentIndex": 0,
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "echo_actor_register: arg 0 is the registered ProcessName field path."
+    },
+    {
+      "provider": "actor",
+      "operation": "tell",
+      "methods": [ "tell", "tellSystem" ],
+      "declaringTypes": [ "Echo.Process" ],
+      "resource": "argument_name",
+      "argumentIndex": 0,
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "echo_actor_tell: fire-and-forget send to the ProcessId at arg 0. Implicit-target tellSelf/tellChildren/tellParent are excluded - their arg 0 is the MESSAGE."
+    },
+    {
+      "provider": "actor",
+      "operation": "ask",
+      "methods": [ "ask", "askAsync", "askIfAlive" ],
+      "declaringTypes": [ "Echo.Process" ],
+      "resource": "argument_name",
+      "argumentIndex": 0,
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "echo_actor_ask: request-response to the ProcessId at arg 0; implicit-target askChildren/askParent excluded."
+    },
     {
       "provider": "llblgen",
       "operation": "fetch",

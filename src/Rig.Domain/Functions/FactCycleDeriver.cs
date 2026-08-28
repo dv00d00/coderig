@@ -9,11 +9,13 @@ namespace Rig.Domain.Functions;
 // is derived here over the graph rather than over effects (DeriveCommand wires it as an ADDITIVE second
 // hazard source, never shoehorned into the over-effects HazardFindings pass).
 //
-// What it detects: a FEEDBACK CYCLE that closes through ≥1 publish→consumer DELIVERY edge. The graph now
-// carries delivery edges as `Kind="handoff"` `CallEdge`s tagged with a `HandoffDispatcher` — `"event_raise"`
-// (a C# event raise resolved to its subscribers) or `"actor_tell"` (an Echo `Process.tell` resolved to the
-// handlers spawned under that process name), both added by the single FactPathFinder.AddDeliveryEdges join. A
-// cycle that traverses such an edge is the dangerous shape: method A raises an event → a handler runs →
+// What it detects: a FEEDBACK CYCLE that closes through ≥1 publish→consumer DELIVERY edge. The graph carries
+// delivery edges as `Kind="handoff"` `CallEdge`s tagged with a `HandoffDispatcher`, added by the single
+// FactPathFinder.AddDeliveryEdges join. WHICH tags count — and how exact each mechanism's producer→handler
+// join is — is RULE DATA (`deliveryRules` marked `cycleDelivery`; see CycleDeliveryDispatchers): a C# event
+// raise resolved to its subscribers by exact symbol is the shipped case, and a project that delivers through
+// an actor framework or a bus declares its own. A cycle that traverses such an edge is the dangerous shape:
+// method A raises an event → a handler runs →
 // (synchronously, or via further raises) eventually a raise is delivered back to A, an unbounded re-entrancy
 // / event-storm / stack-blowing loop that no syntactic call records (the delivery hop is the invisible edge).
 //
@@ -57,7 +59,9 @@ public static class FactCycleDeriver
             }
 
             // Two rules sharing a tag: the more doubtful join wins, so disclosure never gets upgraded away.
-            var confidence = string.Equals(rule.JoinConfidence, ConfidenceLow, StringComparison.OrdinalIgnoreCase) ? ConfidenceLow : ConfidenceHigh;
+            var confidence = string.Equals(rule.JoinConfidence, ConfidenceLow, StringComparison.OrdinalIgnoreCase)
+                ? ConfidenceLow
+                : ConfidenceHigh;
             if (!dispatchers.TryGetValue(rule.Tag, out var existing) || string.Equals(existing, ConfidenceHigh, StringComparison.Ordinal))
             {
                 dispatchers[rule.Tag] = confidence;
@@ -81,10 +85,7 @@ public static class FactCycleDeriver
     //
     // Determinism (for stable tests + a future cache): SCC members sorted Ordinal; DeliveryEdges sorted by
     // (Caller, Callee, Line); the returned cycles ordered by their first member Ordinal.
-    public static IReadOnlyList<EventCycle> DeriveEventCycles(
-        FactGraphData graph,
-        IReadOnlyDictionary<string, string>? deliveryDispatchers
-    )
+    public static IReadOnlyList<EventCycle> DeriveEventCycles(FactGraphData graph, IReadOnlyDictionary<string, string>? deliveryDispatchers)
     {
         var dispatchers = deliveryDispatchers;
         if (dispatchers is null || dispatchers.Count == 0)
@@ -208,7 +209,11 @@ public static class FactCycleDeriver
                 && string.Equals(join, ConfidenceLow, StringComparison.Ordinal)
             );
             cycles.Add(
-                new EventCycle(Members: members, DeliveryEdges: deliveryEdges, Confidence: anyHeuristicJoin ? ConfidenceLow : ConfidenceHigh)
+                new EventCycle(
+                    Members: members,
+                    DeliveryEdges: deliveryEdges,
+                    Confidence: anyHeuristicJoin ? ConfidenceLow : ConfidenceHigh
+                )
             );
         }
 

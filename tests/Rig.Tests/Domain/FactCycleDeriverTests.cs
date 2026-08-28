@@ -148,15 +148,13 @@ public sealed class FactCycleDeriverTests
                 JoinConfidence: joinConfidence
             );
 
-        var dispatchers = FactCycleDeriver.CycleDeliveryDispatchers(
-            [
-                Rule("csharp-event", "event_raise", cycleDelivery: true, joinConfidence: "high"),
-                Rule("implicit-exact", "bus_publish", cycleDelivery: true, joinConfidence: null),
-                Rule("actors", "actor_tell", cycleDelivery: true, joinConfidence: "low"),
-                Rule("not-a-cycle-hop", "sms_send", cycleDelivery: false, joinConfidence: "low"),
-                Rule("actors-again", "actor_tell", cycleDelivery: true, joinConfidence: "high"),
-            ]
-        );
+        var dispatchers = FactCycleDeriver.CycleDeliveryDispatchers([
+            Rule("csharp-event", "event_raise", cycleDelivery: true, joinConfidence: "high"),
+            Rule("implicit-exact", "bus_publish", cycleDelivery: true, joinConfidence: null),
+            Rule("actors", "actor_tell", cycleDelivery: true, joinConfidence: "low"),
+            Rule("not-a-cycle-hop", "sms_send", cycleDelivery: false, joinConfidence: "low"),
+            Rule("actors-again", "actor_tell", cycleDelivery: true, joinConfidence: "high"),
+        ]);
 
         dispatchers["event_raise"].ShouldBe("high");
         dispatchers["bus_publish"].ShouldBe("high"); // omitted joinConfidence = exact join

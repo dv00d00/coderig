@@ -66,7 +66,10 @@ public sealed class CacheCoherenceRuleDataTests
     {
         var effects = new[] { Effect("entity_cache", "read", "T:App.AccountCache"), Effect("redis", "get", "T:App.LocationCacheEntry") };
 
-        var keys = DeriveCommand.BuildCacheInScopeKeys(rule: Rule(new FactCacheDiscoveryRead("redis", "get", ["CacheEntry"])), effects: effects);
+        var keys = DeriveCommand.BuildCacheInScopeKeys(
+            rule: Rule(new FactCacheDiscoveryRead("redis", "get", ["CacheEntry"])),
+            effects: effects
+        );
 
         keys.ShouldContainKeyAndValue("Location", "medium");
         keys.ShouldNotContainKey("Account");
