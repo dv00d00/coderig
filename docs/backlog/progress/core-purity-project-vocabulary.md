@@ -17,11 +17,24 @@ An audit (2026-08-28, HEAD `83b0b0b0`) catalogued eight findings. This item trac
 | F1 | `cache_coherence` anchor/companion/normalizers hardcode the LLBLGen stack | `Rig.Cli/Effects/EffectDerivation.cs:253-267` | DONE |
 | F2 | `cache_coherence` discovery tier hardcodes `entity_cache:read` + `*Cache`/`*Entity` strip | `Rig.Cli/Commands/DeriveCommand.cs:706-740` | DONE |
 | F3 | `dual_write` `DefaultSystemClassMap` ships MedDBase providers, unpluggable | `Rig.Domain/Functions/FactHazardDeriver.cs:321-376` | DONE |
-| F4 | `rig amplify` ranking table + `actor:tell` constant | `Rig.Cli/Commands/AmplifyCommand.cs` | DONE (`1419ff1a`, pre-branch) |
+| F4 | `rig amplify` ranking table + `actor:tell` constant | `Rig.Cli/Commands/AmplifyCommand.cs` | DONE (`1419ff1a`, pre-branch) — verified clean; the residual `FireAndForget` bucket identifier renamed to `Separate` |
 | F5 | shipped `builtin-rules.json` carries the MedDBase overlay (Echo.Process, `meddbase.echo.spawn`, llblgen/entity_cache, LanguageExt) | `Rig.Cli/builtin-rules.json` | DONE |
 | F6 | `event_cycle` hardcodes the `actor_tell` delivery tag + its low-confidence semantics | `Rig.Domain/Functions/FactCycleDeriver.cs:41-47` | DONE |
 | F7 | core logic coupled to builtin-GENERIC provider names (`lock`, `shared_state`, `async_block`) | TreeRenderer / ImpactEngine / FactHazardDeriver | OUT OF SCOPE (see below) |
 | F8 | skill/docs present MedDBase vocabulary as rig behavior | `.claude/skills/rig/SKILL.md`, `docs/hazards.md` | DONE |
+
+## What each fix added to the rules schema
+
+| Section | Shape | Merge | Absent ⇒ |
+|---|---|---|---|
+| `cacheCoherence` | `+ anchor`, `+ companion`, `+ anchorStripSuffix`, `+ companionStripSuffix`, `+ discoveryRead {provider, operation, stripSuffix}` | whole object, last writer wins (restate it whole in an overlay) | anchor+companion missing ⇒ detector OFF; `discoveryRead` missing ⇒ declared entities only |
+| `dualWrite.systemClassMap` | flat `provider:operation` (or bare `provider`) → system class | **per key** (an overlay ADDS providers; a restated key wins) | dual_write OFF |
+| `deliveryRules[n].cycleDelivery` / `.joinConfidence` | `bool` / `"low"\|"high"` | list concat (per rule) | no `event_cycle` findings; a cycleDelivery rule with no joinConfidence = exact join |
+| `observations.resourceSpan[n].id` | optional string | **replace by id**, else append | unchanged (append, as before) |
+
+`resourceSpan` needed a new merge mode because `excludeProviders` is a SUPPRESSION list: an appended rule can
+never subtract, so both rules would fire and the un-suppressed one would annotate anyway. Replace-by-id is the
+only additive-safe way for a project to extend a negative list.
 
 ## The mechanism, in every case
 
@@ -37,11 +50,26 @@ added there is **silently dropped** the moment any overlay declares its parent k
 against builtin-only data with no error. Every new section therefore ships with a **cascade-survival test**
 (pattern: `Amplification_categories_survive_the_cascade_merge`).
 
-## MedDBase overlay
+## MedDBase overlay — and the ORDER trap
 
 The vocabulary removed from core lands in the MedDBase ruleset, NOT in the shipped builtin. The relocated
-content is accumulated in one overlay file (see the branch's commit messages for the path) to be folded into
-`c:/git/meddbase-analysis/rig.rules.json`. Layer it with a second `--rules` until then.
+content is accumulated in one overlay file to be folded into `c:/git/meddbase-analysis/rig.rules.json`; layer
+it with a second `--rules` until then.
+
+**Effect matching is FIRST RULE WINS in cascade order, so the relocated `actor:*` effect rules must be spliced
+at the TOP of that file's `effects` list — before its `echo_publish` rules.** They used to load from
+builtin-rules.json, i.e. ahead of everything project-side. Appended at the end (which is also what `--rules`
+does — extras always load last) they lose every `Echo.Process` tell/ask to `echo_publish`: measured on the real
+store, **718 effect rows + 219 cross_method_amplification rows reclassify and 17 actor amplification findings
+vanish**. Spliced at the top, `rig derive --format tsv` and `rig amplify` are byte-identical to the pre-change
+output.
+
+## Cache invalidation
+
+`GraphHazSchema` 3→4 (cache_coherence + event_cycle are same-input/different-output now). `HazardEffectsSchema`
+deliberately NOT bumped: `builtin-rules.json` itself changed in the same commits, and the rules fingerprint is
+computed over the loaded rule FILES, so every warm entry misses anyway. The bump is the honest per-artifact
+signal for the graph tier regardless.
 
 ## F7 — deliberately out of scope
 

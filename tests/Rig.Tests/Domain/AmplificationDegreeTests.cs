@@ -364,9 +364,9 @@ public sealed class AmplificationDegreeTests
 
         findings.ShouldHaveSingleItem().Degree.ShouldBe(1);
 
-        var (main, fireAndForget, recursion) = AmplifyCommand.Sections(findings, minDegree: 2, top: 50, categories: []);
+        var (main, separate, recursion) = AmplifyCommand.Sections(findings, minDegree: 2, top: 50, categories: []);
         main.ShouldBeEmpty();
-        fireAndForget.ShouldBeEmpty();
+        separate.ShouldBeEmpty();
         recursion.ShouldBeEmpty();
     }
 
@@ -421,7 +421,7 @@ public sealed class AmplificationDegreeTests
         mainNoCategories.ShouldHaveSingleItem().Degree.ShouldBe(2);
         ffNoCategories.ShouldBeEmpty();
 
-        var (main, fireAndForget, _) = AmplifyCommand.Sections(
+        var (main, separate, _) = AmplifyCommand.Sections(
             findings,
             minDegree: 2,
             top: 50,
@@ -439,7 +439,7 @@ public sealed class AmplificationDegreeTests
             ]
         );
         main.ShouldBeEmpty();
-        fireAndForget.ShouldHaveSingleItem().Degree.ShouldBe(2);
+        separate.ShouldHaveSingleItem().Degree.ShouldBe(2);
     }
 
     // An EXCLUDED category is dropped from display entirely. This is the escape hatch for historically-noisy
@@ -470,7 +470,7 @@ public sealed class AmplificationDegreeTests
         findings.Count.ShouldBe(2);
         findings.Max(f => f.Degree).ShouldBe(2);
 
-        var (main, fireAndForget, recursion) = AmplifyCommand.Sections(
+        var (main, separate, recursion) = AmplifyCommand.Sections(
             findings,
             minDegree: 2,
             top: 50,
@@ -488,7 +488,7 @@ public sealed class AmplificationDegreeTests
             ]
         );
         main.ShouldBeEmpty();
-        fireAndForget.ShouldBeEmpty();
+        separate.ShouldBeEmpty();
         recursion.ShouldBeEmpty();
 
         await Task.CompletedTask;

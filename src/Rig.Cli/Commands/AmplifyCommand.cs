@@ -172,7 +172,7 @@ internal static class AmplifyCommand
         timing.Record("degree", deriveWatch.Elapsed);
 
         var categories = rules.Observations.AmplificationCategoriesOrEmpty;
-        var (main, fireAndForget, recursion) = Sections(findings, opts.MinDegree, opts.Top, categories);
+        var (main, separate, recursion) = Sections(findings, opts.MinDegree, opts.Top, categories);
 
         var epWatch = Stopwatch.StartNew();
         var attributed = await AttributeAsync(
@@ -180,7 +180,7 @@ internal static class AmplifyCommand
             graph: graph,
             epData: epData,
             rules: rules,
-            findings: [.. main, .. fireAndForget, .. recursion]
+            findings: [.. main, .. separate, .. recursion]
         );
         epWatch.Stop();
         timing.Record("entrypoints", epWatch.Elapsed);
@@ -189,17 +189,17 @@ internal static class AmplifyCommand
         // attribution above exists. Selection above already used (degree, kind, site) — a stable prefix of the
         // same order — so re-sorting here reorders ties, never the set.
         var ranked = Rerank(main, attributed, categories);
-        var ffRanked = Rerank(fireAndForget, attributed, categories);
+        var separateRanked = Rerank(separate, attributed, categories);
         var recRanked = Rerank(recursion, attributed, categories);
 
         var renderWatch = Stopwatch.StartNew();
         if (CommonOptions.IsTsv(opts.Format))
         {
-            WriteTsv(io.TextOutput.Output, [.. ranked, .. ffRanked, .. recRanked]);
+            WriteTsv(io.TextOutput.Output, [.. ranked, .. separateRanked, .. recRanked]);
         }
         else
         {
-            WriteHuman(io.TextOutput.Output, opts, ranked, ffRanked, recRanked, categories);
+            WriteHuman(io.TextOutput.Output, opts, ranked, separateRanked, recRanked, categories);
         }
 
         renderWatch.Stop();
@@ -214,7 +214,7 @@ internal static class AmplifyCommand
     // under a numeric threshold would hide the worst class of all.
     internal static (
         IReadOnlyList<FactAmplificationDegreeDeriver.Finding> Main,
-        IReadOnlyList<FactAmplificationDegreeDeriver.Finding> FireAndForget,
+        IReadOnlyList<FactAmplificationDegreeDeriver.Finding> Separate,
         IReadOnlyList<FactAmplificationDegreeDeriver.Finding> Recursion
     ) Sections(
         IReadOnlyList<FactAmplificationDegreeDeriver.Finding> findings,
@@ -225,7 +225,7 @@ internal static class AmplifyCommand
     {
         var cap = Math.Max(0, top);
         var main = new List<FactAmplificationDegreeDeriver.Finding>();
-        var fireAndForget = new List<FactAmplificationDegreeDeriver.Finding>();
+        var separate = new List<FactAmplificationDegreeDeriver.Finding>();
         var recursion = new List<FactAmplificationDegreeDeriver.Finding>();
         foreach (var f in findings)
         {
@@ -248,7 +248,7 @@ internal static class AmplifyCommand
             }
             else if (category.Separate)
             {
-                fireAndForget.Add(f);
+                separate.Add(f);
             }
             else
             {
@@ -258,7 +258,7 @@ internal static class AmplifyCommand
 
         return (
             Order(main, categories).Take(cap).ToList(),
-            Order(fireAndForget, categories).Take(cap).ToList(),
+            Order(separate, categories).Take(cap).ToList(),
             Order(recursion, categories).Take(cap).ToList()
         );
     }
@@ -488,7 +488,7 @@ internal static class AmplifyCommand
         TextWriter output,
         Options opts,
         IReadOnlyList<Attributed> main,
-        IReadOnlyList<Attributed> fireAndForget,
+        IReadOnlyList<Attributed> separate,
         IReadOnlyList<Attributed> recursion,
         IReadOnlyList<FactAmplificationCategoryRule> categories
     )
@@ -501,17 +501,17 @@ internal static class AmplifyCommand
         WriteSection(output, $"Super-linear ({main.Count})", main);
         // Heading comes from the CATEGORY that asked for its own section (`label`, falling back to `name`),
         // so the wording is the ruleset's, not core's.
-        var separateLabel = fireAndForget.Count == 0 ? "" : Category(categories, fireAndForget[0].Finding).Label;
+        var separateLabel = separate.Count == 0 ? "" : Category(categories, separate[0].Finding).Label;
         WriteSection(
             output,
             string.IsNullOrWhiteSpace(separateLabel)
-                ? $"Separate category ({fireAndForget.Count})"
-                : $"{separateLabel} ({fireAndForget.Count})",
-            fireAndForget
+                ? $"Separate category ({separate.Count})"
+                : $"{separateLabel} ({separate.Count})",
+            separate
         );
         WriteSection(output, $"Recursive — unbounded degree ({recursion.Count})", recursion);
 
-        if (main.Count == 0 && fireAndForget.Count == 0 && recursion.Count == 0)
+        if (main.Count == 0 && separate.Count == 0 && recursion.Count == 0)
         {
             output.WriteLine("  no findings at this degree.");
         }

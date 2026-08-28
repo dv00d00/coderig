@@ -1,4 +1,5 @@
 using Rig.Analysis.Rules;
+using Rig.Domain.Functions;
 using Shouldly;
 
 namespace Rig.Tests.Analysis;
@@ -110,6 +111,94 @@ public sealed class RuleSetLoaderTests
         providers.ShouldNotContain("echo_publish");
         providers.ShouldNotContain("eventbus");
         providers.ShouldNotContain("actor");
+    }
+
+    // event_cycle's delivery vocabulary is rule data (core-purity F6): a mechanism joins the cycle hunt by
+    // declaring `cycleDelivery`, and states how exact its producer→handler join is with `joinConfidence`. Both
+    // fields must survive the cascade merge AND the projection — dropped, the deriver would see an empty
+    // dispatcher set and silently report no cycles at all.
+    [Test]
+    public void Delivery_cycle_fields_survive_the_cascade_merge()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            // lang=json
+            """
+            {
+              "deliveryRules": [
+                {
+                  "id": "mailbox",
+                  "tag": "mailbox_tell",
+                  "confidence": "heuristic",
+                  "cycleDelivery": true,
+                  "joinConfidence": "low",
+                  "producer": { "source": "arg", "resolve": "leaf", "methods": ["tell"], "declaringTypes": ["App.Mailbox"] },
+                  "registration": { "source": "arg", "resolve": "leaf", "methods": ["spawn"], "declaringTypes": ["App.Mailbox"] }
+                }
+              ]
+            }
+            """
+        );
+
+        var delivery = RuleSetLoader.Load(workspace.DirectoryPath).Delivery;
+
+        var rule = delivery.Single(r => r.Id == "mailbox");
+        rule.CycleDelivery.ShouldBeTrue();
+        rule.JoinConfidence.ShouldBe("low");
+
+        // The builtin C# event rule is still there (a merge that drops the shipped list is the same bug), and
+        // it is the exact-join arm.
+        var csharpEvent = delivery.Single(r => r.Id == "csharp-event");
+        csharpEvent.CycleDelivery.ShouldBeTrue();
+
+        // The projection the deriver actually consumes carries both mechanisms with their join confidence.
+        var dispatchers = FactCycleDeriver.CycleDeliveryDispatchers(delivery);
+        dispatchers["mailbox_tell"].ShouldBe("low");
+        dispatchers["event_raise"].ShouldBe("high");
+    }
+
+    // resourceSpan rules merge BY ID where one is declared: an overlay restating the shipped
+    // "transaction-span" rule REPLACES it rather than adding a second rule. `excludeProviders` is a
+    // SUPPRESSION list, so appending could never extend it — both rules would fire and the un-suppressed one
+    // would annotate the effect anyway.
+    [Test]
+    public void A_resource_span_rule_with_a_known_id_replaces_it_instead_of_appending()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            // lang=json
+            """
+            {
+              "observations": {
+                "resourceSpan": [
+                  {
+                    "id": "transaction-span",
+                    "scopeKind": "using",
+                    "scopeTypePatterns": ["Transaction"],
+                    "excludeProviders": ["efcore", "orm"],
+                    "observationType": "transaction_spans_effect",
+                    "context": "transaction"
+                  },
+                  {
+                    "scopeKind": "using",
+                    "scopeTypePatterns": ["Batch"],
+                    "excludeProviders": [],
+                    "observationType": "batch_spans_effect",
+                    "context": "batch"
+                  }
+                ]
+              }
+            }
+            """
+        );
+
+        var resourceSpan = RuleSetLoader.Load(workspace.DirectoryPath).Observations.ResourceSpan;
+
+        // ONE transaction rule, and it is the overlay's (with the project's own ORM suppressed).
+        var transaction = resourceSpan.Where(r => r.ObservationType == "transaction_spans_effect").ShouldHaveSingleItem();
+        transaction.ExcludeProviders.ShouldBe(["efcore", "orm"]);
+
+        // The id-less overlay rule appended, and the builtin lock rule was not disturbed.
+        resourceSpan.ShouldContain(r => r.ObservationType == "batch_spans_effect");
+        resourceSpan.ShouldContain(r => r.ObservationType == "lock_held_across_effect");
     }
 
     [Test]
