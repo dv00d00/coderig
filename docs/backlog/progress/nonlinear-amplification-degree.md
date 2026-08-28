@@ -141,8 +141,47 @@ cannot separate a cross-product `from` from a `join`/`let`, and precision on deg
   list carries near-duplicates differing only in hop 1. Dedupe by chain tail would compress it.
 - **Recursion duplication** — 186 findings / 146 distinct heads; an anchor that merely REACHES a cycle is also
   reported unbounded. Dedupe by SCC.
-- **Effect-kind ranking is a C# presentation table** (`AmplifyCommand.KindOrder`), because the required order
-  differs from `observations.amplification`'s. It can never admit or suppress a finding, but strictly it is the
-  one place a provider name appears in C# — move it to rules if that matters.
+- ~~Effect-kind ranking is a C# presentation table~~ — **FIXED, see "Core principle correction" below.**
 - **Fact-layer loop nesting depth** (parent-loop id per reference) would retire the span-containment heuristic
   and its residual same-detail merge. Schema bump — **orphans every existing store**, so deliberately deferred.
+
+## Core principle correction (2026-08-28, follow-up commit)
+
+The first cut shipped the effect-kind ranking as a C# array (`AmplifyCommand.KindOrder` — `llblgen`,
+`db_command`, …) plus a `FireAndForget = "actor:tell"` constant, flagged at review as "presentation-only, can
+never admit or suppress a finding". **That reasoning was wrong and the deviation should have been blocking.**
+Rig core carries NO project-specific data: provider/operation tokens are the vocabulary of a particular
+codebase's ruleset — Echo actors (`actor:tell`) exist in exactly one repo — so a ranking table, a category
+grouping, or a default exclusion list in core bakes one project's domain into the tool, regardless of whether
+it gates anything.
+
+Fixed by making grouping/ranking/exclusion rules DATA, mirroring how `observations.amplification` already
+makes the scope data:
+
+- `observations.amplificationCategories` — ordered list, FIRST MATCH WINS, `providers`/`operations` empty =
+  "any". Per category: `name`, `weight` (lower sorts first), `separate` + `label` (own section), `excluded`
+  (drop from display). Authored in `RuleDocument.AmplificationCategoryObservationRule`, projected to
+  `FactAmplificationCategoryRule`.
+- `Rig.Domain/Functions/AmplificationCategories.cs` — the generic matcher (`For` / `Rank`), companion to
+  `AmplificationScope`. Names no effect.
+- `AmplifyCommand` now ranks, sections and excludes purely by configured category, and the separate section's
+  HEADING comes from the category's `label`.
+
+**Core ships NO default categories.** Absent config = a NEUTRAL default: one implicit group, no weighting, no
+separate sections, no exclusions, so findings order by degree then site. Deliberately unopinionated rather
+than wrong. MedDBase's categories live on the MedDBase side; a ready-to-use overlay is in the sweep scratchpad
+(`amplify-categories.rules.json`), layered with a second `--rules` flag.
+
+Tests: the fire-and-forget test now asserts BOTH directions (no category ⇒ ranks in the main list; category
+⇒ moves to its own section), plus a new `An_excluded_category_is_dropped_from_every_section`. 16 tests.
+
+### Pre-existing violations of the same principle (NOT introduced here, not fixed here)
+
+A repo-wide grep found the same class of hardcoding already in core, unrelated to this feature:
+
+- `src/Rig.Cli/Effects/EffectDerivation.cs:257` — `EffectPredicate(Provider: "llblgen", Operation: "bulk_write")`.
+- `src/Rig.Domain/Functions/FactHazardDeriver.cs:333-335` — a dictionary mapping `llblgen:write`/`:delete`/
+  `:tx_commit` to a `"db"` family.
+
+(`AmplificationScope.cs` also matches a grep, but only inside a comment showing the JSON shape — that is fine.)
+Worth a separate pass; both are effect vocabulary living in core C#.
