@@ -1,6 +1,11 @@
 # Non-linear effect discovery — rank effects by amplification DEGREE
 
-**Status:** TODO. Estate-wide sweep capability: classify every (entry point → effect site) path by how many
+**Status:** PROGRESS — **SHIPPED 2026-08-28** as `rig amplify` (`b1e2952a`): `FactAmplificationDegreeDeriver`
+(pure engine) + `AmplifyCommand` + 15 tests. Runs the whole MedDBase estate (10,109 EPs) in **1m06s**,
+emitting 663 super-linear findings + 186 recursion. No store-schema change; no cache key touched. What
+remains is listed under "Follow-ups" at the bottom.
+
+Estate-wide sweep capability: classify every (entry point → effect site) path by how many
 independent loop contexts stack along it. Degree 0 = constant, 1 = linear (the existing `looped_effect` /
 `n_plus_1` tier), **≥2 = super-linear candidate**, plus a RECURSION flag for effects inside a call cycle
 (unbounded degree).
@@ -100,3 +105,44 @@ amplification view reusing the hazards mark stream. Needs its own cache-key thin
 - TSV escaping defect found while baselining: multi-line LINQ query text in `LoopDetail` leaks raw newlines
   into `derive --format tsv`, breaking row parsing (visible as stray `.Where(...)` lines in a row-type
   histogram). The new command must collapse whitespace in loop detail; the existing rows want the same fix.
+
+## What shipped (2026-08-28, `b1e2952a`)
+
+- `src/Rig.Domain/Functions/FactAmplificationDegreeDeriver.cs` — anchors (per CALL SITE) from the existing
+  calibrated `FactIterationFanoutDeriver`; one `FactPathFinder.OpenSession` reach pass in batches, keeping only
+  (reachable anchor callers, nearest in-scope effect) and discarding each reach set; iterative Tarjan SCC →
+  condensation in emission order; `bearing` gates which successors compose; argmax chain reconstruction.
+- `src/Rig.Cli/Commands/AmplifyCommand.cs` — options, three sections (super-linear / fire-and-forget
+  `actor:tell` / recursion), EP attribution for reported findings only, human + TSV rendering.
+- Scope gate stays pure rules data via `AmplificationScope`; no provider is named in the deriver.
+
+### Measured on `2f944e739e47-dirty`
+
+degree 1: 2,051 · **2: 509 · 3: 82 · 4: 33 · 5: 28 · 6: 7 · 7: 4** · recursion: 186.
+Confidence on the degree≥2 set: 368 ✔ / 35 ~. Rediscovery: all four explicit degree≥2 ground-truth families
+and both recursion items found; the 6 triage-list items not surfaced are single-loop or loop-free methods
+correctly classified degree 1. Full results + scorecard: the sweep write-up (scratchpad, not in-repo).
+
+### The intra-method LINQ fold (found in review, on the real store)
+
+One query expression emits one detail per clause (the detail carries the CUMULATIVE bind set), whose spans
+nest — so containment read `Register.GetRegisterByInvoiceDate` as **5 stacked loops for one query**. Fixed by
+folding subset-related `query` details into one loop FAMILY (union-find over `IterationContext.LoopIdentifiers`,
+family spans unioned, containment tested between families — transitive). After the fold no chain hop in the
+estate exceeds intra-depth 2. This deliberately also folds a genuine multi-`from` cross product: the facts
+cannot separate a cross-product `from` from a `join`/`let`, and precision on degree≥2 was the stated priority.
+
+## Follow-ups
+
+- **Web slice** (per the decide-at-design-time rule): a degree-ranked view reusing the hazards mark stream.
+  Needs its own cache-key thinking — `amplify` is query-side and currently uncached.
+- **No caching.** `QueryCacheKeys.cs` untouched; a warm-cache story needs a `*Schema`-style token.
+- **Interior hops are their own findings.** A degree-3 chain also yields its degree-2 tail, so the top of the
+  list carries near-duplicates differing only in hop 1. Dedupe by chain tail would compress it.
+- **Recursion duplication** — 186 findings / 146 distinct heads; an anchor that merely REACHES a cycle is also
+  reported unbounded. Dedupe by SCC.
+- **Effect-kind ranking is a C# presentation table** (`AmplifyCommand.KindOrder`), because the required order
+  differs from `observations.amplification`'s. It can never admit or suppress a finding, but strictly it is the
+  one place a provider name appears in C# — move it to rules if that matters.
+- **Fact-layer loop nesting depth** (parent-loop id per reference) would retire the span-containment heuristic
+  and its residual same-detail merge. Schema bump — **orphans every existing store**, so deliberately deferred.
