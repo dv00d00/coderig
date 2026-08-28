@@ -76,7 +76,13 @@ public static partial class FactPathFinder
         // is still walked — only its own dispatch fan-out is suppressed. Set by the user-facing forward
         // traversals (tree/reaches/path); the receiver-blind oracle (ReachableFromAll) leaves it false, so
         // the SQL-equivalence superset is unchanged.
-        bool fromDispatch = false
+        bool fromDispatch = false,
+        // The dispatch fan of `current` under this same call context, when the caller has ALREADY resolved
+        // it (via ResolveDispatch) to key its expansion memo — passed back in so it is resolved exactly ONCE
+        // per visit rather than recomputed here. Null means "resolve it yourself" (the standalone callers).
+        // Must be the value ResolveDispatch returns for the identical (current, receiver, binding,
+        // fromDispatch) tuple; passing anything else silently changes the traversal.
+        List<(string Node, string Kind, string Basis)>? resolvedDispatch = null
     )
     {
         // Traversal cut: if the current node matches a cut rule, emit no successors — it is a leaf.
@@ -158,24 +164,14 @@ public static partial class FactPathFinder
             }
         }
 
-        // One-hop dispatch: a node reached via a dispatch edge is the resolved concrete method — walk its
-        // body (emitted above) but do NOT re-dispatch it (see `fromDispatch`).
-        if (fromDispatch)
-        {
-            yield break;
-        }
-
         // Dispatch (synthetic, no call-site line) edges AFTER the line-ordered real calls — the fan-out
         // of `current` itself when it is a virtual/base/interface method, narrowed by the receiver of the
         // call that REACHED current (edge-aware) AND by the carried type-arg binding (generic-dispatch
         // narrowing). Tagged with the group's fan-out degree (N) and attributed to `current` (the dispatch
         // source). The dispatch hop adds no call-site type args, so targets inherit `current`'s binding.
-        var dispatch = DispatchTargets(
-            method: current,
-            index: index,
-            receiverType: index.NarrowDispatch ? incomingReceiver : null,
-            carriedBinding: index.NarrowDispatch ? incomingBinding : null
-        );
+        // One-hop dispatch (a node reached via a dispatch edge is the already-resolved concrete method —
+        // walk its body, emitted above, but do NOT re-dispatch it) is folded into ResolveDispatch.
+        var dispatch = resolvedDispatch ?? ResolveDispatch(current, index, incomingReceiver, incomingBinding, fromDispatch);
         var degree = dispatch.Count;
         // Dispatch SEEDS the concrete `this`-type for the target frame: resolving a virtual/interface call
         // to `Bar.M` means the object IS a `Bar`, so the method runs with `this` : Bar — seed that so the
@@ -210,6 +206,84 @@ public static partial class FactPathFinder
                 null
             );
         }
+    }
+
+    // The dispatch fan `current` resolves to in one call context — the single place the traversals and
+    // their expansion memo agree on. Applies the two suppressions that make a context produce NO fan:
+    //   * one-hop (`fromDispatch`): the node was reached BY a dispatch edge (or a non-virtual `base.M()`),
+    //     so it is already the concrete runtime method and must not be re-dispatched, and
+    //   * a traversal cut: the node is a leaf, so it yields no successors at all.
+    // Otherwise it is DispatchTargets under the index's narrowing policy.
+    //
+    // WHY THIS IS FACTORED OUT: a node's expansion is a pure function of its BODY (fixed by the graph) and
+    // its DISPATCH FAN (which varies with the call context — the receiver and the carried type-arg binding).
+    // The fan is therefore the exact discriminator for "have I already expanded this node?", and both
+    // forward traversals key their memo on it (see DispatchContextKey). Resolving it here and handing the
+    // SAME list back to Successors keeps that to one resolution per visit.
+    internal static List<(string Node, string Kind, string Basis)> ResolveDispatch(
+        string current,
+        GraphIndex index,
+        string? incomingReceiver,
+        IReadOnlyCollection<string>? incomingBinding,
+        bool fromDispatch
+    )
+    {
+        if (fromDispatch || (index.ApplyTraversalCuts && index.IsTraversalCut(current)))
+        {
+            return NoTargets;
+        }
+
+        // Cheap receiver-blind gate first (see DispatchCapableCache): most methods are not virtual/interface
+        // hubs at all, and answering them from a memoized bool keeps the per-visit context key nearly free.
+        if (!index.DispatchCapableCache.GetOrAdd(current, static (m, idx) => DispatchTargets(m, idx).Count > 0, index))
+        {
+            return NoTargets;
+        }
+
+        return DispatchTargets(
+            method: current,
+            index: index,
+            receiverType: index.NarrowDispatch ? incomingReceiver : null,
+            carriedBinding: index.NarrowDispatch ? incomingBinding : null
+        );
+    }
+
+    // The expansion-memo key for visiting `symbol` with the dispatch fan `dispatch`. Two visits share a key
+    // exactly when they would build the SAME subtree, so the memo still collapses genuine repeats (cycles,
+    // a shared callee reached twice the same way) while keeping visits whose dispatch genuinely DIFFERS
+    // apart.
+    //
+    // An EMPTY fan — every non-virtual node, i.e. the overwhelming majority — yields the bare symbol, so
+    // those keep being expanded exactly once and the traversal is unchanged for them. Only a virtual/
+    // interface hub reached under receivers that resolve to DIFFERENT overrides gets a second expansion,
+    // which is precisely the information the old symbol-only memo threw away: on MedDBase one
+    // `EntityBase.Save` occurrence expanded and 61 others collapsed to "⋯elided", hiding every child
+    // override's effects (including the in-loop `AppointmentServiceEntity.Save` behind the booking storm).
+    //
+    // Target ids are sorted so the key is invariant to the order DispatchTargets happened to emit them,
+    // and the separator is a control character that cannot occur in a DocID.
+    private const char Sep = '\u0001';
+
+    private static string DispatchContextKey(string symbol, List<(string Node, string Kind, string Basis)> dispatch)
+    {
+        if (dispatch.Count == 0)
+        {
+            return symbol;
+        }
+
+        if (dispatch.Count == 1)
+        {
+            return symbol + Sep + dispatch[0].Node;
+        }
+
+        var ids = new string[dispatch.Count];
+        for (var i = 0; i < dispatch.Count; i++)
+        {
+            ids[i] = dispatch[i].Node;
+        }
+
+        Array.Sort(ids, StringComparer.Ordinal);
+        return symbol + Sep + string.Join(Sep, ids);
     }
 
     // The synthetic edge kinds emitted by the dispatch block (a virtual/interface/base/delegate fan-out),

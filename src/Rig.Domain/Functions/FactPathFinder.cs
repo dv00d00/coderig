@@ -407,21 +407,52 @@ public static partial class FactPathFinder
     )
     {
         var info = new Dictionary<string, ReachInfo>(StringComparer.Ordinal);
-        // The static receiver type of the (BFS-shortest) edge that reached each node, carried so that
-        // node's own dispatch fan-out can be narrowed edge-aware when it is expanded.
-        var receiverOf = new Dictionary<string, string?>(StringComparer.Ordinal);
+        // Which DISPATCH CONTEXTS each node has already been expanded under (DispatchContextKey). The
+        // receiver a node is reached with selects WHICH OVERRIDE its virtual calls resolve to, so expanding
+        // a node once — under whichever receiver happened to arrive first — silently dropped every other
+        // receiver's override from the reach set. This mirrors the treatment `bindingOf` already gets: a
+        // context that adds something new re-enqueues the node instead of being discarded. For a node with
+        // no dispatch fan the key is the bare symbol, so it is still expanded exactly once.
+        var expandedContexts = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         // Generic-dispatch narrowing in the CLOSURE: the concrete type-arg binding accumulated at each
-        // node. Unlike receiverOf (BFS-first-wins), this is UNIONED across every path that reaches a node
+        // node. This is UNIONED across every path that reaches a node
         // and the node is re-enqueued when its binding GROWS — so a shared generic hub (e.g. Construct`2.
         // New reached via several entity caches) ends up narrowed to ALL really-reachable constructors,
         // never just the first path's (which would unsoundly drop the others). Monotone (sets only grow,
         // capped) so it reaches a fixpoint. Narrowing is recall-safe in DispatchTargets: an empty/unmatched
         // binding leaves the full CHA set, so a hub reached without a matching type arg is never emptied.
         var bindingOf = new Dictionary<string, HashSet<string>?>(StringComparer.Ordinal);
-        // Whether each node was first reached via a dispatch edge — gates one-hop dispatch (no re-dispatch
-        // of a resolved concrete target). BFS-first-reach wins, matching the DispatchVia tagging above.
-        var viaDispatchOf = new Dictionary<string, bool>(StringComparer.Ordinal);
-        var queue = new Queue<string>();
+        // The (receiver, fromDispatch) contexts each node has already been QUEUED under. The queue carries
+        // the context on the work item rather than storing one per node, because a node reached under two
+        // receivers has two different expansions to do — the old per-node `receiverOf`/`viaDispatchOf`
+        // recorded only the BFS-first one and discarded the rest. This set makes the walk terminate
+        // (contexts per node are finite) and bounds the queue; the fan-key check at dequeue is what avoids
+        // the redundant WORK when two receivers happen to resolve to the same dispatch.
+        var queuedContexts = new Dictionary<string, HashSet<(string? Receiver, bool FromDispatch)>>(StringComparer.Ordinal);
+        var queue = new Queue<(string Node, string? Receiver, bool FromDispatch)>();
+
+        // Queues `node` under one call context, unless that context is already queued or the node has hit
+        // the per-node context cap. `force` bypasses both for a node whose type-arg BINDING just grew: the
+        // binding is an input to dispatch resolution, so the same (receiver, fromDispatch) pair can now
+        // resolve to a larger fan and must be walked again. That stays finite because the binding is
+        // monotone and capped at MaxBinding, so a node can only grow finitely often.
+        void Enqueue(string node, string? receiver, bool fromDispatch, bool force = false)
+        {
+            if (!queuedContexts.TryGetValue(node, out var contexts))
+            {
+                contexts = new HashSet<(string?, bool)>();
+                queuedContexts[node] = contexts;
+            }
+
+            var isNewContext = contexts.Add((receiver, fromDispatch));
+            if (!force && (!isNewContext || contexts.Count > MaxDispatchContexts))
+            {
+                return;
+            }
+
+            queue.Enqueue((node, receiver, fromDispatch));
+        }
+
         foreach (var start in seeds)
         {
             if (info.ContainsKey(start))
@@ -430,17 +461,34 @@ public static partial class FactPathFinder
             }
 
             info[start] = new ReachInfo(Depth: 0, LoopNesting: 0, NearestLoopKind: null, NearestLoopDetail: null);
-            receiverOf[start] = null;
             bindingOf[start] = null;
-            viaDispatchOf[start] = false;
-            queue.Enqueue(start);
+            Enqueue(start, receiver: null, fromDispatch: false);
         }
 
         while (queue.Count > 0 && info.Count < maxNodes)
         {
-            var current = queue.Dequeue();
+            var (current, currentReceiver, currentFromDispatch) = queue.Dequeue();
             var cur = info[current];
             if (cur.Depth >= maxDepth)
+            {
+                continue;
+            }
+
+            var currentBinding = bindingOf.TryGetValue(current, out var curBinding) ? curBinding : null;
+            // Resolve this context's dispatch fan once — it both keys the expansion memo and is handed to
+            // Successors, so the fan costs the same single resolution per expansion it always did.
+            var dispatch = ResolveDispatch(current, index, currentReceiver, currentBinding, currentFromDispatch);
+            var contextKey = DispatchContextKey(current, dispatch);
+            if (!expandedContexts.TryGetValue(current, out var expandedForNode))
+            {
+                expandedForNode = new HashSet<string>(StringComparer.Ordinal);
+                expandedContexts[current] = expandedForNode;
+            }
+
+            // Already expanded under a context that resolves to the SAME dispatch — the successors would be
+            // identical, so there is nothing new to walk. (A node with no fan has the bare symbol as its
+            // key, so it is expanded exactly once, as before.)
+            if (!expandedForNode.Add(contextKey))
             {
                 continue;
             }
@@ -449,24 +497,29 @@ public static partial class FactPathFinder
                 var s in Successors(
                     current: current,
                     index: index,
-                    incomingReceiver: receiverOf[current],
-                    incomingBinding: bindingOf.TryGetValue(current, out var curBinding) ? curBinding : null,
+                    incomingReceiver: currentReceiver,
+                    incomingBinding: currentBinding,
                     mode: mode,
-                    fromDispatch: viaDispatchOf.TryGetValue(current, out var vd) && vd
+                    fromDispatch: currentFromDispatch,
+                    resolvedDispatch: dispatch
                 )
             )
             {
+                // Suppress re-dispatch of a node reached via a dispatch edge OR a non-virtual `base.M()`
+                // call — both resolve to exactly one concrete method whose own override fan-out is spurious.
+                var targetFromDispatch = IsDispatchEdgeKind(s.Kind) || s.OutNonVirtual;
                 // Merge this edge's carried binding into the target; a node whose binding GREW is
                 // re-enqueued (even if already reached) so its generic dispatch re-expands under the
                 // larger binding — this is what keeps the closure sound at shared generic hubs.
                 var grew = MergeBinding(bindingOf, s.Node, s.OutBinding);
                 if (info.ContainsKey(s.Node))
                 {
-                    if (grew)
-                    {
-                        queue.Enqueue(s.Node);
-                    }
-
+                    // Already reached, but possibly not under THIS context: a new receiver can resolve its
+                    // dispatch to an override the earlier expansion never reached (the devirtualization gap
+                    // this fixes), and a grown binding can widen a generic hub's fan. Re-queueing is cheap —
+                    // Enqueue drops a context already queued, and the fan-key check at dequeue drops any
+                    // context that resolves to a dispatch already walked.
+                    Enqueue(s.Node, s.OutReceiver, targetFromDispatch, force: grew);
                     continue;
                 }
                 var looped = s.LoopKind is not null;
@@ -499,11 +552,7 @@ public static partial class FactPathFinder
                     HandoffVia: handoffVia,
                     DispatchBasis: basis
                 );
-                receiverOf[s.Node] = s.OutReceiver;
-                // Suppress re-dispatch of a node reached via a dispatch edge OR a non-virtual `base.M()`
-                // call — both resolve to exactly one concrete method whose own override fan-out is spurious.
-                viaDispatchOf[s.Node] = IsDispatchEdgeKind(s.Kind) || s.OutNonVirtual;
-                queue.Enqueue(s.Node);
+                Enqueue(s.Node, s.OutReceiver, targetFromDispatch);
             }
         }
 
@@ -515,6 +564,16 @@ public static partial class FactPathFinder
     // growth stops: the binding stays recall-safe (it only ever narrows when a candidate matches, never
     // empties the set), so a saturated binding simply narrows less, never wrongly.
     private const int MaxBinding = 256;
+
+    // Upper bound on the distinct DISPATCH CONTEXTS one node is expanded under in a single traversal — the
+    // runaway guard for the context-aware expansion memo. A node's dispatch fan depends on the receiver it
+    // was reached with, so a shared virtual hub legitimately needs one expansion per receiver that resolves
+    // to a DIFFERENT override; in practice that is a handful (the MedDBase `EntityBase.Save` case that
+    // motivated this is ~tens of call sites over far fewer distinct fans, since the fan-key check collapses
+    // receivers that resolve identically). The cap only bites on a pathologically shared hub, where it
+    // degrades to the OLD behaviour for the contexts past the cap — an under-approximation, but a bounded
+    // and disclosed one rather than an unbounded walk.
+    private const int MaxDispatchContexts = 64;
 
     // Unions `incoming` into the carried binding of `node`, creating the entry if absent. Returns true
     // when the node's binding actually GREW (new concrete types added) — the signal to re-enqueue a
@@ -585,7 +644,15 @@ public static partial class FactPathFinder
     {
         var index = BuildIndex(graph);
 
+        // Expansion memo, keyed by DISPATCH CONTEXT (DispatchContextKey), not by bare symbol. A node's
+        // subtree is its body (fixed) plus its dispatch fan (varies with the receiver that reached it), so
+        // a symbol-only key made the FIRST occurrence of a virtual hub win with ITS receiver's fan and
+        // collapsed every later occurrence — resolving to a DIFFERENT override — into a "⋯elided" leaf.
+        // For a node with no fan the key IS the symbol, so non-virtual nodes are still expanded once.
         var expanded = new HashSet<string>(StringComparer.Ordinal);
+        // How many distinct dispatch contexts each symbol has already been expanded under, so a hub reached
+        // under very many receivers can't multiply the forest without bound (see MaxDispatchContexts).
+        var contextsPerSymbol = new Dictionary<string, int>(StringComparer.Ordinal);
         var budget = maxNodes;
 
         // Mutable build node — built during BFS, converted to immutable TraceNode at the end.
@@ -638,11 +705,19 @@ public static partial class FactPathFinder
             n.Visited = true;
             budget--;
 
-            // Already expanded elsewhere (cycle / shared callee), at depth cap, or out of budget:
-            // mark as truncated and do NOT expand. budget check is re-checked after decrement.
-            // Cause is attributed by PRECEDENCE: AlreadyExpanded wins when multiple conditions apply
-            // (it is the meaningful redundancy signal); DepthCapped next; BudgetCapped last.
-            if (expanded.Contains(n.Symbol))
+            // Resolve this visit's dispatch fan ONCE: it both keys the expansion memo below and is handed
+            // to Successors, so the fan is computed a single time per visit (as before the memo was
+            // context-aware) rather than once for the key and again inside Successors.
+            var fromDispatch = IsDispatchEdgeKind(n.EdgeKind) || n.ViaNonVirtual;
+            var dispatch = ResolveDispatch(n.Symbol, index, n.Receiver, n.Binding, fromDispatch);
+            var contextKey = DispatchContextKey(n.Symbol, dispatch);
+
+            // Already expanded IN THIS DISPATCH CONTEXT (cycle / shared callee reached the same way), at
+            // depth cap, or out of budget: mark as truncated and do NOT expand. budget check is re-checked
+            // after decrement. Cause is attributed by PRECEDENCE: AlreadyExpanded wins when multiple
+            // conditions apply (it is the meaningful redundancy signal); DepthCapped next; BudgetCapped last.
+            var contextCount = contextsPerSymbol.TryGetValue(n.Symbol, out var seenContexts) ? seenContexts : 0;
+            if (expanded.Contains(contextKey) || contextCount >= MaxDispatchContexts)
             {
                 n.Truncated = true;
                 n.TruncationCause = TruncationCause.AlreadyExpanded;
@@ -661,7 +736,8 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            expanded.Add(n.Symbol);
+            expanded.Add(contextKey);
+            contextsPerSymbol[n.Symbol] = contextCount + 1;
 
             // Traversal cut: the node is a leaf — emit it but don't walk its successors.
             // The cut is checked AFTER marking expanded so the node itself is rendered correctly
@@ -678,7 +754,8 @@ public static partial class FactPathFinder
                     incomingReceiver: n.Receiver,
                     incomingBinding: n.Binding,
                     mode: mode,
-                    fromDispatch: IsDispatchEdgeKind(n.EdgeKind) || n.ViaNonVirtual
+                    fromDispatch: fromDispatch,
+                    resolvedDispatch: dispatch
                 )
             )
             {

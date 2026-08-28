@@ -312,6 +312,21 @@ public static partial class FactPathFinder
         // BuildIndexCore from the GRAPH-scoped memo, so every index over one graph shares a single cache;
         // readonly because the index is now itself memoised and shared — nothing may swap it out.
         public readonly ConcurrentDictionary<string, HashSet<string>> DescendantsCache;
+
+        // Whether a method has ANY dispatch fan at all, resolved receiver-BLIND. Narrowing only ever FILTERS
+        // the receiver-blind candidate set (NarrowByReceiver / ByContextFamily / ByTypeArguments all return a
+        // subset, and the candidate collection itself never consults the receiver), so a method with no blind
+        // target can have no target under any receiver either — one memoized `false` then answers every
+        // context for that method.
+        //
+        // This is what keeps the context-aware expansion memo cheap. Resolving a node's fan is NOT free for a
+        // non-dispatching method — it parses the DocID and scans every descendant of the declaring type — and
+        // the context key has to be computed for elided/skipped visits too, which previously did no dispatch
+        // work at all. Without this gate that cost landed on every repeat visit in the forest (+18% on
+        // BuildTree); with it, a non-dispatching method pays one blind resolution for the whole traversal.
+        // Concurrent + idempotent for the same reason DescendantsCache is: one index is shared across
+        // ReachesFromEachSeed's parallel per-seed walks, and a racing double-compute yields the same answer.
+        public readonly ConcurrentDictionary<string, bool> DispatchCapableCache = new(StringComparer.Ordinal);
         public HashSet<string> Nodes = new(StringComparer.Ordinal);
 
         // When true (the default for the in-memory traversal), virtual/base/interface dispatch is
