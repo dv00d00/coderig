@@ -71,6 +71,19 @@ deliberately NOT bumped: `builtin-rules.json` itself changed in the same commits
 computed over the loaded rule FILES, so every warm entry misses anyway. The bump is the honest per-artifact
 signal for the graph tier regardless.
 
+## Validation
+
+- **Real-store parity (MedDBase, store `2f944e739e47-dirty`)**: `rig derive --format tsv` (18.5 MB) and
+  `rig amplify` are **byte-identical** (SHA-256) to the `cb780b68` baseline when the relocated rules are in
+  place — the actor effect rules spliced at the top of `rig.rules.json`, everything else layered.
+- **Neutral degradation (same store, relocated rules ABSENT)**: exit 0, no crash, no fallback —
+  cache_coherence 4→0, dual_write 8→0, n_plus_1 155→10, amplification rows 647→216, event_cycle 24→24 (every
+  MedDBase cycle is an exact C#-event one; the heuristic-join arm has fixture coverage only), race_window /
+  lazy_init_race / thread_local_context / static_init_capture unchanged.
+- **Suite**: `scripts/mini-ci.ps1 -SkipToolInstall` green — csharpier format, build, main suite (1209), shared
+  integration (84), 23 independent-integration classes, live integration, pack. The global tool reinstall was
+  SKIPPED on purpose: this is a worktree, and the installed `rig` must keep matching `main`.
+
 ## F7 — deliberately out of scope
 
 `lock`/`acquire`/`release` (TreeRenderer held-lock rendering), `{lock, async_lock}` (ImpactEngine guards),
