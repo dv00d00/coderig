@@ -1,8 +1,8 @@
 # Rider file-effect read-model spike
 
-**Status:** PROGRESS — reverse-index core shape, official Rider contract research, interactive daemon/cache
-lifecycle spike, exact-SDK compile, and isolated manual Rider run completed; real resident-store falsification
-remains.
+**Status:** PROGRESS — the generation-owned semantic file read model, official Rider contract research,
+interactive daemon/cache lifecycle spike, exact-SDK compile, and isolated manual Rider run are completed;
+real resident-store falsification and host transport remain.
 
 ## Problem
 
@@ -26,6 +26,22 @@ the number of symbols in the file.
 - Treat `projectPath + compilationMoniker + filePath` as the portable external identity. A physical path alone
   is ambiguous for linked files, multi-target projects, and conditional compilation.
 - Resolve a witness path lazily on interaction.
+
+## Implemented core slice — 2026-08-30
+
+- `FileEffectSelector` names one semantic family and its exact provider/provider-operation predicates.
+  All matching direct owners seed one `ReachedByAny` call.
+- The first method row is deliberately only `symbolId + family + nearestDepth`. It answers task 1 — whether
+  the declaration has a path to the selected effect family — without retaining every reachable effect or
+  running a forward traversal per declaration. Operation/resource summaries remain a later, measured
+  extension rather than a claim this slice cannot cheaply support.
+- `LiveFactSource` owns a small two-selector memo for each immutable fact generation. Equivalent reordered
+  predicate sets reuse one index; a new fact generation starts empty. The Rider artifact is not part of
+  `WarmQueryArtifacts` while its MedDBase build cost is unknown.
+- The source-file catalog distinguishes an indexed file with no methods (authoritative empty model) from an
+  unknown file (`null`). Rig still transports no source coordinates.
+- Focused domain/live tests pass, and the ordinary MSBuild-free suite passes 1,178/1,178 on macOS. The
+  MedDBase store is not available on this host, so the scale/semantic falsification gate below remains open.
 
 The executable and protocol-shaped notes live in
 [`experiments/RiderEffectQuerySpike/README.md`](../../../experiments/RiderEffectQuerySpike/README.md). The actual

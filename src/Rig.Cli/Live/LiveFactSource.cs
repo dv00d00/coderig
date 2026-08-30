@@ -27,8 +27,15 @@ namespace Rig.Cli.Live;
 // host can hand the same instance to concurrent readers and each artifact is still computed at most once.
 internal sealed class LiveFactSource
 {
+    // The first Rider surface has one active semantic family (SQL). Keep one transition slot for a selector
+    // change, but do not retain eight full reverse closures before their real-store footprint is measured.
+    private const int FileEffectSelectorCapacity = 2;
+
     private readonly object _buildTimeLock = new();
     private readonly List<(string Artifact, TimeSpan Elapsed)> _buildTimes = [];
+    private readonly object _fileEffectLock = new();
+    private readonly Dictionary<string, Lazy<FileEffectReadModelIndex>> _fileEffectIndexes = new(StringComparer.Ordinal);
+    private readonly Queue<string> _fileEffectOrder = new();
 
     private readonly Lazy<FactGraphData> _shapedGraph;
     private readonly Lazy<FactGraphData> _traversalGraph;
@@ -128,6 +135,41 @@ internal sealed class LiveFactSource
     // the single most expensive derived artifact per generation and every query in that generation wants the
     // same one.
     public IReadOnlyList<DerivedEffect> Effects => _effects.Value;
+
+    // Rider's semantic file read model, memoized per fact GENERATION and per normalized selector. Unlike tree
+    // artifacts this has its own deliberately small bound: arbitrary requests must not make a resident
+    // generation's memory grow without limit. Equivalent predicate sets share one Lazy even when reordered.
+    internal FileEffectReadModelIndex FileEffects(FileEffectSelector selector)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        var key = NormalizeFileEffectSelector(selector);
+        Lazy<FileEffectReadModelIndex> index;
+        lock (_fileEffectLock)
+        {
+            if (!_fileEffectIndexes.TryGetValue(key, out index!))
+            {
+                index = Memo(
+                    $"fileEffects[{selector.Family}]",
+                    () =>
+                        FileEffectReadModelIndex.Build(
+                            TraversalGraph,
+                            Facts.EnumerateSymbols(),
+                            Effects,
+                            selector,
+                            indexedFilePaths: Facts.EnumerateSourceFiles().Select(file => file.FilePath)
+                        )
+                );
+                _fileEffectIndexes.Add(key, index);
+                _fileEffectOrder.Enqueue(key);
+                while (_fileEffectOrder.Count > FileEffectSelectorCapacity && _fileEffectOrder.TryDequeue(out var evicted))
+                {
+                    _fileEffectIndexes.Remove(evicted);
+                }
+            }
+        }
+
+        return index.Value;
+    }
 
     // Mirrors EffectDerivation.DeriveHazardEffectsAsync — the whole-store hazard-augmented effect set, i.e.
     // exactly what `derive` computes. The FR-1 write-pairing gate is ON, matching `derive`'s (and
@@ -296,6 +338,18 @@ internal sealed class LiveFactSource
     // per generation without a thread ever blocking on it. `.GetAwaiter().GetResult()` inside a Lazy<T> would
     // memoize the same value and be sync-over-async — the hazard this tool ships a detector for.
     private Lazy<Task<T>> MemoAsync<T>(string artifact, Func<Task<T>> build) => new Lazy<Task<T>>(() => TimedAsync(artifact, build));
+
+    private static string NormalizeFileEffectSelector(FileEffectSelector selector)
+    {
+        var predicates = selector
+            .Predicates.Distinct()
+            .OrderBy(predicate => predicate.Provider, StringComparer.Ordinal)
+            .ThenBy(predicate => predicate.Operation, StringComparer.Ordinal)
+            .Select(predicate =>
+                $"{predicate.Provider.Length}:{predicate.Provider}{predicate.Operation?.Length ?? -1}:{predicate.Operation}"
+            );
+        return $"{selector.Family.Length}:{selector.Family}|{string.Join('|', predicates)}";
+    }
 
     // Records the artifact's wall time around the AWAIT, not around task creation — timing the factory call
     // alone would report ~0ms for the whole derivation and be an instrument that hides what it measures.
