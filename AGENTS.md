@@ -6,6 +6,20 @@ effect observations, and deployment attribution live in [README.md](README.md). 
 [docs/README.md](docs/README.md). Work tracking: [docs/backlog/](docs/backlog/README.md).
 This file is only the things that aren't obvious from those and that you'd otherwise re-derive.
 
+## Agent skills
+
+### Issue tracker
+
+Work is tracked as one Markdown card per issue under `docs/backlog/{todo,progress,done}`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Matt Pocock skills use the default five-role triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository. The canonical glossary is `docs/ubiquitous-language.md`; architectural decisions live under `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Current state — 2026-07-19
 
 - `main` is one local commit ahead of `origin/main`: HEAD `8498260f` preserves strong-name compilation
