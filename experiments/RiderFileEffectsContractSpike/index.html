@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rider file-effects contract spike</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17212b;
+      --muted: #637083;
+      --line: #d9e0e8;
+      --paper: #f5f7fa;
+      --panel: #ffffff;
+      --accent: #3157d5;
+      --accent-soft: #e9eeff;
+      --good: #177245;
+      --warn: #a15c00;
+      --bad: #a33a3a;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.45;
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 40px 24px 72px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: clamp(28px, 4vw, 44px); letter-spacing: -0.035em; margin-bottom: 12px; }
+    h2 { font-size: 20px; margin-bottom: 16px; }
+    h3 { font-size: 14px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 12px; }
+    .intro { max-width: 860px; color: #3f4b5c; font-size: 18px; margin-bottom: 28px; }
+    .question { border-left: 4px solid var(--accent); padding: 14px 18px; background: var(--accent-soft); margin-bottom: 28px; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+    .state-panel { grid-column: span 4; min-height: 196px; }
+    .wide { grid-column: span 12; }
+    .half { grid-column: span 6; }
+    .field { margin-bottom: 10px; }
+    .field:last-child { margin-bottom: 0; }
+    .label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+    .value { font-weight: 650; word-break: break-word; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 99px; font-size: 12px; font-weight: 700; }
+    .badge.good { color: var(--good); background: #e7f5ee; }
+    .badge.warn { color: var(--warn); background: #fff1dd; }
+    .badge.bad { color: var(--bad); background: #fdecec; }
+    .badge.neutral { color: #4a586d; background: #edf1f5; }
+    button {
+      appearance: none;
+      border: 1px solid #bcc7d5;
+      background: #fff;
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+    button.danger { border-color: #dcbbbb; color: var(--bad); }
+    .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+    .contract { font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; margin: 0; color: #273348; }
+    .request { border-top: 1px solid var(--line); padding: 10px 0; }
+    .request:first-child { border-top: 0; padding-top: 0; }
+    .request:last-child { padding-bottom: 0; }
+    .request-title { display: flex; justify-content: space-between; gap: 12px; font-weight: 700; }
+    .muted { color: var(--muted); }
+    .empty { color: var(--muted); font-style: italic; }
+    .method { border-top: 1px solid var(--line); padding: 12px 0; }
+    .method:first-child { border-top: 0; padding-top: 0; }
+    .method-name { font-weight: 750; }
+    .effect { display: inline-block; margin: 6px 6px 0 0; padding: 4px 8px; border-radius: 6px; background: var(--accent-soft); color: #263f9d; font-size: 12px; }
+    .decision { border-left: 4px solid var(--accent); }
+    .decision.good { border-left-color: var(--good); }
+    .decision.warn { border-left-color: var(--warn); }
+    .decision.bad { border-left-color: var(--bad); }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .tabs button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+    .walkthrough-step { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+    .walkthrough-step:first-of-type { border-top: 0; }
+    .step-number { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: #edf1f5; font-size: 12px; font-weight: 800; flex: 0 0 auto; }
+    .walkthrough-step.done { opacity: .55; }
+    .walkthrough-step.current .step-number { background: var(--accent); color: white; }
+    .walkthrough-step button { margin-left: auto; }
+    .log { max-height: 240px; overflow: auto; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .log-row { border-top: 1px solid var(--line); padding: 6px 0; }
+    .log-row:first-child { border-top: 0; }
+    .section-space { margin-top: 22px; }
+    @media (max-width: 850px) {
+      .state-panel, .half { grid-column: span 12; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Rider file-effects contract</h1>
+  <p class="intro">A throwaway state-machine for feeling out one file-scoped request: a ReSharper daemon pass sees a C# file, rig returns the methods in that file that reach SQL effects, and the next daemon pass turns cached DocIDs into current PSI highlights.</p>
+  <div class="question"><strong>Question under test:</strong> Is <code>file + client snapshot + compilation context</code> enough to keep an asynchronous rig cache safe while the editor, PSI and resident graph change independently?</div>
+
+  <section class="grid" aria-label="Current state">
+    <article class="panel state-panel">
+      <h3>Rider editor</h3>
+      <div id="editor-state"></div>
+    </article>
+    <article class="panel state-panel">
+      <h3>Resident rig host</h3>
+      <div id="host-state"></div>
+    </article>
+    <article class="panel state-panel">
+      <h3>Applied highlights</h3>
+      <div id="highlight-state"></div>
+    </article>
+
+    <article id="decision-panel" class="panel wide decision">
+      <h3>Last contract decision</h3>
+      <div id="last-decision"></div>
+    </article>
+
+    <article class="panel half">
+      <h3>Requests in flight</h3>
+      <div id="request-list"></div>
+    </article>
+    <article class="panel half">
+      <h3>Current file read-model</h3>
+      <div id="read-model"></div>
+    </article>
+  </section>
+
+  <section class="panel section-space">
+    <h2>Free play</h2>
+    <p class="muted">Use these in any order. Delivering an old request is intentional: the interesting part is whether Rider applies or rejects it.</p>
+    <div class="buttons">
+      <button class="primary" data-action="focus-orders">Focus Orders.cs</button>
+      <button data-action="focus-billing">Focus Billing.cs</button>
+      <button data-action="switch-context">Switch project context</button>
+      <button data-action="edit">Edit current document</button>
+      <button data-action="publish">Save + publish graph revision</button>
+      <button data-action="respond-oldest">Deliver oldest response</button>
+      <button data-action="respond-newest">Deliver newest response</button>
+      <button data-action="daemon-pass">Run daemon pass</button>
+      <button class="danger" data-action="reset">Reset</button>
+    </div>
+  </section>
+
+  <section class="panel section-space">
+    <h2>Guided walkthroughs</h2>
+    <div id="scenario-tabs" class="tabs"></div>
+    <div id="scenario-body"></div>
+  </section>
+
+  <section class="grid section-space">
+    <article class="panel half">
+      <h2>Candidate transport contract</h2>
+      <pre id="contract" class="contract"></pre>
+    </article>
+    <article class="panel half">
+      <h2>Event log</h2>
+      <div id="event-log" class="log"></div>
+    </article>
+  </section>
+</main>
+
+<script>
+  // Pure contract state-machine. It deliberately knows nothing about the DOM.
+  const FileEffectsContract = (() => {
+    const files = {
+      orders: {
+        path: "/repo/Orders.cs",
+        contexts: ["Orders.Api.csproj", "Orders.Worker.csproj"],
+        methods: [
+          { symbolId: "M:Orders.Save", name: "Save", lineHint: 12, effects: [{ kind: "sql", operation: "write", nearestDepth: 2 }] },
+          { symbolId: "M:Orders.Load", name: "Load", lineHint: 27, effects: [{ kind: "sql", operation: "read", nearestDepth: 1 }] }
+        ]
+      },
+      billing: {
+        path: "/repo/Billing.cs",
+        contexts: ["Billing.csproj"],
+        methods: [
+          { symbolId: "M:Billing.Invoice", name: "Invoice", lineHint: 18, effects: [
+            { kind: "sql", operation: "read", nearestDepth: 3 },
+            { kind: "sql", operation: "write", nearestDepth: 4 }
+          ] }
+        ]
+      }
+    };
+
+    const initialState = () => ({
+      editor: { fileKey: null, documentStamp: 1, dirty: false, projectContext: null },
+      host: { graphRevision: 7, indexedStamps: { orders: 1, billing: 1 } },
+      nextRequestId: 1,
+      inFlight: [],
+      cache: {},
+      daemonInvalidated: false,
+      applied: null,
+      lastDecision: { tone: "neutral", title: "No request yet", detail: "Focus a file to create one file-scoped request." },
+      log: ["ready — no focused file, no highlights"]
+    });
+
+    const clone = state => structuredClone(state);
+    const currentFile = state => state.editor.fileKey ? files[state.editor.fileKey] : null;
+    const cacheKey = state => `${state.editor.fileKey}|${state.editor.projectContext}|${state.editor.documentStamp}|sql`;
+
+    function requestFocusedFile(state, reason) {
+      const file = currentFile(state);
+      if (!file) return state;
+      const duplicate = state.inFlight.some(request =>
+        request.fileKey === state.editor.fileKey &&
+        request.projectContext === state.editor.projectContext &&
+        request.documentStamp === state.editor.documentStamp
+      );
+      if (duplicate) {
+        state.lastDecision = { tone: "neutral", title: "Request already in flight", detail: "The daemon commits no rig highlights and does not enqueue a second request for the same file snapshot." };
+        state.log.unshift(`daemon cache miss deduped → existing request for doc ${state.editor.documentStamp}`);
+        return state;
+      }
+      const request = {
+        id: state.nextRequestId++,
+        fileKey: state.editor.fileKey,
+        filePath: file.path,
+        projectContext: state.editor.projectContext,
+        documentStamp: state.editor.documentStamp,
+        effectFilter: "sql",
+        reason
+      };
+      state.inFlight.push(request);
+      state.lastDecision = { tone: "neutral", title: `Request #${request.id} sent`, detail: `${reason}; one request represents the whole file.` };
+      state.log.unshift(`request #${request.id} → ${file.path} @ doc ${request.documentStamp}, ${request.projectContext}`);
+      return state;
+    }
+
+    function runDaemon(state, reason = "daemon pass") {
+      const next = clone(state);
+      const file = currentFile(next);
+      if (!file) {
+        next.lastDecision = { tone: "warn", title: "Daemon pass skipped", detail: "There is no focused C# PSI file." };
+        return next;
+      }
+      const cached = next.cache[cacheKey(next)];
+      if (!cached || cached.sourceStatus !== "exact") {
+        next.applied = null;
+        next.daemonInvalidated = false;
+        return requestFocusedFile(next, `${reason}: cache miss`);
+      }
+
+      const mapped = cached.methods.map((method, indexInFile) => {
+        const declaration = file.methods.find(candidate => candidate.symbolId === method.symbolId);
+        return {
+        ...method,
+        name: declaration.name,
+        lineHint: declaration.lineHint,
+        textRange: [
+          declaration.lineHint * 17 + next.editor.documentStamp + indexInFile * 9,
+          declaration.lineHint * 17 + next.editor.documentStamp + indexInFile * 9 + declaration.name.length
+        ]
+      }});
+      next.applied = { ...cached, methods: mapped };
+      next.daemonInvalidated = false;
+      next.lastDecision = { tone: "good", title: "Daemon published current highlights", detail: `${mapped.length} method DocID(s) joined to the current PSI; every exact range is a Rider DocumentRange.` };
+      next.log.unshift(`daemon cache hit → ${mapped.length} current PSI highlighting(s)`);
+      return next;
+    }
+
+    function focus(state, fileKey) {
+      const next = clone(state);
+      const file = files[fileKey];
+      next.editor = {
+        fileKey,
+        documentStamp: next.host.indexedStamps[fileKey],
+        dirty: false,
+        projectContext: file.contexts[0]
+      };
+      next.applied = null;
+      return runDaemon(next, "visible-file daemon pass");
+    }
+
+    function edit(state) {
+      const next = clone(state);
+      if (!currentFile(next)) {
+        next.lastDecision = { tone: "warn", title: "Edit ignored", detail: "There is no focused file." };
+        return next;
+      }
+      next.editor.documentStamp += 1;
+      next.editor.dirty = true;
+      next.applied = null;
+      next.daemonInvalidated = false;
+      next.lastDecision = { tone: "warn", title: "Highlights cleared", detail: "The editor stamp changed. Existing and in-flight answers are no longer applicable." };
+      next.log.unshift(`editor changed → doc ${next.editor.documentStamp}; highlights cleared`);
+      return next;
+    }
+
+    function publish(state) {
+      const next = clone(state);
+      if (!currentFile(next)) {
+        next.lastDecision = { tone: "warn", title: "Publish ignored", detail: "There is no focused file." };
+        return next;
+      }
+      next.host.graphRevision += 1;
+      next.host.indexedStamps[next.editor.fileKey] = next.editor.documentStamp;
+      next.editor.dirty = false;
+      next.applied = null;
+      next.cache = {};
+      next.daemonInvalidated = false;
+      next.log.unshift(`host published graph ${next.host.graphRevision} for doc ${next.editor.documentStamp}`);
+      return runDaemon(next, "new graph generation invalidated the cache");
+    }
+
+    function switchContext(state) {
+      const next = clone(state);
+      const file = currentFile(next);
+      if (!file || file.contexts.length < 2) {
+        next.lastDecision = { tone: "warn", title: "No alternate context", detail: "The focused file belongs to only one project context." };
+        return next;
+      }
+      const current = file.contexts.indexOf(next.editor.projectContext);
+      next.editor.projectContext = file.contexts[(current + 1) % file.contexts.length];
+      next.applied = null;
+      return runDaemon(next, "active compilation context changed");
+    }
+
+    function responseFor(state, request) {
+      const file = files[request.fileKey];
+      const indexedStamp = state.host.indexedStamps[request.fileKey];
+      return {
+        requestId: request.id,
+        fileKey: request.fileKey,
+        filePath: request.filePath,
+        projectContext: request.projectContext,
+        documentStamp: request.documentStamp,
+        graphRevision: state.host.graphRevision,
+        sourceStatus: indexedStamp === request.documentStamp ? "exact" : "stale",
+        methods: file.methods.map(method => ({
+          symbolId: method.symbolId,
+          effects: method.effects
+        }))
+      };
+    }
+
+    function deliver(state, which) {
+      const next = clone(state);
+      if (next.inFlight.length === 0) {
+        next.lastDecision = { tone: "warn", title: "No response available", detail: "There are no requests in flight." };
+        return next;
+      }
+      const index = which === "oldest" ? 0 : next.inFlight.length - 1;
+      const [request] = next.inFlight.splice(index, 1);
+      const response = responseFor(next, request);
+      const fileMatches = next.editor.fileKey === response.fileKey;
+      const contextMatches = next.editor.projectContext === response.projectContext;
+      const stampMatches = next.editor.documentStamp === response.documentStamp;
+      const fresh = response.sourceStatus === "exact";
+
+      if (!fileMatches || !contextMatches || !stampMatches || !fresh) {
+        const reasons = [];
+        if (!fileMatches) reasons.push("focused file changed");
+        if (!contextMatches) reasons.push("project context changed");
+        if (!stampMatches) reasons.push("document stamp changed");
+        if (!fresh) reasons.push("resident facts do not match the requested document");
+        next.lastDecision = { tone: "bad", title: `Response #${request.id} rejected`, detail: reasons.join("; ") + "." };
+        next.log.unshift(`response #${request.id} rejected — ${reasons.join(", ")}`);
+        return next;
+      }
+
+      next.cache[`${request.fileKey}|${request.projectContext}|${request.documentStamp}|sql`] = response;
+      next.applied = null;
+      next.daemonInvalidated = true;
+      next.lastDecision = {
+        tone: "good",
+        title: `Response #${request.id} cached`,
+        detail: `${response.methods.length} method result(s) stored; the daemon was invalidated, but no editor range was mutated from the I/O callback.`
+      };
+      next.log.unshift(`response #${request.id} cached → daemon invalidated, graph ${response.graphRevision}`);
+      return next;
+    }
+
+    function reduce(state, action) {
+      switch (action.type) {
+        case "focus-orders": return focus(state, "orders");
+        case "focus-billing": return focus(state, "billing");
+        case "edit": return edit(state);
+        case "publish": return publish(state);
+        case "switch-context": return switchContext(state);
+        case "respond-oldest": return deliver(state, "oldest");
+        case "respond-newest": return deliver(state, "newest");
+        case "daemon-pass": return runDaemon(state);
+        case "reset": return initialState();
+        default: return state;
+      }
+    }
+
+    return { files, initialState, reduce };
+  })();
+
+  const scenarios = [
+    {
+      name: "Happy path",
+      description: "Focus one file and apply one current answer. Notice that a single request carries every SQL-reaching method in the file.",
+      steps: [
+        ["focus-orders", "Focus Orders.cs"],
+        ["respond-newest", "Cache the host response"],
+        ["daemon-pass", "Run the invalidated daemon"]
+      ]
+    },
+    {
+      name: "Edit race",
+      description: "The editor changes while rig is answering. The old answer must not paint ranges into a newer document.",
+      steps: [
+        ["focus-orders", "Focus Orders.cs"],
+        ["edit", "Edit the document"],
+        ["respond-oldest", "Deliver the now-stale response"],
+        ["publish", "Save and publish a new graph"],
+        ["respond-newest", "Cache the current response"],
+        ["daemon-pass", "Publish current PSI ranges"]
+      ]
+    },
+    {
+      name: "Focus race",
+      description: "Two focused files create two requests. A late answer for the old tab must not replace the new tab's highlights.",
+      steps: [
+        ["focus-orders", "Focus Orders.cs"],
+        ["focus-billing", "Switch focus to Billing.cs"],
+        ["respond-oldest", "Deliver Orders.cs late"],
+        ["respond-newest", "Cache Billing.cs"],
+        ["daemon-pass", "Publish Billing.cs highlights"]
+      ]
+    },
+    {
+      name: "Linked file",
+      description: "The same source path can have different semantics in different projects. Project context is part of applicability, not presentation metadata.",
+      steps: [
+        ["focus-orders", "Focus linked Orders.cs"],
+        ["switch-context", "Switch its active project"],
+        ["respond-oldest", "Deliver the old-context answer"],
+        ["respond-newest", "Cache the active-context answer"],
+        ["daemon-pass", "Publish the active context"]
+      ]
+    },
+    {
+      name: "Daemon cache",
+      description: "A host response only updates immutable cache data and invalidates the daemon. Exact editor ranges appear on the later daemon pass, never in the I/O callback.",
+      steps: [
+        ["focus-orders", "Focus Orders.cs"],
+        ["respond-newest", "Cache results and invalidate"],
+        ["daemon-pass", "Join DocIDs to current PSI"],
+        ["daemon-pass", "Run again from the same cache"]
+      ]
+    }
+  ];
+
+  let state = FileEffectsContract.initialState();
+  let activeScenario = 0;
+  let scenarioStep = 0;
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
+  }
+
+  function field(label, value) {
+    return `<div class="field"><span class="label">${escapeHtml(label)}</span><span class="value">${value}</span></div>`;
+  }
+
+  function badge(text, tone = "neutral") {
+    return `<span class="badge ${tone}">${escapeHtml(text)}</span>`;
+  }
+
+  function render() {
+    const editor = state.editor;
+    const file = editor.fileKey ? FileEffectsContract.files[editor.fileKey] : null;
+    document.getElementById("editor-state").innerHTML = file
+      ? field("Focused file", escapeHtml(file.path)) + field("Project context", escapeHtml(editor.projectContext)) + field("Client snapshot token", editor.documentStamp) + field("Buffer", badge(editor.dirty ? "dirty" : "saved", editor.dirty ? "warn" : "good"))
+      : `<p class="empty">No C# file focused.</p>`;
+
+    document.getElementById("host-state").innerHTML =
+      field("Graph revision", state.host.graphRevision) +
+      field("Orders.cs indexed stamp", state.host.indexedStamps.orders) +
+      field("Billing.cs indexed stamp", state.host.indexedStamps.billing) +
+      field("Daemon", badge(state.daemonInvalidated ? "invalidated" : "settled", state.daemonInvalidated ? "warn" : "good")) +
+      field("Exact span owner", badge("ReSharper PSI", "good"));
+
+    document.getElementById("highlight-state").innerHTML = state.applied
+      ? field("Status", badge("current", "good")) + field("Request", `#${state.applied.requestId}`) + field("Graph", state.applied.graphRevision) + field("Highlighted methods", state.applied.methods.length)
+      : `<p class="empty">No applicable highlights.</p>`;
+
+    const decisionPanel = document.getElementById("decision-panel");
+    decisionPanel.className = `panel wide decision ${state.lastDecision.tone}`;
+    document.getElementById("last-decision").innerHTML = `<strong>${escapeHtml(state.lastDecision.title)}</strong><div class="muted">${escapeHtml(state.lastDecision.detail)}</div>`;
+
+    document.getElementById("request-list").innerHTML = state.inFlight.length
+      ? state.inFlight.map(request => `<div class="request"><div class="request-title"><span>#${request.id} ${escapeHtml(request.filePath.split("/").pop())}</span>${badge(`doc ${request.documentStamp}`)}</div><div class="muted">${escapeHtml(request.projectContext)} · ${escapeHtml(request.reason)}</div></div>`).join("")
+      : `<p class="empty">No requests in flight.</p>`;
+
+    document.getElementById("read-model").innerHTML = state.applied
+      ? state.applied.methods.map(method => `<div class="method"><div class="method-name">${escapeHtml(method.name)}</div><div class="muted">${escapeHtml(method.symbolId)} · text [${method.textRange[0]}, ${method.textRange[1]}) · line hint ${method.lineHint}</div><div>${method.effects.map(effect => `<span class="effect">${escapeHtml(effect.kind)}.${escapeHtml(effect.operation)} · depth ${effect.nearestDepth}</span>`).join("")}</div></div>`).join("")
+      : `<p class="empty">No file read-model is currently applicable.</p>`;
+
+    document.getElementById("contract").textContent = `request {
+  requestId
+  filePath
+  projectContext
+  clientSnapshotToken
+  effectFilter: "sql"
+}
+
+response {
+  requestId
+  filePath
+  projectContext
+  clientSnapshotToken
+  graphRevision
+  sourceStatus
+  methods[] {
+    symbolId
+    effects[] { kind, operation, nearestDepth }
+  }
+}
+
+plugin-local presentation {
+  symbolId
+  nameRange: DocumentRange
+  declarationRange: DocumentRange
+  effects[]
+}`;
+
+    document.getElementById("event-log").innerHTML = state.log.map(line => `<div class="log-row">${escapeHtml(line)}</div>`).join("");
+    renderScenarios();
+  }
+
+  function dispatch(type) {
+    state = FileEffectsContract.reduce(state, { type });
+    render();
+  }
+
+  document.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => dispatch(button.dataset.action)));
+
+  function startScenario(index) {
+    activeScenario = index;
+    scenarioStep = 0;
+    state = FileEffectsContract.initialState();
+    render();
+  }
+
+  function runScenarioStep(index) {
+    if (index !== scenarioStep) return;
+    const action = scenarios[activeScenario].steps[index][0];
+    state = FileEffectsContract.reduce(state, { type: action });
+    scenarioStep += 1;
+    render();
+  }
+
+  function renderScenarios() {
+    document.getElementById("scenario-tabs").innerHTML = scenarios.map((scenario, index) => `<button class="${index === activeScenario ? "active" : ""}" data-scenario="${index}">${escapeHtml(scenario.name)}</button>`).join("");
+    document.querySelectorAll("[data-scenario]").forEach(button => button.addEventListener("click", () => startScenario(Number(button.dataset.scenario))));
+    const scenario = scenarios[activeScenario];
+    document.getElementById("scenario-body").innerHTML = `<p>${escapeHtml(scenario.description)}</p>` + scenario.steps.map((step, index) => {
+      const status = index < scenarioStep ? "done" : index === scenarioStep ? "current" : "";
+      return `<div class="walkthrough-step ${status}"><span class="step-number">${index + 1}</span><span>${escapeHtml(step[1])}</span><button data-step="${index}" ${index !== scenarioStep ? "disabled" : ""}>Run</button></div>`;
+    }).join("");
+    document.querySelectorAll("[data-step]").forEach(button => button.addEventListener("click", () => runScenarioStep(Number(button.dataset.step))));
+  }
+
+  render();
+</script>
+</body>
+</html>

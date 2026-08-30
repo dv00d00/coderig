@@ -1,5 +1,10 @@
 # Rider file-effect query spike
 
+> This first spike tests only the reverse-index projection. Its `Line`/`EndLine` fields are not the Rider
+> transport contract. The Rider contract research and lifecycle prototype supersede that part of the shape:
+> [`docs/spikes/rider-plugin-file-effects-contract.md`](../../docs/spikes/rider-plugin-file-effects-contract.md)
+> and [`experiments/RiderFileEffectsContractSpike/index.html`](../RiderFileEffectsContractSpike/index.html).
+
 Throwaway experiment. It answers one question:
 
 > Can an IDE ask once per file which executable declarations reach a selected direct effect, without running
@@ -33,12 +38,13 @@ The IDE-facing request should be file-shaped rather than symbol-shaped:
 ```text
 request  = { filePath, documentStamp, effectSelector }
 response = { filePath, documentStamp, graphGeneration, methods[] }
-method   = { symbolId, name, line, endLine, nearestDepth }
+method   = { symbolId, effectAggregates[] }
 ```
 
 `documentStamp` belongs to the Rider adapter and is echoed so a late response cannot annotate a newer editor
 buffer. `graphGeneration` belongs to the resident host and identifies the immutable fact snapshot used for the
-answer. Neither belongs in the graph traversal itself.
+answer. Neither belongs in the graph traversal itself. Exact editor ranges are produced later by the ReSharper
+backend from current PSI declarations; rig does not transport source coordinates.
 
 ## What the spike establishes
 
