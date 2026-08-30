@@ -1,8 +1,8 @@
 # Rider file-effect read-model spike
 
-**Status:** PROGRESS — reverse-index core shape, official Rider contract research, and interactive daemon/cache
-lifecycle spike completed; an actual backend SDK compile/manual Rider run and real resident-store falsification
-remain.
+**Status:** PROGRESS — reverse-index core shape, official Rider contract research, interactive daemon/cache
+lifecycle spike, exact-SDK compile, and isolated manual Rider run completed; real resident-store falsification
+remains.
 
 ## Problem
 
@@ -33,6 +33,8 @@ Rider extension-point research is
 [`docs/spikes/rider-plugin-file-effects-contract.md`](../../spikes/rider-plugin-file-effects-contract.md), and the
 interactive daemon/cache contract is
 [`experiments/RiderFileEffectsContractSpike/index.html`](../../../experiments/RiderFileEffectsContractSpike/index.html).
+The exact-SDK backend plugin and runtime transcript are in
+[`experiments/RiderBackendEffectSpike/README.md`](../../../experiments/RiderBackendEffectSpike/README.md).
 
 ## Testing expectations
 
@@ -40,8 +42,11 @@ interactive daemon/cache contract is
   selection, and ready-model reuse.
 - Interactive scenarios pin the intended lifecycle: cache miss, one async request, late-response rejection,
   daemon invalidation, PSI-owned ranges, focus races, and compilation-context races.
-- The backend SDK spike must use `CSharpHighlightingTestBase` (or the current equivalent) to prove two returned
-  DocIDs become two PSI-derived highlights after one file request and daemon invalidation.
+- The throwaway backend SDK spike manually proves that two returned DocIDs become two PSI-derived highlights
+  after one file request and daemon invalidation. A product slice must pin that with
+  `CSharpHighlightingTestBase` (or the current equivalent).
+- Filter `IPsiSourceFile.Properties.IsGeneratedFile` and `IsNonUserFile` before host lookup; a real Rider run
+  showed daemon passes for generated files under `obj/`.
 - Before product work, measure reverse-build cost, eager/lazy projection cost, warm file lookup, and sampled
   forward/reverse semantic agreement on the MedDBase resident generation.
 

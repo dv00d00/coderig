@@ -1,0 +1,12 @@
+<idea-plugin require-restart="true">
+  <id>dev.coderig.rider-effect-spike</id>
+  <name>rig effect spike</name>
+  <version>0.0.1</version>
+  <vendor>CodeRig</vendor>
+  <idea-version since-build="262" until-build="262.*" />
+  <depends>com.intellij.modules.rider</depends>
+
+  <description><![CDATA[
+    Throwaway backend-only spike for projecting rig method effects into Rider.
+  ]]></description>
+</idea-plugin>

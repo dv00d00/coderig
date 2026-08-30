@@ -33,6 +33,32 @@ ReSharper daemon starts for one C# PSI file
                -> daemon reruns and publishes current ranges
 ```
 
+## Runtime validation against Rider 2026.2.0.1
+
+**Observed fact.** The throwaway backend plugin in
+[`experiments/RiderBackendEffectSpike`](../../experiments/RiderBackendEffectSpike/README.md) was compiled against
+`JetBrains.Rider.SDK` 2026.2.0.1 and loaded into a separate local Rider 2026.2.0.1 profile. Rider discovered the
+DLL from the plugin's `dotnet/` directory as a simplified backend plugin and constructed its daemon stage.
+
+On the fixture's first visible-file daemon pass the cache returned a miss and scheduled one asynchronous fake
+host request. Completion called `IDaemon.Invalidate(string)`. The next pass enumerated these current PSI IDs:
+
+```text
+M:Demo.OrderService.Load
+M:Demo.OrderService.Save(System.Int32)
+M:Demo.OrderService.NoEffect
+```
+
+The response contained the first two IDs, and the stage committed exactly two `IHighlighting`s. This validates
+the proposed DocID join and invalidation lifecycle end to end without Kotlin/RD or synchronous I/O.
+
+The same run exposed daemon passes for generated C# files below `obj/`. The plugin therefore must reject
+`IPsiSourceFile.Properties.IsGeneratedFile` and `IsNonUserFile` before cache lookup or host I/O. This is a
+supported PSI property check, not a path heuristic.
+
+Two exact API spellings differ from the old public guide: `CSharpDaemonStageBase` is now in
+`JetBrains.ReSharper.Feature.Services.CSharp.Daemon`, and `IDaemonProcess.InterruptFlag` is a `bool`.
+
 This differs from the initial mental model in one useful way: a selected-file event exists, but it
 does not have to be the load-bearing trigger. The daemon already owns the supported lifecycle for
 as-you-type C# highlighting.
