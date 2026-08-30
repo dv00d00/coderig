@@ -10,7 +10,7 @@ $projectPath = Join-Path $repoRoot "tests/Rig.IndependentIntegrationTests/Rig.In
 
 [xml]$manifest = Get-Content $manifestPath
 $manifestDirectory = Split-Path $manifestPath
-$lanes = @("SharedIntegrationSource", "IndependentIntegrationSource", "LiveIntegrationSource")
+$lanes = @("SharedIntegrationSource", "IndependentIntegrationSource", "LiveIntegrationSource", "ManualIntegrationSource")
 $classified = foreach ($lane in $lanes) {
     foreach ($source in @($manifest.SelectNodes("//$lane"))) {
         $namespace = "$($source.Namespace)"

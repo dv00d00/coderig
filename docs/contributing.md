@@ -71,7 +71,8 @@ Verification:
 ## Build, test, ship
 
 ```powershell
-.\scripts\mini-ci.ps1          # format → build → all tests → pack → reinstall the global `rig` tool
+.\scripts\mini-ci.ps1              # format → build → ~30 s local release tests → pack → reinstall
+.\scripts\mini-ci.ps1 -FullTests   # add shared, isolated-MSBuild, and resident/live integration tests
 .\scripts\format.ps1 -Check    # verify-only format pass
 ```
 

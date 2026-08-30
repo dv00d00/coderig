@@ -104,13 +104,17 @@
       TestClass="ImpactRefReachStorageTests"
     />
 
-    <!-- Independent lane: each class is invoked in a fresh test process by the manifest-driven runner. -->
-    <IndependentIntegrationSource
+    <!-- Manual lane: development audits, architecture spikes, scale generators, and env-gated measurement
+         harnesses. They remain runnable on demand but are not release regressions and must not create a
+         fresh process in every local/CI gate. -->
+    <ManualIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\CoreAllocationIlAuditTests.cs"
       Link="Analysis\CoreAllocationIlAuditTests.cs"
       Namespace="Rig.Tests.Analysis"
       TestClass="CoreAllocationIlAuditTests"
     />
+
+    <!-- Independent lane: each correctness-regression class is invoked in a fresh test process. -->
     <IndependentIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\ExtractionStreamingTests.cs"
       Link="Analysis\ExtractionStreamingTests.cs"
@@ -129,19 +133,19 @@
       Namespace="Rig.Tests.Analysis"
       TestClass="FrameworkSelectionIndexingTests"
     />
-    <IndependentIntegrationSource
+    <ManualIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\IncrementalExtractionSpikeTests.cs"
       Link="Analysis\IncrementalExtractionSpikeTests.cs"
       Namespace="Rig.Tests.Analysis"
       TestClass="IncrementalExtractionSpikeTests"
     />
-    <IndependentIntegrationSource
+    <ManualIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\InternerMemoryTrial.cs"
       Link="Analysis\InternerMemoryTrial.cs"
       Namespace="Rig.Tests.Analysis"
       TestClass="InternerMemoryTrial"
     />
-    <IndependentIntegrationSource
+    <ManualIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\LiveScaleGeneratorTests.cs"
       Link="Analysis\LiveScaleGeneratorTests.cs"
       Namespace="Rig.Tests.Analysis"
@@ -153,7 +157,7 @@
       Namespace="Rig.Tests.Analysis"
       TestClass="ResidentIndexScaleTests"
     />
-    <IndependentIntegrationSource
+    <ManualIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\ResidentWorkspaceTrial.cs"
       Link="Analysis\ResidentWorkspaceTrial.cs"
       Namespace="Rig.Tests.Analysis"
@@ -219,7 +223,7 @@
       Namespace="Rig.Tests.Cli"
       TestClass="EntryPointFqnTests"
     />
-    <IndependentIntegrationSource
+    <ManualIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveHazardCostTrial.cs"
       Link="Live\LiveHazardCostTrial.cs"
       Namespace="Rig.Tests.Live"
@@ -231,7 +235,7 @@
       Namespace="Rig.Tests.Live"
       TestClass="LiveTransportTests"
     />
-    <IndependentIntegrationSource
+    <ManualIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\LiveSnapshotScaleTrialIntegrationTests.cs"
       Link="Analysis\LiveSnapshotScaleTrialIntegrationTests.cs"
       Namespace="Rig.Tests.Analysis"
@@ -323,13 +327,14 @@
     />
   </ItemGroup>
 
-  <!-- The item type is the mandatory lane choice. The ordinary suite owns most physical sources, while
+  <!-- The item type is the explicit lane choice. The ordinary suite owns most physical sources, while
        the shared integration project owns ResidentIndexTests physically. Exclude every classified source
        from those default globs so each test is discovered by exactly one executable. -->
   <ItemGroup Condition="'$(MSBuildProjectName)' == 'Rig.Tests'">
     <Compile Remove="@(SharedIntegrationSource->'%(Link)')" />
     <Compile Remove="@(IndependentIntegrationSource->'%(Link)')" />
     <Compile Remove="@(LiveIntegrationSource->'%(Link)')" />
+    <Compile Remove="@(ManualIntegrationSource->'%(Link)')" />
   </ItemGroup>
   <ItemGroup Condition="'$(MSBuildProjectName)' == 'Rig.IntegrationTests'">
     <Compile Remove="Analysis\ResidentIndexTests.cs" />

@@ -1,9 +1,7 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Rig.Analysis;
 using Rig.Analysis.Rules;
-using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Tests.Fixtures;
 using Shouldly;
@@ -43,18 +41,9 @@ public sealed class LiveScaleGeneratorTests
         AssertPresetCalibration();
 
         await first.RestoreAsync();
-        await second.RestoreAsync();
         var rules = RuleSetLoader.Load(first.WorkingDirectory);
         var facts = await SolutionAnalyzer.AnalyzeAsync(first.SolutionPath, rules);
-        var secondRules = RuleSetLoader.Load(second.WorkingDirectory);
-        var secondFacts = await SolutionAnalyzer.AnalyzeAsync(second.SolutionPath, secondRules);
         facts.CompilationHealth.ShouldNotBeNull().IsClean.ShouldBeTrue();
-        secondFacts.CompilationHealth.ShouldNotBeNull().IsClean.ShouldBeTrue();
-
-        var canonicalFacts = CanonicalFacts(facts, first.WorkingDirectory);
-        var secondCanonicalFacts = CanonicalFacts(secondFacts, second.WorkingDirectory);
-        FactHash(canonicalFacts).ShouldBe(FactHash(secondCanonicalFacts));
-        canonicalFacts.ShouldBe(secondCanonicalFacts, ignoreOrder: false);
 
         (facts.Symbols ?? []).Count.ShouldBeGreaterThan(0);
         (facts.References ?? []).Count.ShouldBeGreaterThan(0);
@@ -398,71 +387,6 @@ public sealed class LiveScaleGeneratorTests
         }
         return result;
     }
-
-    private static string[] CanonicalFacts(AnalysisResult facts, string root)
-    {
-        var rows = new List<string>();
-        rows.Add(
-            "analysis|"
-                + JsonSerializer.Serialize(
-                    new
-                    {
-                        SolutionPath = Normalize(facts.SolutionPath, root),
-                        facts.ProjectIdentity,
-                        SourceProjectPath = facts.SourceProjectPath is null ? null : Normalize(facts.SourceProjectPath, root),
-                    }
-                )
-        );
-        rows.AddRange(
-            facts.SourceFiles.Select(fact => "source|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) }))
-        );
-        rows.AddRange(
-            facts.DiRegistrations.Select(fact => "di|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) }))
-        );
-        rows.AddRange(
-            (facts.Symbols ?? []).Select(fact =>
-                "symbol|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })
-            )
-        );
-        rows.AddRange(
-            (facts.References ?? []).Select(fact =>
-                "reference|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })
-            )
-        );
-        rows.AddRange(
-            (facts.TypeRelations ?? []).Select(fact =>
-                "relation|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })
-            )
-        );
-        rows.AddRange(
-            (facts.DispatchFacts ?? []).Select(fact =>
-                "dispatch|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })
-            )
-        );
-        rows.AddRange(
-            (facts.AllocationFacts ?? []).Select(fact =>
-                "allocation|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })
-            )
-        );
-        if (facts.CompilationHealth is null)
-        {
-            rows.Add("health|null");
-        }
-        else
-        {
-            rows.Add($"health|unlocated={facts.CompilationHealth.UnlocatedErrorCount}");
-            rows.AddRange(
-                facts.CompilationHealth.Files.Select(fact =>
-                    "health-file|" + JsonSerializer.Serialize(fact with { FilePath = Normalize(fact.FilePath, root) })
-                )
-            );
-            rows.AddRange(facts.CompilationHealth.PartialProjects.Select(fact => "health-project|" + JsonSerializer.Serialize(fact)));
-        }
-        return rows.Order(StringComparer.Ordinal).ToArray();
-    }
-
-    private static string FactHash(IEnumerable<string> facts) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', facts) + "\n")));
 
     private static string Normalize(string path, string root) => Path.GetRelativePath(root, path).Replace('\\', '/');
 

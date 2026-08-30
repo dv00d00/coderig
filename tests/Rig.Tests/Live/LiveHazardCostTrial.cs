@@ -31,7 +31,7 @@ namespace Rig.Tests.Live;
 //   $env:RIG_HAZARD_TRIAL_RULES="C:\git\meddbase-analysis\rig.rules.json"
 //   $env:RIG_HAZARD_TRIAL_BUILD_CACHE="C:\git\meddbase-analysis\.rig\dtb-cache"
 //   $env:RIG_HAZARD_TRIAL_REPORT="<path to a log file>"
-//   dotnet run --project tests/Rig.Tests -- --treenode-filter "/*/*/LiveHazardCostTrial/*"
+//   dotnet run --project tests/Rig.ManualIntegrationTests -- --maximum-parallel-tests 1 --treenode-filter "/*/*/LiveHazardCostTrial/*"
 //
 // RIG_HAZARD_TRIAL_BUILD_CACHE matters for the SETUP arm only (the design-time builds); the numbers this
 // harness exists for are pure in-memory derivation and do not depend on it.

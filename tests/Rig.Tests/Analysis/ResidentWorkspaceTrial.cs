@@ -26,7 +26,7 @@ namespace Rig.Tests.Analysis;
 //   $env:RIG_TRIAL_RULES="C:\git\meddbase-analysis\rig.rules.json"
 //   $env:RIG_TRIAL_BUILD_CACHE="C:\git\meddbase-analysis\.rig\dtb-cache"
 //   $env:RIG_TRIAL_EDIT_FILE="<abs path to a .cs file in the solution>"   # optional; auto-picks otherwise
-//   dotnet run --project tests/Rig.Tests -- --treenode-filter "/*/*/ResidentWorkspaceTrial/*"
+//   dotnet run --project tests/Rig.ManualIntegrationTests -- --maximum-parallel-tests 1 --treenode-filter "/*/*/ResidentWorkspaceTrial/*"
 //
 // RIG_TRIAL_BUILD_CACHE matters: without it the design-time-build cache is disabled and the cold arm pays a
 // full MSBuild pass, which is not comparable to a `rig index` baseline.

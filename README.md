@@ -254,7 +254,8 @@ Predicates compose with `AND` — every clause present must match. Express `OR` 
 ## Working on rig
 
 ```powershell
-.\scripts\mini-ci.ps1    # format → build → all tests → pack → reinstall the global tool
+.\scripts\mini-ci.ps1              # format → build → ~30 s local release tests → pack → reinstall
+.\scripts\mini-ci.ps1 -FullTests   # add shared, isolated-MSBuild, and resident/live integration tests
 .\scripts\format.ps1     # format only (-Check for verify-only)
 ```
 
