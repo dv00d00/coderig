@@ -39,7 +39,7 @@ internal sealed record RiderFileEffectCapture(
     long GraphGeneration,
     IReadOnlyList<string> IndexedProjectContexts,
     string? StaleReason,
-    Func<FileEffectReadModelIndex> ReadModel
+    Func<IReadOnlyList<FileEffectReadModelIndex>> ReadModels
 );
 
 internal static class RiderFileEffectResponder
@@ -50,8 +50,8 @@ internal static class RiderFileEffectResponder
     internal const string SourceUnindexed = "unindexed";
     internal const string SourceAmbiguous = "ambiguous";
 
-    // The deliberately coarse first product selector. One named family is backed by a UNION of provider
-    // predicates, and FileEffectReadModelIndex performs one reverse traversal over that union.
+    // Each product family is backed by a UNION of provider predicates and gets one generation-owned reverse
+    // read model. Rider consumes their already-flat union; it never opens SQLite or walks every PSI symbol.
     internal static FileEffectSelector SqlSelector { get; } =
         new(
             "sql",
@@ -64,6 +64,10 @@ internal static class RiderFileEffectResponder
                 new EffectPredicate("yessql"),
             ]
         );
+
+    internal static FileEffectSelector FileSelector { get; } = new("file", [new EffectPredicate("io")]);
+
+    internal static IReadOnlyList<FileEffectSelector> Selectors { get; } = [SqlSelector, FileSelector];
 
     internal static RiderFileEffectResponse Respond(RiderFileEffectRequest request, RiderFileEffectCapture capture)
     {
@@ -97,33 +101,31 @@ internal static class RiderFileEffectResponder
         }
 
         var lookupPath = TryFullPath(request.FilePath) ?? request.FilePath;
-        var model = capture.ReadModel().Find(lookupPath);
-        var methods = model is null
-            ? []
-            : model
-                .Methods.SelectMany(method =>
-                    method.Effects.Select(effect => new RiderFileEffectMethod(method.SymbolId, effect.Family, effect.NearestDepth))
-                )
-                .OrderBy(method => method.SymbolId, StringComparer.Ordinal)
-                .ThenBy(method => method.Family, StringComparer.Ordinal)
-                .ToArray();
-        var callSites = model is null
-            ? []
-            : model
-                .CallSites.SelectMany(callSite =>
-                    callSite.Effects.Select(effect => new RiderFileEffectCallSite(
-                        callSite.EnclosingSymbolId,
-                        callSite.TargetSymbolId,
-                        callSite.Line,
-                        effect.Family,
-                        effect.NearestDepth
-                    ))
-                )
-                .OrderBy(callSite => callSite.EnclosingSymbolId, StringComparer.Ordinal)
-                .ThenBy(callSite => callSite.Line)
-                .ThenBy(callSite => callSite.TargetSymbolId, StringComparer.Ordinal)
-                .ThenBy(callSite => callSite.Family, StringComparer.Ordinal)
-                .ToArray();
+        var models = capture.ReadModels().Select(index => index.Find(lookupPath)).Where(model => model is not null).ToArray();
+        var methods = models
+            .SelectMany(model => model!.Methods)
+            .SelectMany(method =>
+                method.Effects.Select(effect => new RiderFileEffectMethod(method.SymbolId, effect.Family, effect.NearestDepth))
+            )
+            .OrderBy(method => method.SymbolId, StringComparer.Ordinal)
+            .ThenBy(method => method.Family, StringComparer.Ordinal)
+            .ToArray();
+        var callSites = models
+            .SelectMany(model => model!.CallSites)
+            .SelectMany(callSite =>
+                callSite.Effects.Select(effect => new RiderFileEffectCallSite(
+                    callSite.EnclosingSymbolId,
+                    callSite.TargetSymbolId,
+                    callSite.Line,
+                    effect.Family,
+                    effect.NearestDepth
+                ))
+            )
+            .OrderBy(callSite => callSite.EnclosingSymbolId, StringComparer.Ordinal)
+            .ThenBy(callSite => callSite.Line)
+            .ThenBy(callSite => callSite.TargetSymbolId, StringComparer.Ordinal)
+            .ThenBy(callSite => callSite.Family, StringComparer.Ordinal)
+            .ToArray();
         return Answer(request, capture.GraphGeneration, SourceExact, methods, callSites, "");
     }
 

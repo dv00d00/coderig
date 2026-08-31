@@ -10,14 +10,14 @@ namespace CodeRig.Rider;
 // colouring, so this arm adds an explicit foreground per theme plus a solid underline in the same colour.
 // Revert to `EffectType.GUTTER_MARK | EffectType.TEXT` + bare Bold if it reads as noise.
 [RegisterHighlighter(
-    SeverityId,
+    RigSqlEffectHighlighting.SeverityId,
     Layer = (HighlighterLayer)2001,
     EffectType = EffectType.GUTTER_MARK | EffectType.TEXT | EffectType.SOLID_UNDERLINE,
     FontStyle = FontStyle.Bold,
     ForegroundColor = "#8C4B00",
     DarkForegroundColor = "#E8A33D",
     EffectColor = "#8C4B00",
-    GutterMarkType = typeof(RigEffectGutterMarkType)
+    GutterMarkType = typeof(RigSqlEffectGutterMarkType)
 )]
 // EXPERIMENT arm 2: the group. GutterMarks got the gutter icon rendered but no text attribute reached the
 // Rider frontend; IdentifierHighlightings is the group semantic identifier colours travel in.
@@ -25,17 +25,48 @@ namespace CodeRig.Rider;
     Severity.INFO,
     typeof(HighlightingGroupIds.IdentifierHighlightings),
     OverlapResolve = OverlapResolveKind.NONE,
-    AttributeId = SeverityId,
+    AttributeId = RigSqlEffectHighlighting.SeverityId,
     ShowToolTipInStatusBar = false
 )]
-internal sealed class RigEffectHighlighting : IHighlighting
+internal sealed class RigSqlEffectHighlighting : RigEffectHighlighting
 {
-    public const string SeverityId = "RigReachableEffect";
+    public const string SeverityId = "RigReachableSqlEffect";
 
+    public RigSqlEffectHighlighting(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row)
+        : base(invocation, range, row) { }
+}
+
+[RegisterHighlighter(
+    RigFileEffectHighlighting.SeverityId,
+    Layer = (HighlighterLayer)2001,
+    EffectType = EffectType.GUTTER_MARK | EffectType.TEXT | EffectType.SOLID_UNDERLINE,
+    FontStyle = FontStyle.Bold,
+    ForegroundColor = "#315E9D",
+    DarkForegroundColor = "#6FA8EF",
+    EffectColor = "#315E9D",
+    GutterMarkType = typeof(RigFileEffectGutterMarkType)
+)]
+[StaticSeverityHighlighting(
+    Severity.INFO,
+    typeof(HighlightingGroupIds.IdentifierHighlightings),
+    OverlapResolve = OverlapResolveKind.NONE,
+    AttributeId = RigFileEffectHighlighting.SeverityId,
+    ShowToolTipInStatusBar = false
+)]
+internal sealed class RigFileEffectHighlighting : RigEffectHighlighting
+{
+    public const string SeverityId = "RigReachableFileEffect";
+
+    public RigFileEffectHighlighting(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row)
+        : base(invocation, range, row) { }
+}
+
+internal abstract class RigEffectHighlighting : IHighlighting
+{
     private readonly IInvocationExpression _invocation;
     private readonly DocumentRange _range;
 
-    public RigEffectHighlighting(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row)
+    protected RigEffectHighlighting(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row)
     {
         _invocation = invocation;
         _range = range;
@@ -50,4 +81,9 @@ internal sealed class RigEffectHighlighting : IHighlighting
     public bool IsValid() => _invocation.IsValid();
 
     public DocumentRange CalculateRange() => _range;
+
+    public static RigEffectHighlighting Create(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row) =>
+        string.Equals(row.Family, "file", System.StringComparison.Ordinal)
+            ? new RigFileEffectHighlighting(invocation, range, row)
+            : new RigSqlEffectHighlighting(invocation, range, row);
 }

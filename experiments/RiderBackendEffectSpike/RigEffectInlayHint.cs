@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using JetBrains.Application.Parts;
 using JetBrains.Application.UI.Controls.BulbMenu.Items;
 using JetBrains.Application.UI.Controls.Utils;
@@ -33,12 +35,14 @@ internal sealed class RigEffectInlayHighlighting : IInlayHintWithDescriptionHigh
     private readonly IInvocationExpression _invocation;
     private readonly DocumentRange _range;
 
-    public RigEffectInlayHighlighting(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row)
+    public RigEffectInlayHighlighting(IInvocationExpression invocation, DocumentRange range, IReadOnlyList<FileEffectCallSiteRow> rows)
     {
         _invocation = invocation;
         _range = range;
-        HintText = $" {row.Family}·{row.NearestDepth} ";
-        ToolTip = $"rig: this call reaches {row.Family} · remaining depth {row.NearestDepth}";
+        var orderedRows = rows.OrderBy(row => string.Equals(row.Family, "sql", StringComparison.Ordinal) ? 0 : 1).ToArray();
+        HintText = " " + string.Join(" ", orderedRows.Select(row => $"{row.Family}·{row.NearestDepth}")) + " ";
+        ToolTip =
+            "rig: " + string.Join("; ", orderedRows.Select(row => $"this call reaches {row.Family} · remaining depth {row.NearestDepth}"));
         ErrorStripeToolTip = ToolTip;
     }
 

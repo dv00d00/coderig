@@ -155,10 +155,10 @@ public sealed class RiderFileEffectTransportTests
     {
         var index = SqlIndex();
         var builds = 0;
-        FileEffectReadModelIndex Build()
+        IReadOnlyList<FileEffectReadModelIndex> Build()
         {
             builds++;
-            return index;
+            return [index, FileIndex()];
         }
 
         var effectfulRequest = Request(RepoRoot, "effectful-id", "effectful-token", EffectFile);
@@ -173,15 +173,20 @@ public sealed class RiderFileEffectTransportTests
         effectful.ClientSnapshotToken.ShouldBe("effectful-token");
         effectful
             .Methods.Select(method => (method.SymbolId, method.Family, method.NearestDepth))
-            .ShouldBe([("M:File.Command", "sql", 1), ("M:File.Ef", "sql", 1)]);
+            .ShouldBe([("M:File.Command", "file", 1), ("M:File.Command", "sql", 1), ("M:File.Ef", "sql", 1)]);
         effectful
             .CallSites.Select(callSite =>
                 (callSite.EnclosingSymbolId, callSite.TargetSymbolId, callSite.Line, callSite.Family, callSite.NearestDepth)
             )
-            .ShouldBe([("M:File.Command", "M:CommandOwner", 20, "sql", 0), ("M:File.Ef", "M:EfOwner", 10, "sql", 0)]);
+            .ShouldBe([
+                ("M:File.Command", "M:CommandOwner", 20, "file", 0),
+                ("M:File.Command", "M:CommandOwner", 20, "sql", 0),
+                ("M:File.Ef", "M:EfOwner", 10, "sql", 0),
+            ]);
         RiderFileEffectResponder
             .SqlSelector.Predicates.Select(predicate => predicate.Provider)
             .ShouldBe(["efcore", "db_connection", "db_reader", "db_command", "db_transaction", "yessql"]);
+        RiderFileEffectResponder.FileSelector.Predicates.Select(predicate => predicate.Provider).ShouldBe(["io"]);
 
         var clean = RiderFileEffectResponder.Respond(
             Request(RepoRoot, "clean-id", "clean-token", CleanFile),
@@ -235,7 +240,7 @@ public sealed class RiderFileEffectTransportTests
     {
         var response = RiderFileEffectResponder.Respond(
             Request(RepoRoot, "external-id", "external-token", EffectFile),
-            new RiderFileEffectCapture(31, ["project:A"], StaleReason: null, ExternalCallIndex)
+            new RiderFileEffectCapture(31, ["project:A"], StaleReason: null, () => [ExternalCallIndex()])
         );
 
         response.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceExact);
@@ -370,6 +375,14 @@ public sealed class RiderFileEffectTransportTests
             new DerivedEffect("db_transaction", "commit", "Common.DbTransaction", "M:File.Save", EffectFile, 499),
         };
         return FileEffectReadModelIndex.Build(graph, symbols, effects, RiderFileEffectResponder.SqlSelector);
+    }
+
+    private static FileEffectReadModelIndex FileIndex()
+    {
+        var graph = Graph([new CallEdge("M:File.Command", "M:CommandOwner", "invocation", EffectFile, 20)]);
+        var symbols = new[] { Method("M:File.Command", EffectFile, 20), Method("M:CommandOwner", OwnerFile, 20) };
+        var effects = new[] { new DerivedEffect("io", "write", "file", "M:CommandOwner", OwnerFile, 20) };
+        return FileEffectReadModelIndex.Build(graph, symbols, effects, RiderFileEffectResponder.FileSelector);
     }
 
     private static SymbolFact Method(string id, string file, int line) =>

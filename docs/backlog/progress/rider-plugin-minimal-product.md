@@ -7,14 +7,18 @@ interaction or configuration surface.
 
 ## Shipped slice
 
-- Backend-only plugin identity is `dev.coderig.rider`, version `0.1.0`, targeting Rider 2026.2.
-- One visible-file request renders both Code Vision text and a true gutter mark from the same semantic row.
+- Backend-only plugin identity is `dev.coderig.rider`, version `0.3.0`, targeting Rider 2026.2.
+- One visible-file request renders Code Vision, a true gutter mark, and an inline call-site hint from the same
+  semantic rows.
+- SQL and file-system effects are separate read-model families. A method can render both, with Rider's
+  database-query and folder glyphs rather than the original recursion placeholder.
 - Rider never opens the CodeRig SQLite store and never waits synchronously for the resident host.
 - Missing, stale, unindexed, and ambiguous host answers fail closed.
-- `scripts/build-rider-plugin.ps1` creates `artifacts/rider/CodeRig-0.1.0.zip` and can install the same staged
+- `scripts/build-rider-plugin.ps1` creates `artifacts/rider/CodeRig-0.3.0.zip` and can install the same staged
   bytes into a selected Rider profile.
-- The packaged plugin was loaded from the normal Rider 2026.2 profile and projected 34 exact method rows into
-  68 UI highlightings without CodeRig registration or rendering errors.
+- The packaged plugin was loaded from the normal Rider 2026.2 profile. On `CliApplication.cs`, the resident
+  host returned four method and four call-site rows spanning both families; the daemon projected 13 UI
+  highlightings without CodeRig registration or rendering errors.
 
 ## Product boundary still open
 

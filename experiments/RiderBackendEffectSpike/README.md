@@ -1,10 +1,11 @@
 # CodeRig Rider plugin
 
 Minimal backend-only Rider plugin for the resident CodeRig file-effect read model. It targets Rider
-2026.2 and renders SQL reachability at two semantic levels:
+2026.2 and renders SQL and file-system reachability at two semantic levels:
 
-- Code Vision above each affected declaration: `rig: SQL · depth N`;
-- a gutter icon plus bold method name on each proven invocation that crosses toward SQL.
+- one Code Vision row per effect family above each affected declaration, with Rider's database-query or
+  folder icon: `rig: SQL · depth N` / `rig: FILE · depth N`;
+- a family-specific gutter icon plus an inline hint on each proven invocation: `sql·N`, `file·N`, or both.
 
 The plugin does not open SQLite. A visible-document daemon pass performs one non-blocking whole-file
 request to `rig watch`, joins returned enclosing/target DocID pairs to Rider's current PSI invocations,
@@ -27,7 +28,7 @@ Create an installable ZIP:
 pwsh scripts/build-rider-plugin.ps1
 ```
 
-The artifact is `artifacts/rider/CodeRig-0.2.0.zip`. Rider can install it through
+The artifact is `artifacts/rider/CodeRig-0.3.0.zip`. Rider can install it through
 **Settings | Plugins | Install Plugin from Disk**.
 
 Build and copy it directly into the default Rider 2026.2 profile:
@@ -52,6 +53,13 @@ combining it with a bold font. Its read model is keyed by enclosing and target D
 ranges come from Rider PSI. The packaged plugin was installed in the normal profile and queried the same
 `Reads.cs` file after a clean Rider restart: the host returned 34 methods plus 8 call sites, and the daemon
 committed 42 UI highlighters with no CodeRig registration or projection error in the backend log.
+
+`CodeRig 0.3.0` adds the built-in `io` provider as the compact `file` family. The resident host materialises
+one reverse read model per family and unions only the rows for the requested file; Rider still performs no
+database access or whole-file symbol resolution. SQL uses Rider's database-query glyph and file-system effects
+use Rider's opened-folder glyph. A call reaching both families gets one stable `sql·N file·N` inlay. The
+packaged plugin was loaded from the normal Rider profile and projected a mixed-family `CliApplication.cs`
+response (four method rows plus four call-site rows) into 13 UI highlighters without registration errors.
 
 The first implementation accidentally participated in solution analysis and issued 569 requests for 489
 files at startup. The `DaemonProcessKind.VISIBLE_DOCUMENT` gate reduced the repeat run to two TTL-separated

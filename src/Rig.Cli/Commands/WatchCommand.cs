@@ -688,7 +688,7 @@ internal sealed class WatchHost : IAsyncDisposable
                 snapshot.Revision.Value,
                 RiderFileEffectResponder.IndexedProjectContexts(snapshot, request.FilePath),
                 FileEffectUnavailableReason(snapshot),
-                () => facts.FileEffects(RiderFileEffectResponder.SqlSelector)
+                () => RiderFileEffectResponder.Selectors.Select(facts.FileEffects).ToArray()
             );
         }
         finally
