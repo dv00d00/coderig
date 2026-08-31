@@ -123,6 +123,36 @@ public sealed class RiderFileEffectReadModelTests
         model.CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId)).ShouldBe([("M:File.Direct", "M:Db.Execute")]);
     }
 
+    // The tie case that a strict `calleeDepth < callerDepth` test dropped: one body calls two effectful
+    // methods, the first hands the caller its nearest distance, and the sibling call ties it. Both are real
+    // ways into the family, so both must be projected.
+    [Test]
+    public void A_second_effectful_call_from_one_body_is_projected_even_when_it_does_not_shorten_the_distance()
+    {
+        var graph = Graph([
+            new CallEdge("M:File.Caller", "M:NearOwner", "invocation", File, 10),
+            new CallEdge("M:File.Caller", "M:Sibling", "invocation", File, 11),
+            new CallEdge("M:Sibling", "M:FarOwner", "invocation", OwnersFile, 30),
+        ]);
+        var symbols = new[]
+        {
+            Method("M:File.Caller", File, 9),
+            Method("M:Sibling", OwnersFile, 20),
+            Method("M:NearOwner", OwnersFile, 30),
+            Method("M:FarOwner", OwnersFile, 40),
+        };
+        var effects = new[] { Effect("ado", "read", "M:NearOwner", 30), Effect("ado", "read", "M:FarOwner", 40) };
+
+        var model = FileEffectReadModelIndex
+            .Build(graph, symbols, effects, new FileEffectSelector("sql", [new EffectPredicate("ado")]))
+            .Find(File)
+            .ShouldNotBeNull();
+
+        model
+            .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Effects.Single().NearestDepth))
+            .ShouldBe([("M:File.Caller", "M:NearOwner", 0), ("M:File.Caller", "M:Sibling", 1)]);
+    }
+
     [Test]
     public void Selector_requires_a_named_family_and_at_least_one_valid_predicate()
     {

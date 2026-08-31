@@ -49,8 +49,16 @@ if ($Install) {
     $pluginsRoot = Join-Path $RiderProfile "plugins"
     $installRoot = Join-Path $pluginsRoot "CodeRig"
     New-Item -ItemType Directory -Force $pluginsRoot | Out-Null
+    # A running Rider holds CodeRig.Rider.dll open, so the delete FAILS. Swallowing that failure used to be
+    # silent and fatal: `Copy-Item <dir> <existing dir>` NESTS, producing plugins/CodeRig/CodeRig/META-INF,
+    # which Rider does not recognise as a plugin at all — it just stops loading, with nothing in any log.
+    # So: delete loudly, verify the directory is gone, and copy the CONTENTS into a freshly created root.
     Remove-Item -Recurse -Force $installRoot -ErrorAction SilentlyContinue
-    Copy-Item $pluginRoot $installRoot -Recurse -Force
+    if (Test-Path $installRoot) {
+        throw "Could not remove $installRoot (Rider is probably running and holding the plugin DLL). Close Rider and re-run."
+    }
+    New-Item -ItemType Directory -Force $installRoot | Out-Null
+    Copy-Item (Join-Path $pluginRoot "*") $installRoot -Recurse -Force
     Write-Host "Installed CodeRig Rider plugin to $installRoot"
     Write-Host "Restart Rider to load it."
 }

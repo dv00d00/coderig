@@ -150,9 +150,7 @@ public sealed class FileEffectReadModelIndex
         string family
     )
     {
-        var invocationEdges = fileInvocationEdges
-            .Where(edge => fileMethodIds.Contains(edge.Caller))
-            .ToArray();
+        var invocationEdges = fileInvocationEdges.Where(edge => fileMethodIds.Contains(edge.Caller)).ToArray();
 
         // A direct derived effect retains its owner + physical source site, but not the matched target.
         // Recover the target only when that site contains exactly one invocation edge. An expression such
@@ -163,22 +161,21 @@ public sealed class FileEffectReadModelIndex
             .Where(group => group.Select(edge => edge.Callee).Distinct(StringComparer.Ordinal).Take(2).Count() == 1)
             .ToDictionary(group => group.Key, group => group.First().Callee);
         var directSites = selectedEffects
-            .Where(effect =>
-                effect.EnclosingSymbolId is not null && fileMethodIds.Contains(effect.EnclosingSymbolId)
-            )
+            .Where(effect => effect.EnclosingSymbolId is not null && fileMethodIds.Contains(effect.EnclosingSymbolId))
             .Select(effect => new SourceSite(effect.EnclosingSymbolId!, effect.Line))
             .Where(directTargets.ContainsKey)
             .Select(site => new CallSiteKey(site.EnclosingSymbolId, directTargets[site]));
 
-        // For an indirect call, the callee's shorter reverse distance proves that this exact call crosses
-        // the nearest-effect frontier. Dispatch remains the graph engine's concern; Rider receives only the
-        // static DocIDs it can resolve against the current PSI invocation.
+        // For an indirect call, the question a reader asks of a call site is "does going in here end in the
+        // family?" — reverse REACHABILITY of the callee, not whether this particular call shortens the
+        // distance. A strict `calleeDepth < callerDepth` test dropped every second effectful call out of one
+        // body: the caller already owns the shorter distance through its first effectful callee, so a sibling
+        // call whose own distance ties it went unmarked (IndexCommands.MaterializeGraphAsync kept
+        // GraphMaterializer.BuildFromGraphAsync at 0 and silently lost
+        // EntryPointContext.MaterializeEntryPointSitesAsync at 1). Dispatch remains the graph engine's
+        // concern; Rider receives only the static DocIDs it can resolve against the current PSI invocation.
         var indirectSites = invocationEdges
-            .Where(edge =>
-                reached.TryGetValue(edge.Caller, out var callerDepth)
-                && reached.TryGetValue(edge.Callee, out var calleeDepth)
-                && calleeDepth < callerDepth
-            )
+            .Where(edge => reached.ContainsKey(edge.Callee))
             .Select(edge => new CallSiteKey(edge.Caller, edge.Callee));
 
         return Array.AsReadOnly(

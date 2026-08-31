@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.IO.Pipes;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
@@ -14,9 +14,13 @@ namespace Rig.Tests.Live;
 
 public sealed class RiderFileEffectTransportTests
 {
-    private const string EffectFile = "/repo/Effectful.cs";
-    private const string CleanFile = "/repo/Clean.cs";
-    private const string OwnerFile = "/repo/Owners.cs";
+    // The responder normalises a requested path through Path.GetFullPath before joining it to the read
+    // model, so a POSIX-shaped literal is rewritten to "C:\repo\…" on Windows and matches nothing. The
+    // fixture therefore builds platform-native absolute paths, for which that normalisation is identity.
+    private static readonly string RepoRoot = Path.GetFullPath(OperatingSystem.IsWindows() ? @"C:\repo" : "/repo");
+    private static readonly string EffectFile = Path.Combine(RepoRoot, "Effectful.cs");
+    private static readonly string CleanFile = Path.Combine(RepoRoot, "Clean.cs");
+    private static readonly string OwnerFile = Path.Combine(RepoRoot, "Owners.cs");
 
     [Test]
     public async Task Typed_round_trip_routes_file_effects_and_echoes_client_correlation()
@@ -157,7 +161,7 @@ public sealed class RiderFileEffectTransportTests
             return index;
         }
 
-        var effectfulRequest = Request("/repo", "effectful-id", "effectful-token", EffectFile);
+        var effectfulRequest = Request(RepoRoot, "effectful-id", "effectful-token", EffectFile);
         var effectful = RiderFileEffectResponder.Respond(
             effectfulRequest,
             new RiderFileEffectCapture(19, ["project:A"], StaleReason: null, Build)
@@ -178,7 +182,7 @@ public sealed class RiderFileEffectTransportTests
             .ShouldBe(["efcore", "db_connection", "db_reader", "db_command", "db_transaction", "yessql"]);
 
         var clean = RiderFileEffectResponder.Respond(
-            Request("/repo", "clean-id", "clean-token", CleanFile),
+            Request(RepoRoot, "clean-id", "clean-token", CleanFile),
             new RiderFileEffectCapture(19, ["project:A"], StaleReason: null, Build)
         );
         clean.Status.ShouldBe(StatusOk);
@@ -189,7 +193,7 @@ public sealed class RiderFileEffectTransportTests
 
         var builtBeforeFailures = builds;
         var unindexed = RiderFileEffectResponder.Respond(
-            Request("/repo", "unindexed-id", "unindexed-token", "/repo/Missing.cs"),
+            Request(RepoRoot, "unindexed-id", "unindexed-token", Path.Combine(RepoRoot, "Missing.cs")),
             new RiderFileEffectCapture(20, [], StaleReason: null, Build)
         );
         unindexed.Status.ShouldBe(StatusOk);
@@ -199,7 +203,7 @@ public sealed class RiderFileEffectTransportTests
         unindexed.Reason.ShouldNotBeEmpty();
 
         var ambiguous = RiderFileEffectResponder.Respond(
-            Request("/repo", "ambiguous-id", "ambiguous-token", EffectFile),
+            Request(RepoRoot, "ambiguous-id", "ambiguous-token", EffectFile),
             new RiderFileEffectCapture(21, ["project:A", "project:B"], StaleReason: null, Build)
         );
         ambiguous.Status.ShouldBe(StatusOk);
@@ -209,7 +213,7 @@ public sealed class RiderFileEffectTransportTests
         ambiguous.Reason.ShouldContain("2 project contexts");
 
         var stale = RiderFileEffectResponder.Respond(
-            Request("/repo", "stale-id", "stale-token", EffectFile),
+            Request(RepoRoot, "stale-id", "stale-token", EffectFile),
             new RiderFileEffectCapture(22, ["project:A"], "one project unreconciled", Build)
         );
         stale.Status.ShouldBe(StatusOk);
