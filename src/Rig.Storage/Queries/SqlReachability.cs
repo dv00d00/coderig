@@ -232,12 +232,16 @@ public static class SqlReachability
         RigDbContext context,
         string pattern,
         Direction direction,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        // EXTERNAL-NODE ADMISSION on the BOUNDED path (see LoadGraphFromReachSetAsync's external-leaf
+        // block for why the marker cannot be recovered from call_edges alone).
+        ExternalNodeAdmission? externalNodes = null,
+        IReadOnlyList<FactRedirectRule>? redirectRules = null
     )
     {
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await BuildReachSetAsync(connection, pattern, direction, cancellationToken);
-        return await LoadGraphFromReachSetAsync(connection, direction, cancellationToken);
+        return await LoadGraphFromReachSetAsync(connection, direction, cancellationToken, externalNodes, redirectRules);
     }
 
     // Everything reaches/tree need to reproduce their exact output, bounded to the closure: the
@@ -262,12 +266,14 @@ public static class SqlReachability
         RigDbContext context,
         string pattern,
         Direction direction,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        ExternalNodeAdmission? externalNodes = null,
+        IReadOnlyList<FactRedirectRule>? redirectRules = null
     )
     {
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await BuildReachSetAsync(connection, pattern, direction, cancellationToken);
-        var graph = await LoadGraphFromReachSetAsync(connection, direction, cancellationToken);
+        var graph = await LoadGraphFromReachSetAsync(connection, direction, cancellationToken, externalNodes, redirectRules);
 
         // Column list, ordinals and row->record mapping ALL come from FactInvocationProjection (see
         // ReferenceFactRows): this loader no longer writes a field list of its own. It used to, and the copy
@@ -384,7 +390,9 @@ public static class SqlReachability
     private static async Task<FactGraphData> LoadGraphFromReachSetAsync(
         DbConnection connection,
         Direction direction,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ExternalNodeAdmission? externalNodes = null,
+        IReadOnlyList<FactRedirectRule>? redirectRules = null
     )
     {
         var edgeJoinCol = direction == Direction.Forward ? "FromSym" : "ToSym";
@@ -524,6 +532,39 @@ public static class SqlReachability
             cancellationToken
         );
         IReadOnlyList<DispatchFact>? minedDispatch = mined.ToArray();
+
+        // EXTERNAL LEAVES on the BOUNDED path (external-node admission). `rig index` bakes the admitted
+        // external EDGES into call_edges, so the bounded reader above already has them — but the persisted
+        // edge view carries no assembly column, so the IsExternal MARKER (which is what suppresses dispatch
+        // and drives the renderers' tag) cannot be recovered from it. It is re-derived here from the FACTS
+        // instead, by the SAME policy object the whole-store loader uses: the DISTINCT out-of-source call
+        // targets inside reach_set, with their assembly, is a tiny result (4,914 distinct external targets on
+        // the whole MedDBase store) even though reference_facts is not.
+        //
+        // A REDIRECT target is excluded: the hatch must keep its dispatch (that is the orphan fix), so it is
+        // never an external leaf — exactly as in the whole-store loader and the in-memory twin.
+        if (externalNodes is not null)
+        {
+            var redirectTargets = new HashSet<string>((redirectRules ?? []).Select(rule => rule.RedirectTo), StringComparer.Ordinal);
+            await ReadAsync(
+                connection,
+                "SELECT DISTINCT r.TargetSymbolId, r.TargetAssembly FROM reference_facts r "
+                    + "JOIN reach_set s ON r.TargetSymbolId = s.sym "
+                    + "WHERE r.TargetInSource = 0 AND r.RefKind IN ('invocation','methodGroup','ctor');",
+                reader =>
+                {
+                    var target = reader.GetString(0);
+                    var assembly = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                    if (methodById.ContainsKey(target) || redirectTargets.Contains(target) || !externalNodes.Admits(assembly, target))
+                    {
+                        return;
+                    }
+
+                    methodById[target] = ExternalNodeAdmission.SynthesizeNode(target);
+                },
+                cancellationToken
+            );
+        }
 
         return new FactGraphData(callEdges, implEdges.ToArray(), methodById.Values.ToArray(), baseEdges.ToArray(), minedDispatch);
     }

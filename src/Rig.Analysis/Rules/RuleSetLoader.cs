@@ -67,6 +67,7 @@ public static class RuleSetLoader
         {
             Handoff = FactHandoffRuleProvider.Project(doc),
             Redirect = FactRedirectRuleProvider.Project(doc),
+            ExternalNodes = FactExternalNodeRuleProvider.Project(doc),
             CacheCoherence = FactCacheCoherenceRuleProvider.Project(doc),
             DualWrite = FactDualWriteRuleProvider.Project(doc),
             CrossMethodAmplification = FactCrossMethodAmplificationRuleProvider.Project(doc),
@@ -189,6 +190,11 @@ public static class RuleSetLoader
         acc.DiRegistrations = Concat(acc.DiRegistrations, next.DiRegistrations);
         acc.HandoffDispatchers = Concat(acc.HandoffDispatchers, next.HandoffDispatchers);
         acc.RedirectRules = Concat(acc.RedirectRules, next.RedirectRules);
+        // externalNodes merges PER LIST (not last-object-wins): an overlay APPENDS its own allowed/denied
+        // assemblies to whatever an earlier cascade file declared instead of replacing the whole section.
+        // Same trap as dualWrite above — a `next` object with only `denyAssemblies` would otherwise erase an
+        // earlier file's `allowAssemblies`.
+        acc.ExternalNodes = MergeExternalNodes(acc.ExternalNodes, next.ExternalNodes);
         acc.CacheCoherence = next.CacheCoherence ?? acc.CacheCoherence;
         // dualWrite merges PER KEY (not last-object-wins): an overlay adds its own providers to the builtin
         // generic map instead of restating it. Forgetting this line is the recurring cascade trap — the
@@ -210,6 +216,22 @@ public static class RuleSetLoader
         acc.Render = MergeRender(acc.Render, next.Render);
         acc.EffectEmoji = MergeEmoji(acc.EffectEmoji, next.EffectEmoji);
         return acc;
+    }
+
+    // Fold `b`'s external-node assembly overrides into `a`'s: both lists concatenate (deduped, name
+    // comparison is case-insensitive, as the segment matcher is). One side null => the other, verbatim.
+    private static ExternalNodesSection? MergeExternalNodes(ExternalNodesSection? a, ExternalNodesSection? b)
+    {
+        if (a is null || b is null)
+        {
+            return a ?? b;
+        }
+
+        return new ExternalNodesSection
+        {
+            AllowAssemblies = ConcatDistinct(a.AllowAssemblies, b.AllowAssemblies),
+            DenyAssemblies = ConcatDistinct(a.DenyAssemblies, b.DenyAssemblies),
+        };
     }
 
     private static List<T> Concat<T>(List<T>? a, List<T>? b) => [.. a ?? [], .. b ?? []];

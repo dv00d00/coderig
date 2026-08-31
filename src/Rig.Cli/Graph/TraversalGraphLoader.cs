@@ -85,7 +85,10 @@ internal static class TraversalGraphLoader
         string pattern,
         SqlReachability.Direction direction,
         IReadOnlyList<FactHandoffRule> handoffRules,
-        IReadOnlyList<FactRedirectRule> redirectRules
+        IReadOnlyList<FactRedirectRule> redirectRules,
+        // EXTERNAL-NODE ADMISSION policy, threaded to BOTH branches so the bounded SQL path and the EF
+        // fallback admit the same external leaves (see ExternalNodeAdmission).
+        ExternalNodeAdmission? externalNodes = null
     )
     {
         // SQL path: call_edges already carry the persisted handoff classification (from `rig graph`),
@@ -93,10 +96,16 @@ internal static class TraversalGraphLoader
         // with the rules so the in-memory traversal sees the same handoff edges.
         if (SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context))
         {
-            return await SqlReachability.LoadBoundedGraphAsync(context, pattern, direction);
+            return await SqlReachability.LoadBoundedGraphAsync(
+                context,
+                pattern,
+                direction,
+                externalNodes: externalNodes,
+                redirectRules: redirectRules
+            );
         }
 
-        return await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules);
+        return await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules, externalNodes: externalNodes);
     }
 
     // The SHAPED traversal graph: LoadTraversalGraphAsync + the single FactPathFinder.ShapeGraph pass
@@ -114,7 +123,14 @@ internal static class TraversalGraphLoader
         RuleSet rules
     )
     {
-        var graph = await LoadTraversalGraphAsync(context, pattern, direction, rules.Handoff, rules.Redirect);
+        var graph = await LoadTraversalGraphAsync(
+            context,
+            pattern,
+            direction,
+            rules.Handoff,
+            rules.Redirect,
+            ExternalNodeAdmission.FromRules(rules)
+        );
         var monoSigs = await Reads.LoadMonomorphizationSignaturesAsync(context);
         return FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context, monomorphizeSignatures: monoSigs);
     }
@@ -132,8 +148,14 @@ internal static class TraversalGraphLoader
     {
         var inputs =
             SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context)
-                ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
-                : await LoadReachInputsFromRowsAsync(context, rules.Handoff, rules.Redirect);
+                ? await SqlReachability.LoadReachInputsAsync(
+                    context,
+                    pattern,
+                    direction,
+                    externalNodes: ExternalNodeAdmission.FromRules(rules),
+                    redirectRules: rules.Redirect
+                )
+                : await LoadReachInputsFromRowsAsync(context, rules.Handoff, rules.Redirect, ExternalNodeAdmission.FromRules(rules));
 
         // The single shaping pass (monomorphize generic factories + carry cut/context rules on the graph)
         // so reaches/tree walk the same shaped graph as path/callers. Edges with no concrete construct
@@ -149,10 +171,11 @@ internal static class TraversalGraphLoader
     internal static async Task<SqlReachability.ReachInputs> LoadReachInputsFromRowsAsync(
         RigDbContext context,
         IReadOnlyList<FactHandoffRule> handoffRules,
-        IReadOnlyList<FactRedirectRule> redirectRules
+        IReadOnlyList<FactRedirectRule> redirectRules,
+        ExternalNodeAdmission? externalNodes = null
     )
     {
-        var graph = await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules);
+        var graph = await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules, externalNodes: externalNodes);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var allocationFacts = await Reads.LoadAllocationFactsAsync(context);

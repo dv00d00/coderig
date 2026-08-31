@@ -21,6 +21,12 @@ public sealed record RuleSet
     // overload to the virtual hatch it trampolines into, applied at the reference→edge projection.
     public IReadOnlyList<FactRedirectRule> Redirect { get; init; } = [];
 
+    // EXTERNAL-NODE ADMISSION overrides (the `externalNodes` section): extra ALLOWED / DENIED assembly
+    // names layered over ExternalNodeAdmission's framework deny-list + rule-derived type patterns. A single
+    // object; null when the section is absent, which means "the defaults" — the feature is default-ON and
+    // this section is its only knob.
+    public FactExternalNodeRule? ExternalNodes { get; init; }
+
     // FR-7 cache-coherence POLICY (declared cached entities + an optional generated-ORM-noise namespace-suffix
     // filter) for the cache-coherence INSTANCE of the generic effect-correlation deriver (wired in
     // DeriveCommand). A single object; null when the `cacheCoherence` section is absent.

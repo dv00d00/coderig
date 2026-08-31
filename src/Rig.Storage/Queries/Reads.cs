@@ -315,16 +315,22 @@ public static class Reads
         RigDbContext context,
         IReadOnlyList<FactHandoffRule>? handoffRules = null,
         IReadOnlyList<FactRedirectRule>? redirectRules = null,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        // EXTERNAL-NODE ADMISSION policy (see ExternalNodeAdmission). Non-null => the third scan below
+        // admits the library/BCL call targets it accepts as first-class LEAF nodes. Null leaves the graph
+        // first-party-only (the shape before this change) — production callers always pass
+        // ExternalNodeAdmission.FromRules(rules); null is for callers that hold no rule set.
+        ExternalNodeAdmission? externalNodes = null
     )
     {
-        // First-party callees only. The fact store now keeps ALL method-call refs (incl. BCL/runtime)
-        // so any effect rule can match them at derive time without a re-mine — but the call GRAPH
-        // (reaches/tree/callers/dead) must stay first-party, or it floods with BCL leaves (every
-        // .ToString()/.Add()/LINQ call). BCL targets have no source/symbol anyway, so they are leaves
-        // that add width, not reach. TargetInSource filters them out of the graph; effects on those
-        // calls still surface because the effect deriver keys them to their first-party ENCLOSING
-        // method (see LoadInvocationRefsAsync, which intentionally does NOT filter).
+        // First-party callees FIRST. The fact store keeps ALL method-call refs (incl. BCL/runtime) so any
+        // effect rule can match them at derive time without a re-mine, and effects on those calls surface
+        // regardless because the effect deriver keys them to their first-party ENCLOSING method (see
+        // LoadInvocationRefsAsync, which intentionally does NOT filter). What the call GRAPH does with the
+        // out-of-source refs is now a POLICY, not a blanket drop: `externalNodes` (ExternalNodeAdmission)
+        // admits the targets a ruleset cares about — the modelled BCL types plus every non-framework
+        // library — as leaf nodes, and still keeps out the noise (.ToString()/.Add()/LINQ) that would
+        // flood the tree with width and no reach. This scan is unchanged; admission is the third scan below.
         //
         // The row->record mapping is CallEdgeProjection's (via ReferenceFactRows.CallEdgeRow), shared with the
         // in-memory twin FactGraphProjection.FromAnalysis — the two used to keep private copies of the
@@ -389,6 +395,57 @@ public static class Reads
             }
         }
 
+        // EXTERNAL-NODE ADMISSION (the third arm — see ExternalNodeAdmission, and the in-memory twin
+        // FactGraphProjection.ProjectCallsWithExternals, which applies the IDENTICAL policy in one pass).
+        // The out-of-source call rows are STREAMED like the first-party scan and filtered CLIENT-side: the
+        // policy is segment matching over two assembly override lists plus namespace-prefix matching over
+        // every type pattern the loaded effect rules mention, none of which translates to SQL. Measured on
+        // the MedDBase store (2026-08-31): 349,786 external call rows against 630,568 first-party ones, of
+        // which ~182k are admitted — a bounded ~55% row increase on this scan, not the multi-million-row
+        // flood the original "BCL floods the graph" note assumed.
+        //
+        // A row a REDIRECT rule already consumed is NOT admitted here: the rewrite is authoritative and one
+        // row must never yield two edges. RedirectClassifier is the same gate the twin uses.
+        var externalIds = new HashSet<string>(StringComparer.Ordinal);
+        if (externalNodes is not null)
+        {
+            var externalRedirectTargets = new HashSet<string>(
+                (redirectRules ?? []).Select(rule => rule.RedirectTo),
+                StringComparer.Ordinal
+            );
+            var externalQuery = context
+                .ReferenceFacts.AsNoTracking()
+                .Where(r =>
+                    r.EnclosingSymbolId != null
+                    && !r.TargetInSource
+                    && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
+                )
+                .Select(ReferenceFactRows.ExternalCallEdgeRow);
+            await foreach (var row in externalQuery.AsAsyncEnumerable().WithCancellation(cancellationToken))
+            {
+                if (
+                    RedirectClassifier.Redirect(row.TargetSymbolId, redirectRules) is not null
+                    || !externalNodes.Admits(row.TargetAssembly, row.TargetSymbolId)
+                )
+                {
+                    continue;
+                }
+
+                var edge = CallEdgeProjection.Project(row);
+                if (seenEdges.Add(edge))
+                {
+                    callEdges.Add(edge);
+                }
+
+                // A redirect HATCH must keep its dispatch (that is the whole orphan fix), so it never
+                // becomes an IsExternal leaf even if a plain call also binds straight to it.
+                if (!externalRedirectTargets.Contains(row.TargetSymbolId))
+                {
+                    externalIds.Add(row.TargetSymbolId);
+                }
+            }
+        }
+
         // Project straight to the domain record in the SELECT (EF builds it in the materializer) — no
         // anonymous intermediate, no second client mapping pass. (These are PROJECTIONS, so AsNoTracking is
         // a no-op — EF tracks nothing but entities — kept only as an explicit read-only signal.)
@@ -429,6 +486,17 @@ public static class Reads
             if (seenMethods.Add(row.SymbolId))
             {
                 methods.Add(SymbolFactProjections.ToMethodRef(row));
+            }
+        }
+
+        // The synthesized EXTERNAL LEAVES, appended AFTER the first-party methods and under the SAME
+        // first-wins dedup — so a DocID that is both in symbol_facts and referenced as external keeps its
+        // real, source-located node. Same order and semantics as the in-memory twin's Concat.
+        foreach (var id in externalIds)
+        {
+            if (seenMethods.Add(id))
+            {
+                methods.Add(ExternalNodeAdmission.SynthesizeNode(id));
             }
         }
 
@@ -498,7 +566,9 @@ public static class Reads
             context: context,
             handoffRules: rules.Handoff,
             redirectRules: rules.Redirect,
-            cancellationToken: ct
+            cancellationToken: ct,
+            // Default ON: the rule set IS the knob (its optional `externalNodes` section).
+            externalNodes: ExternalNodeAdmission.FromRules(rules)
         );
         var monoSigs = await LoadMonomorphizationSignaturesAsync(context, ct);
         graph = FactPathFinder.ShapeGraph(
@@ -1244,8 +1314,10 @@ public static class Reads
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         var rows = new List<(string, string)>();
         await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT DISTINCT FilePath, DefiningAssembly FROM symbol_facts WHERE DefiningAssembly <> '' AND FilePath <> '';";
+        command.CommandText = """
+            SELECT DISTINCT FilePath, DefiningAssembly FROM symbol_facts 
+            WHERE DefiningAssembly <> '' AND FilePath <> '';
+            """;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -1268,12 +1340,16 @@ public static class Reads
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         var rows = new List<(string, string, int)>();
         await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT s.DefiningAssembly AS usingAsm, r.TargetAssembly AS usedAsm, COUNT(*) AS refs "
-            + "FROM reference_facts r JOIN symbol_facts s ON s.SymbolId = r.EnclosingSymbolId "
-            + "WHERE r.TargetInSource = 1 AND r.TargetAssembly <> '' AND s.DefiningAssembly <> '' "
-            + "AND s.DefiningAssembly <> r.TargetAssembly "
-            + "GROUP BY s.DefiningAssembly, r.TargetAssembly;";
+        command.CommandText = """
+            SELECT s.DefiningAssembly AS usingAsm, r.TargetAssembly AS usedAsm, COUNT(*) AS refs 
+            FROM reference_facts r JOIN symbol_facts s ON s.SymbolId = r.EnclosingSymbolId 
+            WHERE 
+                r.TargetInSource = 1 AND 
+                r.TargetAssembly <> '' AND 
+                s.DefiningAssembly <> '' AND 
+                s.DefiningAssembly <> r.TargetAssembly 
+            GROUP BY s.DefiningAssembly, r.TargetAssembly;
+            """;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -1294,10 +1370,13 @@ public static class Reads
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         var rows = new List<(string, int, int)>();
         await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT TargetAssembly, COUNT(*) AS refs, COUNT(DISTINCT EnclosingSymbolId) AS fromMethods "
-            + "FROM reference_facts WHERE TargetInSource = 1 AND TargetAssembly <> '' "
-            + "GROUP BY TargetAssembly ORDER BY refs ASC;";
+        command.CommandText = """
+            SELECT TargetAssembly, COUNT(*) AS refs, COUNT(DISTINCT EnclosingSymbolId) AS fromMethods FROM reference_facts 
+            WHERE 
+                TargetInSource = 1 AND 
+                TargetAssembly <> '' 
+            GROUP BY TargetAssembly ORDER BY refs ASC;
+            """;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Rig.Analysis.Rules;
 using Rig.Cli;
 using Rig.Cli.Commands;
@@ -247,6 +248,245 @@ public sealed class WatchCommandTests
         var secondAtomicAnswer = await host.AnswerQueryAsync("path BookingService.Book Db.Query");
         secondAtomicAnswer.ShouldNotContain("exact path unavailable");
         secondAtomicAnswer.ShouldNotContain("source topology changed");
+    }
+
+    // The regression these four tests exist for: before the host owned a reconcile SCHEDULER, the cascade debt
+    // ApplyEdits owes was never paid — `ReconcileAllAsync` had no production caller — so the FIRST save of a
+    // session left `k project(s) unreconciled` set forever and every Rider file-effects request was declined
+    // as stale for the process lifetime. The quiet period is injected in each test so none of them sleeps on
+    // the real 750 ms default, and every wait polls a condition rather than hoping.
+
+    // (a) An applied save is reconciled by the loop alone: no ReconcileAllAsync call anywhere in this test,
+    // and the whole-file semantic read Rider makes comes back EXACT rather than stale.
+    [Test]
+    public async Task The_background_loop_pays_the_debt_of_a_save_with_no_explicit_reconcile()
+    {
+        using var playground = await DeepChainPlayground.CreateAsync();
+        var output = new ConcurrentWriter();
+        await using var host = await WatchHost.StartAsync(
+            solutionPath: playground.SolutionPath,
+            rules: RuleSetLoader.Load(playground.WorkingDirectory),
+            buildCacheDir: null,
+            output: output,
+            watch: true,
+            reconcileQuietPeriod: TimeSpan.FromMilliseconds(100)
+        );
+
+        (await host.GetUnreconciledProjectsAsync()).ShouldBeEmpty();
+        var editedFilePath = await ApplyBookingEditAsync(playground);
+        await WaitUntilAsync(
+            () => Task.FromResult(host.AppliedFileCount >= 1),
+            TimeSpan.FromSeconds(60),
+            "the watcher never applied the save"
+        );
+
+        // The debt is paid WITHOUT anything calling ReconcileAllAsync — that call is the bug's fingerprint,
+        // so its absence here is the point of the test.
+        await WaitUntilAsync(
+            async () => (await host.GetUnreconciledProjectsAsync()).Count == 0,
+            TimeSpan.FromSeconds(60),
+            "the background loop never reconciled the debt the save owed"
+        );
+        host.ReconcileAttemptCount.ShouldBeGreaterThanOrEqualTo(1);
+        (await host.GetStatusLineAsync()).ShouldContain("all projects reconciled");
+        Regex
+            .IsMatch(output.Text, @"live: reconciled [1-9]\d* project\(s\) in \d+\.\d{2}s")
+            .ShouldBeTrue($"the reconcile status line is missing or reshaped:\n{output.Text}");
+
+        var effects = await host.ServeFileEffectsAsync(FileEffectRequest(playground, editedFilePath));
+        effects.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceExact, effects.Reason);
+        effects.Reason.ShouldBeEmpty();
+    }
+
+    // (b) N rapid saves cost ONE cascade, not N. Driven through the scheduler's own signal with a counting
+    // reconcile delegate: the debounce upstream would hide the coalescing this test is about, and counting
+    // attempts is honest where asserting on reformatted console prose would not be.
+    [Test]
+    public async Task A_burst_of_signals_coalesces_into_one_reconcile()
+    {
+        using var playground = await DeepChainPlayground.CreateAsync();
+        var calls = 0;
+        var output = new ConcurrentWriter();
+        await using var host = await WatchHost.StartAsync(
+            solutionPath: playground.SolutionPath,
+            rules: RuleSetLoader.Load(playground.WorkingDirectory),
+            buildCacheDir: null,
+            output: output,
+            watch: true,
+            reconcileQuietPeriod: TimeSpan.FromMilliseconds(200),
+            reconcile: _ =>
+            {
+                Interlocked.Increment(ref calls);
+                return Task.FromResult(false);
+            }
+        );
+
+        // All five land in the channel synchronously, so they are all in flight well inside the first 200 ms
+        // quiet window — the loop cannot have reconciled between them.
+        for (var i = 0; i < 5; i++)
+        {
+            host.RequestReconcile();
+        }
+
+        await WaitUntilAsync(
+            () => Task.FromResult(host.ReconcileAttemptCount >= 1),
+            TimeSpan.FromSeconds(30),
+            "the background loop never reconciled the signalled burst"
+        );
+        // Ten quiet periods of headroom: if the loop fired per signal rather than per burst, the extra four
+        // attempts have long since happened by now.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        host.ReconcileAttemptCount.ShouldBe(1);
+        Volatile.Read(ref calls).ShouldBe(1);
+        // Returned false — nothing was published, so the loop must stay silent rather than claim a reconcile.
+        output.Text.ShouldNotContain("live: reconciled ");
+    }
+
+    // (c) Quiet period 0 is exactly the pre-loop behaviour: eager facts published, debt retained, nothing
+    // scheduled. Kept reachable because the debt disclosure is a deliberate product surface.
+    [Test]
+    public async Task A_zero_quiet_period_disables_the_loop_and_retains_the_debt()
+    {
+        using var playground = await DeepChainPlayground.CreateAsync();
+        var output = new ConcurrentWriter();
+        await using var host = await WatchHost.StartAsync(
+            solutionPath: playground.SolutionPath,
+            rules: RuleSetLoader.Load(playground.WorkingDirectory),
+            buildCacheDir: null,
+            output: output,
+            watch: true,
+            reconcileQuietPeriod: TimeSpan.Zero
+        );
+
+        var editedFilePath = await ApplyBookingEditAsync(playground);
+        await WaitUntilAsync(
+            () => Task.FromResult(host.AppliedFileCount >= 1),
+            TimeSpan.FromSeconds(60),
+            "the watcher never applied the save"
+        );
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        (await host.GetUnreconciledProjectsAsync()).ShouldNotBeEmpty();
+        host.ReconcileAttemptCount.ShouldBe(0);
+        output.Text.ShouldNotContain("live: reconciled ");
+        (await host.GetStatusLineAsync()).ShouldContain("project(s) unreconciled");
+        // And the fail-closed policy is untouched: with debt outstanding, file effects are still declined.
+        (await host.ServeFileEffectsAsync(FileEffectRequest(playground, editedFilePath))).SourceStatus.ShouldBe(
+            RiderFileEffectResponder.SourceStale
+        );
+    }
+
+    // (d) A failed reconcile must not kill the scheduler. Letting one exception end the loop would silently
+    // restore the permanent-staleness bug: the debt would never be paid again for the process lifetime.
+    [Test]
+    public async Task A_failed_reconcile_is_disclosed_retains_the_debt_and_leaves_the_loop_alive()
+    {
+        using var playground = await DeepChainPlayground.CreateAsync();
+        var output = new ConcurrentWriter();
+        await using var host = await WatchHost.StartAsync(
+            solutionPath: playground.SolutionPath,
+            rules: RuleSetLoader.Load(playground.WorkingDirectory),
+            buildCacheDir: null,
+            output: output,
+            watch: true,
+            reconcileQuietPeriod: TimeSpan.FromMilliseconds(100),
+            reconcile: _ => throw new InvalidOperationException("cascade re-extraction exploded")
+        );
+
+        await ApplyBookingEditAsync(playground);
+        await WaitUntilAsync(
+            () => Task.FromResult(host.AppliedFileCount >= 1),
+            TimeSpan.FromSeconds(60),
+            "the watcher never applied the save"
+        );
+        await WaitUntilAsync(
+            () => Task.FromResult(output.Text.Contains("live: reconcile FAILED: cascade re-extraction exploded — debt retained")),
+            TimeSpan.FromSeconds(60),
+            "the failed reconcile was never disclosed"
+        );
+
+        (await host.GetUnreconciledProjectsAsync()).ShouldNotBeEmpty();
+        var attemptsAfterFailure = host.ReconcileAttemptCount;
+        attemptsAfterFailure.ShouldBeGreaterThanOrEqualTo(1);
+
+        // The loop survived it: a later signal is still served.
+        host.RequestReconcile();
+        await WaitUntilAsync(
+            () => Task.FromResult(host.ReconcileAttemptCount > attemptsAfterFailure),
+            TimeSpan.FromSeconds(30),
+            "the loop died on the first reconcile failure"
+        );
+        (await host.GetUnreconciledProjectsAsync()).ShouldNotBeEmpty();
+    }
+
+    // The same real disk edit the end-to-end test uses: Book gains a direct Foundation.Db.Query call, which
+    // makes Business dirty and genuinely owes a dependent cascade. Returns the edited path.
+    private static async Task<string> ApplyBookingEditAsync(DeepChainPlayground playground)
+    {
+        var editedFilePath = Path.Combine(playground.WorkingDirectory, "Business", "BookingService.cs");
+        var originalText = await File.ReadAllTextAsync(editedFilePath);
+        const string Marker = "var patient = _repository.GetById(patientId);";
+        originalText.ShouldContain(Marker);
+        await File.WriteAllTextAsync(
+            editedFilePath,
+            originalText.Replace(Marker, "Foundation.Db.Query(\"audit: booking attempt\");\n        " + Marker, StringComparison.Ordinal)
+        );
+        return editedFilePath;
+    }
+
+    private static RiderFileEffectRequest FileEffectRequest(DeepChainPlayground playground, string filePath) =>
+        new(
+            LiveQueryTransport.Protocol,
+            RiderFileEffectResponder.Verb,
+            playground.WorkingDirectory,
+            RequestId: "req-1",
+            FilePath: filePath,
+            ClientSnapshotToken: "token-1"
+        );
+
+    // The host has TWO background loops writing status lines while a test reads them, and StringWriter is not
+    // thread-safe — an unsynchronized read of one mid-write throws or returns a torn string. Small enough to
+    // keep local to the tests that need concurrent reads.
+    private sealed class ConcurrentWriter : TextWriter
+    {
+        private readonly StringWriter _inner = new();
+
+        public override System.Text.Encoding Encoding => _inner.Encoding;
+
+        public string Text
+        {
+            get
+            {
+                lock (_inner)
+                {
+                    return _inner.ToString();
+                }
+            }
+        }
+
+        public override void Write(char value)
+        {
+            lock (_inner)
+            {
+                _inner.Write(value);
+            }
+        }
+
+        public override void Write(string? value)
+        {
+            lock (_inner)
+            {
+                _inner.Write(value);
+            }
+        }
+
+        public override void WriteLine(string? value)
+        {
+            lock (_inner)
+            {
+                _inner.WriteLine(value);
+            }
+        }
     }
 
     private static async Task WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout, string reason)

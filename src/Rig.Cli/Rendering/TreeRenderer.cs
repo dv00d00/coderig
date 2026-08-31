@@ -484,8 +484,12 @@ internal static class TreeRenderer
         // `--hazards`: the inline pattern-finding marker for this method (empty when unmarked). Placed before
         // the source-loc suffixes so SourceLocDedupWriter's trailing-loc regex still matches the line.
         var hazard = hazardsByMethod is not null && hazardsByMethod.TryGetValue(node.SymbolId, out var hz) ? hz : "";
+        // External-node admission: an admitted library/BCL leaf is tagged (the ONE rule lives in
+        // SymbolNameFormatter). Placed with the other «...» node tags, before the effect/loc suffixes so
+        // SourceLocDedupWriter's trailing-loc regex still matches.
+        var externalTag = node.IsExternal ? ExternalTag : "";
         var label =
-            $"{epPrefix}{name}{dispatch}{handoff}{loop}{guardTag}{calls}{elided}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
+            $"{epPrefix}{name}{dispatch}{handoff}{loop}{guardTag}{calls}{elided}{externalTag}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
         output.WriteLine(isRoot ? label : $"{prefix}{Connector(isLast)}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or

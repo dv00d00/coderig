@@ -251,6 +251,11 @@ internal static class PathCommand
             epData: null
         );
 
+        // Admitted external LEAVES in this graph (external-node admission) — a path may now terminate at
+        // one, and it must not read as first-party code. Built from the graph the path was found over, so
+        // the marker cannot disagree with the traversal that produced the step.
+        var externalPathNodes = graph.Methods.Where(m => m.IsExternal).Select(m => m.SymbolId).ToHashSet(StringComparer.Ordinal);
+
         io.TextOutput.Output.WriteLine($"Path '{opts.FromPattern}' -> '{opts.ToPattern}' ({path.Count} nodes):");
         for (var i = 0; i < path.Count; i++)
         {
@@ -267,7 +272,10 @@ internal static class PathCommand
                 i == 0
                     ? HeaderSuffix(pathEpContext, step.SymbolId)
                     : $"  [{kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
-            io.TextOutput.Output.WriteLine($"{Indent.Of(i + 1)}{step.SymbolId}{via}");
+            // External-node admission: a path may now END at an admitted library/BCL leaf. Tag it with the
+            // ONE shared marker so the terminal step is not read as first-party code.
+            var external = externalPathNodes.Contains(step.SymbolId) ? ExternalTag : "";
+            io.TextOutput.Output.WriteLine($"{Indent.Of(i + 1)}{step.SymbolId}{external}{via}");
         }
 
         renderWatch.Stop();

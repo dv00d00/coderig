@@ -63,6 +63,20 @@ internal static class WatchCommand
                 "Verify each would-be body-only surface classification by re-extracting the cascade it would skip. "
                 + "A mismatch publishes the fresh coarse facts and permanently disables the gate for that project in this process.",
         };
+        // The scheduler for the cascade debt ApplyEdits deliberately OWES. Without it the first .cs save of a
+        // session leaves `k project(s) unreconciled` set forever — nothing in production ever called
+        // ReconcileAllAsync — so every `file-effects` request fails closed as stale and a Rider session goes
+        // dark after one keystroke-save. Quiet period, not interval: a reconcile costs the cascade, so it must
+        // fire once after a burst settles, not once per save.
+        var reconcileQuietPeriod = new Option<int>("--reconcile-quiet-period")
+        {
+            Description =
+                "Milliseconds of save quiet before the owed dependent cascade is reconciled in the background "
+                + "(default 750). 0 disables the loop: the eager facts stay published but the debt is never paid, "
+                + "so from the FIRST save onwards every served answer that requires reconciled facts — Rider's "
+                + "file effects above all — is declined as stale until something explicitly reconciles.",
+            DefaultValueFactory = _ => 750,
+        };
         var cmd = new Command(
             name: "watch",
             description: "Live background index: cold-analyze once retaining the workspace, then atomically publish each "
@@ -76,6 +90,7 @@ internal static class WatchCommand
             noServe,
             restore,
             verifyCascadeGate,
+            reconcileQuietPeriod,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -90,6 +105,7 @@ internal static class WatchCommand
                         noServe: pr.GetValue(noServe),
                         restore: pr.GetValue(restore),
                         verifyCascadeGate: pr.GetValue(verifyCascadeGate),
+                        reconcileQuietPeriod: TimeSpan.FromMilliseconds(Math.Max(0, pr.GetValue(reconcileQuietPeriod))),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -107,6 +123,7 @@ internal static class WatchCommand
         bool noServe,
         bool restore,
         bool verifyCascadeGate,
+        TimeSpan reconcileQuietPeriod,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -155,7 +172,8 @@ internal static class WatchCommand
                 watch: !once,
                 workingDirectory: workingDirectory,
                 restore: restore,
-                verifyCascadeGate: verifyCascadeGate
+                verifyCascadeGate: verifyCascadeGate,
+                reconcileQuietPeriod: reconcileQuietPeriod
             );
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
@@ -293,10 +311,11 @@ internal static class WatchCommand
 }
 
 // The resident loop, split from the command action so a test can drive it end-to-end (boot → disk
-// edit → poll) without a console. Owns the FileSystemWatcher, debounce and one publication worker.
-// `_gate` keeps status/query capture coherent with publication. Dependent reconciliation and derived-
-// artifact warming are explicit primitives by default: the opt-in cascade verifier is the one mode that
-// reconciles before emitting its status, while ordinary watch keeps dirty debt until an explicit request.
+// edit → poll) without a console. Owns the FileSystemWatcher, debounce, one publication worker and the
+// debounced background reconcile loop. `_gate` keeps status/query capture coherent with publication.
+// Reconciliation stays a plain awaitable primitive (ResidentIndex owns no threads); what schedules it is
+// the quiet-period loop below, which is what stops the debt from a save being owed forever. The opt-in
+// cascade verifier still reconciles inline, before the status line, on its own edit path.
 internal sealed class WatchHost : IAsyncDisposable
 {
     private static readonly TimeSpan DefaultDebounce = TimeSpan.FromMilliseconds(300);
@@ -319,7 +338,21 @@ internal sealed class WatchHost : IAsyncDisposable
     private readonly FileSystemWatcher? _watcher;
     private readonly Task _loop;
 
+    // The reconcile SCHEDULER. ResidentIndex owns no threads by design, so the debt ApplyEdits owes has to be
+    // paid by something in the host — and until this loop existed nothing paid it: `ReconcileAllAsync` had no
+    // production caller at all, so the first save of a session pinned `k project(s) unreconciled` for the
+    // process lifetime and every file-effects request was declined as stale from then on.
+    //
+    // An unbounded channel, not a flag+event: a signal written while a reconcile is RUNNING survives in the
+    // channel and the next ReadAsync returns immediately, so an edit that lands mid-reconcile schedules the
+    // next one instead of being lost.
+    private readonly Channel<byte> _reconcileSignals = Channel.CreateUnbounded<byte>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly TimeSpan _reconcileQuietPeriod;
+    private readonly Func<CancellationToken, Task<bool>> _reconcile;
+    private readonly Task _reconcileLoop;
+
     private int _appliedFiles;
+    private int _reconcileAttempts;
 
     // STICKY once set, for the process lifetime, and deliberately not clearable. A FileSystemWatcher
     // overflow means events were dropped before we saw them, so we do not know WHICH files went stale —
@@ -349,7 +382,9 @@ internal sealed class WatchHost : IAsyncDisposable
         TextWriter error,
         bool watch,
         TimeSpan debounce,
-        bool verifyCascadeGate
+        bool verifyCascadeGate,
+        TimeSpan reconcileQuietPeriod,
+        Func<CancellationToken, Task<bool>>? reconcile
     )
     {
         _index = index;
@@ -359,11 +394,14 @@ internal sealed class WatchHost : IAsyncDisposable
         _workingDirectory = workingDirectory;
         _debounce = debounce;
         _verifyCascadeGate = verifyCascadeGate;
+        _reconcileQuietPeriod = reconcileQuietPeriod;
+        _reconcile = reconcile ?? ReconcileAllAsync;
         ProjectCount = index.CurrentSolution.ProjectIds.Count;
+        _loop = Task.CompletedTask;
+        _reconcileLoop = Task.CompletedTask;
 
         if (!watch)
         {
-            _loop = Task.CompletedTask;
             return;
         }
 
@@ -401,6 +439,12 @@ internal sealed class WatchHost : IAsyncDisposable
         };
         _watcher.EnableRaisingEvents = true;
         _loop = Task.Run(() => RunLoopAsync(_shutdown.Token));
+        // Zero disables the scheduler entirely — the pre-loop behaviour, kept reachable because the debt
+        // disclosure is a deliberate product surface and a caller may want to pay it explicitly.
+        if (_reconcileQuietPeriod > TimeSpan.Zero)
+        {
+            _reconcileLoop = Task.Run(() => RunReconcileLoopAsync(_shutdown.Token));
+        }
     }
 
     public int ProjectCount { get; }
@@ -408,6 +452,11 @@ internal sealed class WatchHost : IAsyncDisposable
     // Total files applied through the eager arm since boot — the `n` of the status line, and the
     // signal a test polls to know the watcher fired.
     public int AppliedFileCount => Volatile.Read(ref _appliedFiles);
+
+    // Reconciles ATTEMPTED by the background loop since boot, counted before the call so a failed one still
+    // shows. The observable seam for "a burst coalesces into ONE reconcile" and "a failure does not kill the
+    // loop" — both of which are otherwise only visible as console prose a test would have to re-format.
+    internal int ReconcileAttemptCount => Volatile.Read(ref _reconcileAttempts);
 
     public static async Task<WatchHost> StartAsync(
         string solutionPath,
@@ -430,6 +479,14 @@ internal sealed class WatchHost : IAsyncDisposable
         // Opt-in safety oracle: after each edit publication, reconcile through the private cascade
         // verifier before the status line is emitted. Default watch remains lazy.
         bool verifyCascadeGate = false,
+        // How long the saves must stay quiet before the owed dependent cascade is reconciled in the
+        // background. DEFAULTS TO ZERO (disabled) here while the `watch` command defaults to 750 ms: a host
+        // constructed directly is being driven by a test that asserts on the debt itself, and a scheduler
+        // that fires on its own would race every one of those assertions. The CLI passes its value explicitly.
+        TimeSpan? reconcileQuietPeriod = null,
+        // Test seam: what the background loop calls instead of ReconcileAllAsync. Lets a test count
+        // reconciles and make one fail without racing a real cascade.
+        Func<CancellationToken, Task<bool>>? reconcile = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -457,7 +514,9 @@ internal sealed class WatchHost : IAsyncDisposable
             error ?? TextWriter.Null,
             watch,
             debounce ?? DefaultDebounce,
-            verifyCascadeGate
+            verifyCascadeGate,
+            reconcileQuietPeriod ?? TimeSpan.Zero,
+            reconcile
         );
     }
 
@@ -839,10 +898,18 @@ internal sealed class WatchHost : IAsyncDisposable
         }
 
         _changes.Writer.TryComplete();
+        _reconcileSignals.Writer.TryComplete();
         _shutdown.Cancel();
         try
         {
             await _loop;
+        }
+        catch (OperationCanceledException) { }
+
+        // Awaited too: a reconcile in flight holds `_gate` and the index, both of which are disposed below.
+        try
+        {
+            await _reconcileLoop;
         }
         catch (OperationCanceledException) { }
 
@@ -946,9 +1013,107 @@ internal sealed class WatchHost : IAsyncDisposable
                 }
 
                 _output.WriteLine(await GetStatusLineAsync(cancellationToken));
+                // Signalled HERE — after ApplyBatchAsync returned, so both `_publicationGate` and `_gate` are
+                // released — and never from inside them: ReconcileAllAsync takes `_gate` itself, so scheduling
+                // while holding it would deadlock the moment the loop ran promptly.
+                RequestReconcile();
             }
         }
         catch (OperationCanceledException) { }
+    }
+
+    // Ask the background loop for a reconcile once the saves go quiet. Non-blocking and lock-free, callable
+    // from anywhere; a no-op when the loop is disabled so the channel cannot grow unread.
+    internal void RequestReconcile()
+    {
+        if (_reconcileQuietPeriod > TimeSpan.Zero)
+        {
+            _reconcileSignals.Writer.TryWrite(0);
+        }
+    }
+
+    // The debt scheduler: wait for a signal, wait out the quiet period (RESET by any further applied batch,
+    // so N rapid saves cost ONE cascade rather than N), then pay. It holds NEITHER gate while waiting — the
+    // reconcile primitive takes `_gate` for itself and a query path takes `_publicationGate` before it, so a
+    // scheduler that waited under either would stall every answer for the whole quiet window.
+    private async Task RunReconcileLoopAsync(CancellationToken cancellationToken)
+    {
+        var reader = _reconcileSignals.Reader;
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await reader.ReadAsync(cancellationToken);
+                }
+                catch (ChannelClosedException)
+                {
+                    break;
+                }
+
+                while (true)
+                {
+                    while (reader.TryRead(out _)) { }
+
+                    var quiet = Task.Delay(_reconcileQuietPeriod, cancellationToken);
+                    var next = reader.WaitToReadAsync(cancellationToken).AsTask();
+                    if (await Task.WhenAny(quiet, next) == quiet)
+                    {
+                        break;
+                    }
+
+                    if (!await next)
+                    {
+                        break; // channel completed (shutdown) — pay what is owed and let the loop exit
+                    }
+                }
+
+                // Drain BEFORE reconciling, never after: a signal that arrives while the cascade below is
+                // running describes an edit this generation may not cover, so it must survive to schedule the
+                // NEXT reconcile. Draining afterwards would swallow exactly that wakeup.
+                while (reader.TryRead(out _)) { }
+
+                await ReconcileOwedDebtAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    // One scheduled payment of the outstanding cascade. A failure is DISCLOSED and the loop lives on: the
+    // eager facts are already sound and the debt is still recorded, so the next save simply schedules another
+    // attempt — letting one exception kill this task would silently restore the permanent-staleness bug.
+    private async Task ReconcileOwedDebtAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _reconcileAttempts);
+        try
+        {
+            // Read the owed count outside the reconcile call; `n` is a status number, not a decision, so an
+            // apply landing between the two only makes it a slight undercount of what got paid.
+            var owed = await PendingProjectCountAsync(cancellationToken);
+            var watch = Stopwatch.StartNew();
+            if (await _reconcile(cancellationToken))
+            {
+                _output.WriteLine($"live: reconciled {owed} project(s) in {watch.Elapsed.TotalSeconds:F2}s");
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _output.WriteLine($"live: reconcile FAILED: {exception.Message} — debt retained");
+        }
+    }
+
+    private async Task<int> PendingProjectCountAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return _index.CaptureSnapshot().Dirty.PendingProjects.Count;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private async Task<int> ApplyBatchAsync(IReadOnlyCollection<string> batch, CancellationToken cancellationToken)
@@ -1041,9 +1206,10 @@ internal sealed class WatchHost : IAsyncDisposable
         return edits.Count;
     }
 
-    // Explicit scheduler/test seam. Default watcher publication never calls it automatically: dirty debt
-    // stays visible until a caller deliberately pays the cascade cost. Verify mode invokes the same index
-    // primitive directly under the host gate so its classification and oracle remain one gated operation.
+    // The scheduler's payment primitive, and still callable explicitly. The batch apply path never calls it
+    // inline — the debt is published first and paid after the saves go quiet (RunReconcileLoopAsync) — so an
+    // edit is never blocked behind a cascade. Verify mode invokes the same index primitive directly under the
+    // host gate so its classification and oracle remain one gated operation.
     public async Task<bool> ReconcileAllAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);

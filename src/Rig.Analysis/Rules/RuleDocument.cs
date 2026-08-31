@@ -335,6 +335,20 @@ internal sealed record AmplificationCategoryObservationRule(
 // Projected to FactEnumeratingMethodRule. Annotate-only.
 internal sealed record EnumeratingMethodObservationRule(IReadOnlyList<string>? Methods, IReadOnlyList<string>? DeclaringTypes);
 
+// `externalNodes` rule section — the ONLY knob on external-node admission (see
+// Rig.Domain.Functions.ExternalNodeAdmission). `allowAssemblies` admits an assembly the framework deny-list
+// would reject (e.g. "System.Net.Http" if a project wants the whole facade in); `denyAssemblies` rejects one
+// the default policy would admit (e.g. a generated-noise library). Both match on assembly-NAME SEGMENTS —
+// "Foo" matches "Foo" and "Foo.*", never "FooBar" — and ALLOW wins over DENY. Lists CONCATENATE across the
+// cascade, so a project overlay appends its own without restating the defaults. Projected to
+// FactExternalNodeRule.
+internal sealed class ExternalNodesSection
+{
+    public List<string>? AllowAssemblies { get; set; }
+
+    public List<string>? DenyAssemblies { get; set; }
+}
+
 internal sealed class AnalysisRulesDocument
 {
     public EntryPointRulesDocument? EntryPoints { get; set; }
@@ -347,6 +361,11 @@ internal sealed class AnalysisRulesDocument
 
     // Top-level key "redirectRules": external-convenience-overload → virtual-hatch redirects (see RedirectRule).
     public List<RedirectRule>? RedirectRules { get; set; }
+
+    // Top-level key "externalNodes": a SINGLE object of assembly-name override lists for external-node
+    // admission (see ExternalNodesSection). Absent = the built-in defaults (framework deny-list + the type
+    // patterns the loaded effect rules mention) — the feature is default-ON; this section only overrides.
+    public ExternalNodesSection? ExternalNodes { get; set; }
 
     // Top-level key "cacheCoherence": a SINGLE object (not a list) declaring the cached entities + bulk-write +
     // invalidation method names for the FR-7 cache-coherence graph hazard (see CacheCoherenceRule).

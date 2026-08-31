@@ -329,6 +329,15 @@ public static partial class FactPathFinder
         public readonly ConcurrentDictionary<string, bool> DispatchCapableCache = new(StringComparer.Ordinal);
         public HashSet<string> Nodes = new(StringComparer.Ordinal);
 
+        // ADMITTED EXTERNAL LEAVES (MethodRef.IsExternal — external-node admission): library/BCL call
+        // targets that are graph nodes but have no indexed body. They are LEAVES by construction (nothing
+        // inside the external DLL was indexed, so they own no adjacency) and DispatchTargets refuses them
+        // as a dispatch source, so an admitted external interface/base declaration can never CHA-fan to
+        // first-party implementations — dispatch through an external declaration is deliberately out of
+        // scope for that change. Empty on every pre-existing graph (nothing sets IsExternal), so the
+        // traversal is byte-identical without admission.
+        public HashSet<string> ExternalLeaves = new(StringComparer.Ordinal);
+
         // When true (the default for the in-memory traversal), virtual/base/interface dispatch is
         // NARROWED to the call edge's static receiver type (CallEdge.ReceiverType). When false, full
         // CHA — every same-named override/impl — is used (the sound superset, for AllDispatchEdges /
@@ -448,8 +457,11 @@ public static partial class FactPathFinder
             );
         }
 
+        // Admitted external leaves are EXCLUDED from the dispatch index: they may be neither a CHA fan-out
+        // ROOT (gated in DispatchTargets) nor a fan-out TARGET (this filter). A first-party call that CHA-
+        // scans a type's methods must never land on a library member with no body.
         index.MethodsByStrippedType = graph
-            .Methods.Where(m => m.ContainingTypeId is not null)
+            .Methods.Where(m => m.ContainingTypeId is not null && !m.IsExternal)
             .GroupBy(m => TypeClosure.StripGeneric(m.ContainingTypeId!), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
@@ -489,6 +501,10 @@ public static partial class FactPathFinder
         foreach (var method in graph.Methods)
         {
             index.Nodes.Add(method.SymbolId);
+            if (method.IsExternal)
+            {
+                index.ExternalLeaves.Add(method.SymbolId);
+            }
         }
 
         return index;

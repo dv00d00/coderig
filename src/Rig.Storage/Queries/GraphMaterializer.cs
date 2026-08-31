@@ -36,7 +36,11 @@ public static class GraphMaterializer
         CancellationToken cancellationToken = default,
         IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
         IReadOnlyList<DeliveryRule>? deliveryRules = null,
-        IReadOnlyList<FactRedirectRule>? redirectRules = null
+        IReadOnlyList<FactRedirectRule>? redirectRules = null,
+        // EXTERNAL-NODE ADMISSION: bakes the admitted external leaf EDGES into call_edges, so the bounded
+        // SQL reader sees the same graph the in-memory oracle computes. The MARKER is re-derived from the
+        // facts on the bounded read (SqlReachability), since call_edges has no assembly column.
+        ExternalNodeAdmission? externalNodes = null
     )
     {
         progress?.Invoke("Loading facts");
@@ -48,7 +52,8 @@ public static class GraphMaterializer
             context,
             handoffRules: handoffRules,
             redirectRules: redirectRules,
-            cancellationToken: cancellationToken
+            cancellationToken: cancellationToken,
+            externalNodes: externalNodes
         );
         return await BuildFromGraphAsync(context, graph, factoryRules, progress, cancellationToken, deliveryRules: deliveryRules);
     }

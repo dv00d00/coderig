@@ -317,7 +317,12 @@ public static class LiveReads
     // Kept in lockstep with Reads by LiveFactSourceParityTests.
     public static FactGraphData ShapedGraph(IFactSnapshotView result, RuleSet rules)
     {
-        var graph = FactGraphProjection.FromView(result, handoffRules: rules.Handoff, redirectRules: rules.Redirect);
+        var graph = FactGraphProjection.FromView(
+            result,
+            handoffRules: rules.Handoff,
+            redirectRules: rules.Redirect,
+            externalNodes: ExternalNodeAdmission.FromRules(rules)
+        );
         graph = FactPathFinder.ShapeGraph(
             graph: graph,
             factoryRules: rules.Factory,

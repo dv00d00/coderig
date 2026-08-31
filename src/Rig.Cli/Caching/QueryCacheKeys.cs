@@ -27,7 +27,11 @@ internal static class QueryCacheKeys
     // prior rig ever wrote a blob under, and the site-map payload/derivation it shares this constant with did
     // not change — so there was nothing warm to flush, on disk or in a browser. Bump on the next EP-DERIVATION
     // change (same store + same rules, different EP set), which is what this constant is for.
-    internal const int EpSchema = 1;
+    // v1->v2: EXTERNAL-NODE ADMISSION. The handoff-origin promotion this constant also gates runs over the
+    // call graph's method-group edges, and the graph now admits out-of-source targets — so a LIBRARY method
+    // group handed to a configured dispatcher is promoted to a handoff entry point where it previously fell
+    // out with the TargetInSource filter. Same store, same rules, a (possibly) larger EP set.
+    internal const int EpSchema = 2;
 
     // v1->v2: TraceNode gained TruncationCause (no stale conflated seen flags); v2->v3: the BOUNDED reach-input
     // loader now carries reference_facts.EnclosingScopes (it never selected the column), so the cached effects
@@ -44,7 +48,11 @@ internal static class QueryCacheKeys
     // under several receivers devirtualizes per receiver instead of the first occurrence winning and every
     // later one collapsing to "⋯elided". Same store, same rules, MORE forest: a warm v6 blob would keep
     // serving trees whose child overrides (and their effects) are invisible.
-    internal const int TreeSchema = 7;
+    // v7->v8: EXTERNAL-NODE ADMISSION — admitted library/BCL call targets are now first-class LEAF nodes,
+    // so the same store + rules yields a forest with MORE children (and a larger "Reachable methods" count),
+    // and TraceNode gained IsExternal, which the renderers key the «external» tag off. A warm v7 blob both
+    // misses the new leaves and decodes IsExternal=false for every node it does have.
+    internal const int TreeSchema = 8;
 
     // v1->v2 EnclosingGuards; v2->v3 lazy_init_race lock-enclosed tier; v3->v4 the n_plus_1 read gate gained
     // object_store + the `execute` operation (a BUILTIN-rules edit, which the rulesHash — computed over the
@@ -59,7 +67,12 @@ internal static class QueryCacheKeys
     // file, DIFFERENT findings: a ruleset that does not declare them now yields no cache_coherence anchors and
     // no event_cycle edges, and a warm v3 blob would keep serving findings derived from the deleted built-in
     // literals forever (the rulesHash cannot see a C#-side derivation change).
-    internal const int GraphHazSchema = 4;
+    // v4->v5: EXTERNAL-NODE ADMISSION. These findings are derived over the SHAPED CALL GRAPH, whose node/edge
+    // set now includes the admitted external leaves. Conservative bump: an admitted leaf has no outgoing edge,
+    // so it can neither close a cycle nor carry an effect — but any REACH-BOUNDED correlation
+    // (cross_method_amplification's reach bound) counts NODES, and a bound that used to be met can now be
+    // exceeded. Cheap to flush, wrong to serve stale.
+    internal const int GraphHazSchema = 5;
 
     // The FINDING-VIEW payload/logic version: how the hazard-augmented effect set is CLASSIFIED and PROJECTED
     // into displayed findings (the /api/hazards mark stream, the derive Hazards/Amplification split), as opposed
@@ -84,7 +97,10 @@ internal static class QueryCacheKeys
     // v1: transparent whole-store method hotspot metrics. v1->v2: persisted lambdas joined the method
     // universe and monomorphized graph/effect/hazard identities now aggregate onto their source method.
     // Sort/top/lambda/generated filters are presentation-only.
-    internal const int HotspotSchema = 2;
+    // v2->v3: EXTERNAL-NODE ADMISSION — CalleeMethods / OutgoingCallSites are counted straight off
+    // graph.CallEdges, so every first-party method that calls a library member now scores higher on both
+    // columns. Same store, same rules, a different ranking.
+    internal const int HotspotSchema = 3;
 
     // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)
@@ -93,8 +109,22 @@ internal static class QueryCacheKeys
     // v5->v6: remove the global mono cap and preserve factory type arity in both shaped graphs in the diff.
     // v6->v7: per-EP reach is resolved per dispatch context on BOTH sides of the diff, so an EP's footprint
     // now includes overrides reached through a receiver that was not the first to arrive at a virtual hub.
-    internal const int ImpactSchema = 7;
+    // v7->v8: EXTERNAL-NODE ADMISSION — the per-EP reach FOOTPRINT the diff is computed from now contains
+    // the admitted external leaves, so a cached side is over a different node universe than a freshly computed
+    // one and would report every library leaf as a reach GAIN. (First-party reachability itself is unchanged:
+    // an admitted leaf has no successors.)
+    internal const int ImpactSchema = 8;
 
+    // NOT bumped for external-node admission, deliberately:
+    //   * HazardEffectsSchema — the whole-store effect set is a per-METHOD fact derived from reference_facts
+    //     + rules, EP- and graph-independent. Admission changes the call GRAPH only, and an effect is keyed to
+    //     its first-party ENCLOSING method (which an external leaf can never be), so the set is byte-identical.
+    //   * EffectsDiffSchema — the same argument one level up: it diffs per-EP EFFECT sets, and no new effect
+    //     can appear (an admitted leaf has no successors, so first-party reachability does not change either).
+    //   * FindingViewSchema / EffectViewSchema — both are PROJECTION-logic versions (the mark-stream shape,
+    //     the intrinsic-view default) and neither changed. They exist to move the client token, which
+    //     TreeSchema / GraphHazSchema / ImpactSchema / HotspotSchema / EpSchema already do.
+    //
     // The composite token the CLIENT keys its cache by (hashed with the rules fingerprint in /api/meta). It
     // folds in EVERY per-artifact schema version, so bumping ANY one above also moves the client's derivation
     // version — the client can never keep serving an artifact whose server-side schema advanced. This is the

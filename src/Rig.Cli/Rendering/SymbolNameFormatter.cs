@@ -10,6 +10,17 @@ namespace Rig.Cli.Rendering;
 // entry-point listing) without coupling them.
 internal static class SymbolNameFormatter
 {
+    // THE ONE EXTERNAL-NODE DISPLAY RULE (external-node admission). An admitted library/BCL call target is
+    // a first-class graph node but NOT first-party code: it has no file/line, no successors and no
+    // dispatch. Every renderer that prints such a node appends this, so a reader can never mistake a
+    // library boundary for indexed code. Same guillemet voice as the tree's «opaque:» / «cut:» /
+    // «via» markers, so this is not a new output format or a new column — just another node tag.
+    //
+    // `reaches` and `callers` are deliberately NOT wired: `reaches` prints EFFECT rows keyed to first-party
+    // ENCLOSING methods (it never prints a bare node name of its own), and an external leaf has no callees,
+    // so it can never appear as a predecessor in a reverse walk.
+    internal const string ExternalTag = " \u00abexternal\u00bb";
+
     internal static string ShortName(string? symbolId)
     {
         if (string.IsNullOrEmpty(symbolId))

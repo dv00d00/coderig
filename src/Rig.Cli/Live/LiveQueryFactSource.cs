@@ -457,7 +457,14 @@ internal sealed class LiveQueryFactSource(LiveFactSource live)
             }
 
             var derived = FactEntryPointDeriver.Derive(epData ?? Source.EpData, rules.EntryPoints, rules.ClassInheritance);
-            var edges = FactGraphProjection.FromView(Source.Facts, handoffRules: rules.Handoff, redirectRules: rules.Redirect).CallEdges;
+            var edges = FactGraphProjection
+                .FromView(
+                    Source.Facts,
+                    handoffRules: rules.Handoff,
+                    redirectRules: rules.Redirect,
+                    externalNodes: ExternalNodeAdmission.FromRules(rules)
+                )
+                .CallEdges;
             var classifiedHandoffs = HandoffClassifier
                 .HandoffEntryPoints(edges, rules.Handoff)
                 .Where(h => h.Dispatcher is not null)

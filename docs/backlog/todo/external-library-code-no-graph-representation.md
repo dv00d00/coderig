@@ -24,7 +24,25 @@ call to an external base method silently dropping the edge that would have reach
 Here there is no missing edge to a first-party target — the target genuinely has no first-party representation
 at all.
 
-## Candidate levels — record as options, not decisions
+## Decisions taken 2026-08-31
+
+- **L1: done** (commit `50827d03`). Live effect: `Writes.cs` went 25 → 35 projected call sites; the
+  `BeginTransactionAsync` (line 338) and `CommitAsync` (line 499) lines are marked at last.
+- **L2: approved and being implemented, with no cost measurement gate.** The premise below that L2 needs an
+  extraction change, a schema bump and a reindex is **WRONG** — `src/Rig.Storage/Queries/Reads.cs:320-327`
+  states the store already keeps every method-call ref including BCL/library targets, and it is the call
+  GRAPH that filters them with `TargetInSource`. So L2 is query-side: no reindex, no store growth, and the
+  admission policy stays data rather than something baked into the store. Admission is the union of
+  rule-mentioned declaring types (which is how BCL types like `System.Data.Common.DbConnection` get in) and
+  non-framework assemblies. External nodes are LEAVES in this pass.
+- **L3: deferred**, split out into `decompile-first-party-binary-references.md`. The general form is
+  rejected outright; only the first-party binary-reference whitelist survives as a deferred item.
+- Follow-on found while designing L2, not yet carded: dispatch through an EXTERNAL interface declaration
+  (`IMediator.Send` and friends) resolves to nothing today, because the declaring member is external and the
+  edge is dropped. L2 makes it a leaf, which is still not the first-party handler. That is plausibly a
+  larger recall win than L2 itself.
+
+## Candidate levels — the options as they stood before the decision above
 
 **L1 — query-side (hours).** Project a call-site row straight from the effect's own `FilePath` + `Line`, with
 no target id at all. This directly fixes consequence (a) above. It is being implemented separately; cross-

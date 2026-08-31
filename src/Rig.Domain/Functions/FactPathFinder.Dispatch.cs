@@ -501,6 +501,19 @@ public static partial class FactPathFinder
         IReadOnlyCollection<string>? carriedBinding = null
     )
     {
+        // ADMITTED EXTERNAL LEAF (external-node admission): a library/BCL target is a graph node but not a
+        // dispatch source. Resolving one would CHA-fan an external interface/base declaration —
+        // `IDisposable.Dispose`, `DbConnection.Open` — to every first-party same-named member, which is the
+        // over-approximation that change deliberately left out of scope: DISPATCH THROUGH AN EXTERNAL
+        // DECLARATION IS NOT MODELLED. The gate lives here, at the single dispatch oracle, so it holds for
+        // FORWARD (ResolveDispatch/Successors), REVERSE (BuildReverseMaps inverts this same function) and
+        // the receiver-blind AllDispatchEdges alike. The `redirectRules` seam is unaffected: a redirect
+        // hatch is never synthesized as an external leaf, so it keeps its dispatch.
+        if (index.ExternalLeaves.Contains(method))
+        {
+            return NoTargets;
+        }
+
         // Lazily allocated only when a target is actually emitted — a node that dispatches nowhere (the
         // common case) returns NoTargets having allocated neither the list nor the set. (`visited`/`stack`
         // in the mined block below are likewise gated on `method` being a mined dispatch source.)

@@ -340,51 +340,10 @@ public static class Writes
             saved += InsertRows(
                 connection,
                 transaction,
-                "INSERT INTO symbol_facts (RunId, SymbolFactIndex, SymbolId, Kind, Name, Namespace, ContainingSymbolId, "
-                    + "Modifiers, TypeKind, Signature, FilePath, Line, EndLine, DefiningAssembly, IsOverride, BodyHash, SurfaceHash, IsIterator) "
-                    + "VALUES ($run,$idx,$sid,$kind,$name,$ns,$containing,$mods,$tk,$sig,$file,$line,$endline,$asm,$ovr,$bh,$sh,$iterator);",
-                [
-                    "$run",
-                    "$idx",
-                    "$sid",
-                    "$kind",
-                    "$name",
-                    "$ns",
-                    "$containing",
-                    "$mods",
-                    "$tk",
-                    "$sig",
-                    "$file",
-                    "$line",
-                    "$endline",
-                    "$asm",
-                    "$ovr",
-                    "$bh",
-                    "$sh",
-                    "$iterator",
-                ],
+                SymbolFactBulkInsert.Sql,
+                SymbolFactBulkInsert.ParameterNames,
                 symbols,
-                (p, s, i) =>
-                {
-                    p[0].Value = runId;
-                    p[1].Value = i;
-                    p[2].Value = s.SymbolId;
-                    p[3].Value = s.Kind;
-                    p[4].Value = s.Name;
-                    p[5].Value = s.Namespace;
-                    p[6].Value = (object?)s.ContainingSymbolId ?? DBNull.Value;
-                    p[7].Value = s.Modifiers;
-                    p[8].Value = s.TypeKind;
-                    p[9].Value = s.Signature;
-                    p[10].Value = s.FilePath;
-                    p[11].Value = s.Line;
-                    p[12].Value = s.EndLine;
-                    p[13].Value = s.DefiningAssembly;
-                    p[14].Value = s.IsOverride ? 1 : 0;
-                    p[15].Value = s.BodyHash;
-                    p[16].Value = s.SurfaceHash;
-                    p[17].Value = s.IsIterator ? 1 : 0;
-                },
+                SymbolFactBulkInsert.Binder(runId),
                 alreadySaved: saved,
                 total: total,
                 progress,
@@ -394,45 +353,10 @@ public static class Writes
             saved += InsertRows(
                 connection,
                 transaction,
-                "INSERT INTO allocation_facts (RunId, AllocationFactIndex, Operation, ResourceType, EnclosingSymbolId, FilePath, Line, "
-                    + "EnclosingLoopKind, EnclosingLoopDetail, EnclosingGuards, Mechanism, Cardinality, ShallowSizeBytes, SizeConfidence, SizeBasis) "
-                    + "VALUES ($run,$idx,$op,$resource,$enc,$file,$line,$loopkind,$loopdetail,$guards,$mechanism,$cardinality,$size,$confidence,$basis);",
-                [
-                    "$run",
-                    "$idx",
-                    "$op",
-                    "$resource",
-                    "$enc",
-                    "$file",
-                    "$line",
-                    "$loopkind",
-                    "$loopdetail",
-                    "$guards",
-                    "$mechanism",
-                    "$cardinality",
-                    "$size",
-                    "$confidence",
-                    "$basis",
-                ],
+                AllocationFactBulkInsert.Sql,
+                AllocationFactBulkInsert.ParameterNames,
                 allocations,
-                (p, a, i) =>
-                {
-                    p[0].Value = runId;
-                    p[1].Value = i;
-                    p[2].Value = a.Operation;
-                    p[3].Value = a.ResourceType;
-                    p[4].Value = a.EnclosingSymbolId;
-                    p[5].Value = a.FilePath;
-                    p[6].Value = a.Line;
-                    p[7].Value = (object?)a.EnclosingLoopKind ?? DBNull.Value;
-                    p[8].Value = (object?)a.EnclosingLoopDetail ?? DBNull.Value;
-                    p[9].Value = (object?)a.EnclosingGuards ?? DBNull.Value;
-                    p[10].Value = (object?)a.Mechanism ?? DBNull.Value;
-                    p[11].Value = (object?)a.Cardinality ?? DBNull.Value;
-                    p[12].Value = (object?)a.ShallowSizeBytes ?? DBNull.Value;
-                    p[13].Value = (object?)a.SizeConfidence ?? DBNull.Value;
-                    p[14].Value = (object?)a.SizeBasis ?? DBNull.Value;
-                },
+                AllocationFactBulkInsert.Binder(runId),
                 alreadySaved: saved,
                 total: total,
                 progress,
@@ -455,19 +379,10 @@ public static class Writes
             saved += InsertRows(
                 connection,
                 transaction,
-                "INSERT INTO type_relation_facts (RunId, TypeRelationFactIndex, TypeSymbolId, RelatedSymbolId, RelationKind, FilePath) "
-                    + "VALUES ($run,$idx,$type,$related,$kind,$file);",
-                ["$run", "$idx", "$type", "$related", "$kind", "$file"],
+                TypeRelationFactBulkInsert.Sql,
+                TypeRelationFactBulkInsert.ParameterNames,
                 relations,
-                (p, t, i) =>
-                {
-                    p[0].Value = runId;
-                    p[1].Value = i;
-                    p[2].Value = t.TypeSymbolId;
-                    p[3].Value = t.RelatedSymbolId;
-                    p[4].Value = t.RelationKind;
-                    p[5].Value = t.FilePath;
-                },
+                TypeRelationFactBulkInsert.Binder(runId),
                 alreadySaved: saved,
                 total: total,
                 progress,
@@ -477,19 +392,10 @@ public static class Writes
             saved += InsertRows(
                 connection,
                 transaction,
-                "INSERT INTO dispatch_facts (RunId, DispatchFactIndex, SourceMember, TargetMember, Kind, FilePath) "
-                    + "VALUES ($run,$idx,$src,$tgt,$kind,$file);",
-                ["$run", "$idx", "$src", "$tgt", "$kind", "$file"],
+                DispatchFactBulkInsert.Sql,
+                DispatchFactBulkInsert.ParameterNames,
                 dispatch,
-                (p, d, i) =>
-                {
-                    p[0].Value = runId;
-                    p[1].Value = i;
-                    p[2].Value = d.SourceMember;
-                    p[3].Value = d.TargetMember;
-                    p[4].Value = d.Kind;
-                    p[5].Value = d.FilePath;
-                },
+                DispatchFactBulkInsert.Binder(runId),
                 alreadySaved: saved,
                 total: total,
                 progress,
@@ -554,7 +460,7 @@ public static class Writes
             }
 
             bind(parameters, items[i], i);
-            
+
             command.ExecuteNonQuery();
 
             var cumulative = alreadySaved + i + 1;

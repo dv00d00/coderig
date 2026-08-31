@@ -302,7 +302,12 @@ internal sealed class LiveFactSource
     // followed by the SINGLE FactPathFinder.ShapeGraph call, with the same monomorphization signatures.
     public static FactGraphData TraversalGraphOf(IFactSnapshotView facts, RuleSet rules) =>
         FactPathFinder.ShapeGraph(
-            graph: FactGraphProjection.FromView(facts, handoffRules: rules.Handoff, redirectRules: rules.Redirect),
+            graph: FactGraphProjection.FromView(
+                facts,
+                handoffRules: rules.Handoff,
+                redirectRules: rules.Redirect,
+                externalNodes: ExternalNodeAdmission.FromRules(rules)
+            ),
             factoryRules: rules.Factory,
             cutRules: rules.Cut,
             contextRules: rules.Context,

@@ -820,7 +820,7 @@ public static partial class FactPathFinder
             }
         }
 
-        return mutableRoots.Where(n => n.Visited).Select(ToTraceNode).ToArray();
+        return mutableRoots.Where(n => n.Visited).Select(n => ToTraceNode(n, index.ExternalLeaves)).ToArray();
     }
 
     // Mutable node used during BFS tree construction; converted to immutable TraceNode afterward.
@@ -902,7 +902,9 @@ public static partial class FactPathFinder
         }
     }
 
-    private static TraceNode ToTraceNode(MutableNode n)
+    // `externalLeaves` is the index's admitted-external node set (external-node admission): stamped onto
+    // each TraceNode so the marker survives into the CACHED forest, where no graph is available to ask.
+    private static TraceNode ToTraceNode(MutableNode n, IReadOnlySet<string> externalLeaves)
     {
         if (n.Truncated)
         {
@@ -922,7 +924,8 @@ public static partial class FactPathFinder
                 MethodTypeArgBinding: n.MethodTypeArgBinding,
                 CallFile: n.CallFile,
                 CallLine: n.CallLine,
-                EnclosingGuards: n.EnclosingGuards
+                EnclosingGuards: n.EnclosingGuards,
+                IsExternal: externalLeaves.Contains(n.Symbol)
             );
         }
 
@@ -930,7 +933,7 @@ public static partial class FactPathFinder
         // --limit is a strict TraceNode bound, and an unvisited successor is omitted work rather than a real
         // leaf. The final visited node already carries BudgetCapped, preserving an explicit stop marker.
         var visitedChildren = n.Kids.Where(k => k.Visited).ToArray();
-        var children = visitedChildren.Length == 0 ? EmptyNodes : visitedChildren.Select(ToTraceNode).ToArray();
+        var children = visitedChildren.Length == 0 ? EmptyNodes : visitedChildren.Select(k => ToTraceNode(k, externalLeaves)).ToArray();
 
         return new TraceNode(
             SymbolId: n.Symbol,
@@ -946,7 +949,8 @@ public static partial class FactPathFinder
             MethodTypeArgBinding: n.MethodTypeArgBinding,
             CallFile: n.CallFile,
             CallLine: n.CallLine,
-            EnclosingGuards: n.EnclosingGuards
+            EnclosingGuards: n.EnclosingGuards,
+            IsExternal: externalLeaves.Contains(n.Symbol)
         );
     }
 

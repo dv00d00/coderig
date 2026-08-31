@@ -102,6 +102,45 @@ internal static class ReferenceFactRows
         InExpressionTree: false
     );
 
+    // The EXTERNAL-scan variant of CallEdgeRow (external-node admission): identical columns PLUS
+    // TargetAssembly, because the admission policy (ExternalNodeAdmission.Admits) is a function of the
+    // assembly name and the target DocID and runs CLIENT-side — it cannot translate to SQL (segment
+    // matching over two override lists plus namespace-prefix matching over every type pattern the loaded
+    // effect rules mention). TargetInSource is pinned false: this row shape is only ever selected under a
+    // `!r.TargetInSource` WHERE. Kept SEPARATE from CallEdgeRow so the first-party whole-store scan — the
+    // hot path — does not gain a column it never reads.
+    internal static readonly Expression<Func<ReferenceFactEntity, ReferenceFact>> ExternalCallEdgeRow = r => new ReferenceFact(
+        TargetSymbolId: r.TargetSymbolId,
+        RefKind: r.RefKind,
+        EnclosingSymbolId: r.EnclosingSymbolId,
+        TargetAssembly: r.TargetAssembly,
+        TargetInSource: false,
+        FilePath: r.FilePath,
+        Line: r.Line,
+        ReceiverType: r.ReceiverType,
+        // Invocation-only columns the call-edge projection does not read — passed explicitly because an
+        // expression tree may not skip an optional parameter and then name a later one (CS9307).
+        FirstArgumentTemplate: null,
+        FirstArgumentType: null,
+        EnclosingLoopKind: r.EnclosingLoopKind,
+        EnclosingLoopDetail: r.EnclosingLoopDetail,
+        EnclosingInvocations: null,
+        EnclosingCatchTypes: null,
+        TypeArguments: r.TypeArguments,
+        FirstArgumentName: null,
+        DelegateConsumer: r.DelegateConsumer,
+        EnclosingScopes: null,
+        ArgumentTemplates: null,
+        ArgumentNames: null,
+        DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
+        MethodTypeArgBinding: r.MethodTypeArgBinding,
+        NonVirtual: r.NonVirtual,
+        EnclosingGuards: r.EnclosingGuards,
+        EnclosingLoopElementType: null,
+        EnclosingLoopBindType: null,
+        InExpressionTree: false
+    );
+
     // One static-field ACCESS ref joined to its target symbol: the canonical row record plus the target's
     // readonly-ness (`Row.RefKind` carries read-vs-write, so the combined loader can partition on it).
     internal sealed record FieldAccessJoinRow(ReferenceFact Row, bool IsReadonly);

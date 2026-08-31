@@ -327,7 +327,16 @@ public sealed record MethodRef(
     string? ContainingTypeId,
     bool IsOverride = false,
     string? FilePath = null,
-    int Line = 0
+    int Line = 0,
+    // EXTERNAL LEAF (external-node-admission): this node is a call TARGET declared outside the indexed
+    // source set (a library/BCL member admitted by ExternalNodeAdmission), synthesized from the reference
+    // fact's target DocID rather than read from symbol_facts — so it carries no FilePath/Line. It is a
+    // LEAF by construction: it has no outgoing call edges, and FactPathFinder suppresses its dispatch
+    // entirely (never a dispatch root, never a CHA fan-out root or target). Defaults false, so every
+    // first-party MethodRef — and every synthetic test construction — is unaffected. Do NOT infer
+    // externality from `FilePath is null`: symbol_facts.FilePath is NOT NULL, but test graphs construct
+    // MethodRefs without one.
+    bool IsExternal = false
 );
 
 // A reference to a target symbol from within an enclosing method, at a source location. Covers ctor
@@ -592,7 +601,13 @@ public sealed record TraceNode(
     // the parent) — the spine. The tree renderer marks a guarded edge with ⎇ [predicate] under `--guards`
     // (the control-dependence analog of 🔁), decoded via FactStructuralContext.DecodeGuards. Intra-method
     // only; null on synthesized dispatch hops, roots, and pre-flag stores.
-    string? EnclosingGuards = null
+    string? EnclosingGuards = null,
+    // EXTERNAL LEAF (external-node admission): this node is an admitted library/BCL call TARGET, not
+    // first-party code — no indexed body, no file/line, no successors, and no dispatch. Carried ON the
+    // node (rather than re-derived at render time) because the tree FOREST is what gets cached: a warm
+    // blob has no graph to ask, and TraceNode is the only thing the renderer is guaranteed to hold. The
+    // renderers append SymbolNameFormatter.ExternalTag when this is set.
+    bool IsExternal = false
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
@@ -629,6 +644,14 @@ public sealed record HandoffEntryPoint(
 // receiver-narrowed dispatch resolves it to the first-party override. Rule data, not code; matcher in
 // RedirectClassifier. The mapping is authored from the decompiled trampoline bodies (offline aid).
 public sealed record FactRedirectRule(string Method, string RedirectTo);
+
+// EXTERNAL-NODE ADMISSION config (the fact-matchable projection of the optional `externalNodes` JSON
+// section). Explicit OVERRIDES only: `AllowAssemblies` admits an assembly the framework deny-list would
+// have rejected, `DenyAssemblies` rejects one it would have admitted. Both are matched on assembly-NAME
+// SEGMENTS (an entry `Foo` matches `Foo` and `Foo.*`, never `FooBar`). Allow wins over deny, and both win
+// over the built-in defaults — see ExternalNodeAdmission, which also holds the default deny-list and
+// derives the rule-mentioned type patterns from the loaded effect rules. Null section => the defaults.
+public sealed record FactExternalNodeRule(IReadOnlyList<string> AllowAssemblies, IReadOnlyList<string> DenyAssemblies);
 
 // A rule-authored effect selector: a provider, optionally narrowed to one operation (null = any operation of
 // that provider). The RULE-side twin of the domain EffectPredicate the correlation deriver takes — kept in the
