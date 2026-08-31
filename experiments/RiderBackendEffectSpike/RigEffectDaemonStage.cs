@@ -12,12 +12,12 @@ namespace RiderBackendEffectSpike;
 [DaemonStage]
 internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
 {
-    private readonly FakeFileEffectHost _host;
+    private readonly RigFileEffectHost _host;
 
     public RigEffectDaemonStage(IDaemon daemon)
     {
         Console.WriteLine("[rig-spike] daemon stage constructed");
-        _host = new FakeFileEffectHost(daemon);
+        _host = new RigFileEffectHost(daemon);
     }
 
     protected override IDaemonStageProcess CreateProcess(
@@ -25,24 +25,35 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
         IContextBoundSettingsStore settings,
         DaemonProcessKind processKind,
         ICSharpFile file
-    ) => new Process(process, file, _host);
+    ) => new Process(process, file, _host, processKind == DaemonProcessKind.VISIBLE_DOCUMENT);
 
     private sealed class Process : IDaemonStageProcess
     {
         private readonly ICSharpFile _file;
-        private readonly FakeFileEffectHost _host;
+        private readonly RigFileEffectHost _host;
+        private readonly bool _visibleDocument;
 
-        public Process(IDaemonProcess daemonProcess, ICSharpFile file, FakeFileEffectHost host)
+        public Process(IDaemonProcess daemonProcess, ICSharpFile file, RigFileEffectHost host, bool visibleDocument)
         {
             DaemonProcess = daemonProcess;
             _file = file;
             _host = host;
+            _visibleDocument = visibleDocument;
         }
 
         public IDaemonProcess DaemonProcess { get; }
 
         public void Execute(Action<DaemonStageResult> committer)
         {
+            // Rider also runs daemon stages during solution-wide analysis. That pass visited every C# file
+            // and turned a focused-file read model into an eager solution scan. The resident query belongs
+            // only to the editor-visible pass; all background modes are a strict no-op.
+            if (!_visibleDocument)
+            {
+                committer(new DaemonStageResult(Array.Empty<HighlightingInfo>()));
+                return;
+            }
+
             var sourceFile = _file.GetSourceFile();
             if (sourceFile == null)
             {
@@ -59,9 +70,10 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
             }
 
             var filePath = sourceFile.GetLocation().FullPath;
-            if (!_host.TryGet(filePath, out var rows))
+            var snapshotToken = SnapshotToken(sourceFile);
+            if (!_host.TryGet(filePath, snapshotToken, out var rows))
             {
-                _host.Request(filePath);
+                _host.Request(filePath, snapshotToken);
                 committer(new DaemonStageResult(Array.Empty<HighlightingInfo>()));
                 return;
             }
@@ -89,6 +101,15 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
 
             Console.WriteLine($"[rig-spike] committed {highlightings.Count} highlightings for {filePath}");
             committer(new DaemonStageResult(highlightings));
+        }
+
+        private static string SnapshotToken(IPsiSourceFile sourceFile)
+        {
+            // Both stamps are Content Model values already held by Rider; reading them performs no disk IO.
+            // The in-memory stamp changes for unsaved edits, while LastWriteTimeUtc changes after a save.
+            var inMemory = sourceFile.InMemoryModificationStamp;
+            var external = sourceFile.ExternalModificationStamp;
+            return $"mem:{inMemory?.ToString() ?? "-"}|ext:{external?.ToString() ?? "-"}|write:{sourceFile.LastWriteTimeUtc.Ticks}";
         }
     }
 }

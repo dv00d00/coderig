@@ -1,8 +1,7 @@
 # Rider file-effect read-model spike
 
-**Status:** PROGRESS — the generation-owned semantic file read model, official Rider contract research,
-interactive daemon/cache lifecycle spike, exact-SDK compile, isolated manual Rider run, and CodeRig self-scale
-falsification are completed; structured host transport remains.
+**Status:** VALIDATED 2026-08-31 — the generation-owned semantic file read model, typed resident transport,
+exact-SDK Rider backend, CodeRig self-scale falsification, and isolated visual end-to-end run are complete.
 
 ## Problem
 
@@ -74,17 +73,33 @@ interactive daemon/cache contract is
 The exact-SDK backend plugin and runtime transcript are in
 [`experiments/RiderBackendEffectSpike/README.md`](../../../experiments/RiderBackendEffectSpike/README.md).
 
+## Resident Rider end to end — 2026-08-31
+
+- `file-effects` now shares the existing authenticated named-pipe framing with live CLI queries but has its
+  own typed request/response. It is deliberately not a routable CLI verb and does not reshape the old rendered
+  response.
+- The host captures one immutable snapshot, generation-owned `LiveFactSource`, indexed project contexts, and
+  exactness state under its gate; the reverse read model is forced only after that gate is released.
+- `exact`, `stale`, `unindexed`, and `ambiguous` are explicit source states. Only `exact` may contain methods;
+  all uncertain states fail closed.
+- An isolated Rider 2026.2.0.1 instance queried the resident CodeRig index for
+  `src/Rig.Storage/Queries/Reads.cs`, received 34 SQL-reaching method DocIDs at depths 0–2, joined all 34 to
+  current PSI declarations, and displayed their markers in the editor.
+- The run falsified the original ungated daemon lifecycle: solution analysis issued 569 requests for 489
+  files. Gating on `DaemonProcessKind.VISIBLE_DOCUMENT` reduced the repeat run to two TTL-separated requests
+  for the single visible file while preserving all 34 highlights.
+
 ## Testing expectations
 
 - Domain tracer test pins multi-source reverse projection, negative filtering, nearest depth, canonical method
   selection, and ready-model reuse.
 - Interactive scenarios pin the intended lifecycle: cache miss, one async request, late-response rejection,
   daemon invalidation, PSI-owned ranges, focus races, and compilation-context races.
-- The throwaway backend SDK spike manually proves that two returned DocIDs become two PSI-derived highlights
-  after one file request and daemon invalidation. A product slice must pin that with
+- The throwaway backend SDK spike manually proves that 34 resident DocIDs become 34 PSI-derived highlights
+  after a whole-file request and daemon invalidation. A product slice must pin that with
   `CSharpHighlightingTestBase` (or the current equivalent).
-- Filter `IPsiSourceFile.Properties.IsGeneratedFile` and `IsNonUserFile` before host lookup; a real Rider run
-  showed daemon passes for generated files under `obj/`.
+- Run only for `DaemonProcessKind.VISIBLE_DOCUMENT`, and filter `IPsiSourceFile.Properties.IsGeneratedFile`
+  and `IsNonUserFile` before host lookup. The real run showed why both gates are required.
 - Keep the CodeRig self-trial anti-vacuous: it must continue to find selected effects, positive and negative
   methods, and zero sampled forward/reverse disagreements.
 
@@ -98,5 +113,6 @@ The exact-SDK backend plugin and runtime transcript are in
 
 ## Exit
 
-Move this card to `done/` as either validated or discarded after the structured host transport is proved.
-The read-model scale/semantic gate is now the reproducible CodeRig self-trial above.
+Validated. Productization should start as a new card: explicit Rider↔resident-host association,
+project/compilation identity, deliberate marker UX, witness-path interaction, and automated Rider integration
+tests are separate decisions rather than unfinished work in this throwaway spike.

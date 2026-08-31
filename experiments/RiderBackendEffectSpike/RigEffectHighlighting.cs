@@ -19,11 +19,7 @@ namespace RiderBackendEffectSpike;
     DescriptionResourceName: null,
     DefaultSeverity: Severity.INFO
 )]
-[ConfigurableSeverityHighlighting(
-    SeverityId,
-    CSharpLanguage.Name,
-    OverlapResolve = OverlapResolveKind.NONE
-)]
+[ConfigurableSeverityHighlighting(SeverityId, CSharpLanguage.Name, OverlapResolve = OverlapResolveKind.NONE)]
 internal sealed class RigEffectHighlighting : IHighlighting
 {
     public const string SeverityId = "RigReachableEffect";
@@ -35,7 +31,7 @@ internal sealed class RigEffectHighlighting : IHighlighting
     {
         _method = method;
         _range = range;
-        ToolTip = $"rig: {row.EffectKind} ({row.ReachableEffectCount} reachable effects)";
+        ToolTip = $"rig: reaches {row.Family} · nearest depth {row.NearestDepth}";
         ErrorStripeToolTip = ToolTip;
     }
 

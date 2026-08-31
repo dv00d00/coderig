@@ -2,16 +2,16 @@ namespace RiderBackendEffectSpike;
 
 internal sealed class FileEffectRow
 {
-    public FileEffectRow(string symbolDocId, string effectKind, int reachableEffectCount)
+    public FileEffectRow(string symbolDocId, string family, int nearestDepth)
     {
         SymbolDocId = symbolDocId;
-        EffectKind = effectKind;
-        ReachableEffectCount = reachableEffectCount;
+        Family = family;
+        NearestDepth = nearestDepth;
     }
 
     public string SymbolDocId { get; }
 
-    public string EffectKind { get; }
+    public string Family { get; }
 
-    public int ReachableEffectCount { get; }
+    public int NearestDepth { get; }
 }

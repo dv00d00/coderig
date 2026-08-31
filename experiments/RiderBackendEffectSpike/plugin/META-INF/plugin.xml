@@ -6,7 +6,9 @@
   <idea-version since-build="262" until-build="262.*" />
   <depends>com.intellij.modules.rider</depends>
 
-  <description><![CDATA[
-    Throwaway backend-only spike for projecting rig method effects into Rider.
-  ]]></description>
+  <description>
+    <![CDATA[
+    Backend-only spike for projecting resident rig file effects into Rider.
+  ]]>
+  </description>
 </idea-plugin>
