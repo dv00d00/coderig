@@ -224,9 +224,21 @@ internal static class WatchCommand
             // have passed the earlier probe. This narrows that race to the width of a single probe rather than
             // the width of a cold boot. It cannot close it entirely, and a host that loses the race declines to
             // serve rather than binding alongside.
+            var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var owned = !noServe && !LiveQueryTransport.ServerExists(LiveQueryTransport.PipeNameFor(workingDirectory));
             await using var server = owned
-                ? LiveQueryServer.TryStart(workingDirectory, host.ServeAsync, output, serveFileEffects: host.ServeFileEffectsAsync)
+                ? LiveQueryServer.TryStart(
+                    workingDirectory,
+                    host.ServeAsync,
+                    output,
+                    serveFileEffects: host.ServeFileEffectsAsync,
+                    serveWatchControl: host.ServeWatchControlAsync,
+                    requestWatchRestart: () =>
+                    {
+                        stopped.TrySetResult();
+                        output.WriteLine("watch: restart requested by a local client.");
+                    }
+                )
                 : null;
             if (!owned)
             {
@@ -248,7 +260,6 @@ internal static class WatchCommand
                 "watch: watching for .cs saves (obj/ and bin/ excluded). Type a query "
                     + $"({LiveQueryRunner.Usage}) or press Ctrl+C to stop."
             );
-            var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             ConsoleCancelEventHandler onCancel = (_, e) =>
             {
                 e.Cancel = true; // we own the shutdown: dispose the host cleanly, exit 0
@@ -257,10 +268,17 @@ internal static class WatchCommand
             Console.CancelKeyPress += onCancel;
             try
             {
-                // Two ways out: Ctrl+C, or `quit` on stdin. The stdin reader IS the query transport for
-                // this slice — enough for a human at a terminal or a piped agent to drive the resident index,
-                // deliberately not a protocol (that is a later slice).
-                await Task.WhenAny(stopped.Task, ReadQueriesAsync(host, output, stopped.Task));
+                // Three ways out: Ctrl+C, a local control request, or `quit` on stdin. Cancel the pending
+                // console read after either external stop: on Unix an abandoned ReadLineAsync can retain a
+                // blocking runtime thread and keep the otherwise-disposed process alive.
+                var stopReading = new CancellationTokenSource();
+                // Console's Unix reader can block before ReadLineAsync returns its task. Enter it on the
+                // pool so constructing the WhenAny inputs cannot pin this command before `stopped` is armed.
+                var readQueries = Task.Run(() => ReadQueriesAsync(host, output, stopped.Task, stopReading.Token));
+                await Task.WhenAny(stopped.Task, readQueries);
+                // CancelAsync waits for Console's cancellation callback; on Unix that callback can itself
+                // wait for the terminal read. Let the timer deliver cancellation while shutdown continues.
+                stopReading.CancelAfter(TimeSpan.FromMilliseconds(1));
             }
             finally
             {
@@ -280,33 +298,37 @@ internal static class WatchCommand
     // background launcher starts a process, so treating EOF as "exit" would make `rig watch` terminate
     // instantly and silently for anyone not sitting at a terminal. `quit`/`exit` and Ctrl+C are the ways out;
     // a piped caller that wants the process to end appends `quit`.
-    private static async Task ReadQueriesAsync(WatchHost host, TextWriter output, Task stopped)
+    private static async Task ReadQueriesAsync(WatchHost host, TextWriter output, Task stopped, CancellationToken cancellationToken)
     {
-        while (true)
+        try
         {
-            var line = await Console.In.ReadLineAsync();
-            if (line is null)
+            while (true)
             {
-                await stopped; // stdin is not a query source here; hand the exit back to Ctrl+C
-                return;
-            }
+                var line = await Console.In.ReadLineAsync(cancellationToken);
+                if (line is null)
+                {
+                    await stopped.WaitAsync(cancellationToken); // stdin is not a query source here; hand exit to an external stop
+                    return;
+                }
 
-            var trimmed = line.Trim();
-            if (
-                string.Equals(trimmed, "quit", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                return;
-            }
+                var trimmed = line.Trim();
+                if (
+                    string.Equals(trimmed, "quit", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase)
+                )
+                {
+                    return;
+                }
 
-            if (trimmed.Length == 0)
-            {
-                continue;
-            }
+                if (trimmed.Length == 0)
+                {
+                    continue;
+                }
 
-            output.WriteLine(await host.AnswerQueryAsync(line));
+                output.WriteLine(await host.AnswerQueryAsync(line));
+            }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
 }
 
@@ -697,6 +719,23 @@ internal sealed class WatchHost : IAsyncDisposable
         }
 
         return RiderFileEffectResponder.Respond(request, capture);
+    }
+
+    internal async Task<RiderWatchControlResponse> ServeWatchControlAsync(
+        RiderWatchControlRequest request,
+        CancellationToken cancellationToken = default
+    )
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var snapshot = _index.CaptureSnapshot();
+            return RiderWatchControlResponder.Answer(request, snapshot.Revision.Value, FileEffectUnavailableReason(snapshot));
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     // Caller holds `_gate`. This first slice does not attempt demand refinement: any global reconciliation

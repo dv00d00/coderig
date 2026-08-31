@@ -49,6 +49,8 @@ internal sealed class LiveQueryServer : IAsyncDisposable
     private readonly string _workingDirectory;
     private readonly Func<LiveQueryRequest, CancellationToken, Task<LiveServeResult>> _serve;
     private readonly Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? _serveFileEffects;
+    private readonly Func<RiderWatchControlRequest, CancellationToken, Task<RiderWatchControlResponse>>? _serveWatchControl;
+    private readonly Action? _requestWatchRestart;
     private readonly TextWriter _log;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly TaskCompletionSource _armed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -59,6 +61,8 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         string workingDirectory,
         Func<LiveQueryRequest, CancellationToken, Task<LiveServeResult>> serve,
         Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? serveFileEffects,
+        Func<RiderWatchControlRequest, CancellationToken, Task<RiderWatchControlResponse>>? serveWatchControl,
+        Action? requestWatchRestart,
         TextWriter log,
         NamedPipeServerStream first
     )
@@ -67,6 +71,8 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         _workingDirectory = workingDirectory;
         _serve = serve;
         _serveFileEffects = serveFileEffects;
+        _serveWatchControl = serveWatchControl;
+        _requestWatchRestart = requestWatchRestart;
         _log = log;
         _loop = Task.Run(() => AcceptLoopAsync(first, _shutdown.Token));
     }
@@ -84,7 +90,9 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         Func<LiveQueryRequest, CancellationToken, Task<LiveServeResult>> serve,
         TextWriter log,
         string? pipeName = null,
-        Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? serveFileEffects = null
+        Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? serveFileEffects = null,
+        Func<RiderWatchControlRequest, CancellationToken, Task<RiderWatchControlResponse>>? serveWatchControl = null,
+        Action? requestWatchRestart = null
     )
     {
         var name = pipeName ?? PipeNameFor(workingDirectory);
@@ -99,7 +107,16 @@ internal sealed class LiveQueryServer : IAsyncDisposable
             );
         }
 
-        return new LiveQueryServer(name, workingDirectory, serve, serveFileEffects, log, CreateServerStream(name));
+        return new LiveQueryServer(
+            name,
+            workingDirectory,
+            serve,
+            serveFileEffects,
+            serveWatchControl,
+            requestWatchRestart,
+            log,
+            CreateServerStream(name)
+        );
     }
 
     // Start the endpoint, or DON'T — and either way keep watching. The transport is an addition to the
@@ -112,12 +129,14 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         Func<LiveQueryRequest, CancellationToken, Task<LiveServeResult>> serve,
         TextWriter log,
         string? pipeName = null,
-        Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? serveFileEffects = null
+        Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? serveFileEffects = null,
+        Func<RiderWatchControlRequest, CancellationToken, Task<RiderWatchControlResponse>>? serveWatchControl = null,
+        Action? requestWatchRestart = null
     )
     {
         try
         {
-            return Start(workingDirectory, serve, log, pipeName, serveFileEffects);
+            return Start(workingDirectory, serve, log, pipeName, serveFileEffects, serveWatchControl, requestWatchRestart);
         }
         catch (Exception exception)
             when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or PlatformNotSupportedException)
@@ -334,6 +353,12 @@ internal sealed class LiveQueryServer : IAsyncDisposable
             return;
         }
 
+        if (string.Equals(header.Verb, RiderWatchControlResponder.Verb, StringComparison.Ordinal))
+        {
+            await HandleWatchControlAsync(pipe, frame, header, cancellationToken);
+            return;
+        }
+
         LiveQueryRequest? request;
         try
         {
@@ -476,6 +501,91 @@ internal sealed class LiveQueryServer : IAsyncDisposable
     private static Task RespondFileEffectsAsync(
         NamedPipeServerStream pipe,
         RiderFileEffectResponse response,
+        CancellationToken cancellationToken
+    ) => WriteFrameAsync(pipe, JsonSerializer.SerializeToUtf8Bytes(response, Json), cancellationToken);
+
+    private async Task HandleWatchControlAsync(
+        NamedPipeServerStream pipe,
+        byte[] frame,
+        LiveRequestHeader header,
+        CancellationToken cancellationToken
+    )
+    {
+        RiderWatchControlRequest request;
+        try
+        {
+            request =
+                JsonSerializer.Deserialize<RiderWatchControlRequest>(frame, Json)
+                ?? new RiderWatchControlRequest(header.Protocol, header.Verb, header.WorkingDirectory, "", "");
+        }
+        catch (JsonException exception)
+        {
+            request = new RiderWatchControlRequest(header.Protocol, header.Verb, header.WorkingDirectory, "", "");
+            await RespondWatchControlAsync(
+                pipe,
+                RiderWatchControlResponder.Declined(request, $"unreadable request ({exception.Message})"),
+                cancellationToken
+            );
+            return;
+        }
+
+        if (request.Protocol != Protocol)
+        {
+            await RespondWatchControlAsync(
+                pipe,
+                RiderWatchControlResponder.Declined(
+                    request,
+                    $"protocol mismatch (client speaks {request.Protocol}, this host speaks {Protocol})"
+                ),
+                cancellationToken
+            );
+            return;
+        }
+
+        if (!SameDirectory(request.WorkingDirectory, _workingDirectory))
+        {
+            await RespondWatchControlAsync(
+                pipe,
+                RiderWatchControlResponder.Declined(
+                    request,
+                    $"this resident index is watching '{_workingDirectory}', not '{request.WorkingDirectory}'"
+                ),
+                cancellationToken
+            );
+            return;
+        }
+
+        if (!RiderWatchControlResponder.IsSupportedAction(request.Action))
+        {
+            await RespondWatchControlAsync(
+                pipe,
+                RiderWatchControlResponder.Declined(request, $"unsupported watch action '{request.Action}'"),
+                cancellationToken
+            );
+            return;
+        }
+
+        if (_serveWatchControl is null)
+        {
+            await RespondWatchControlAsync(
+                pipe,
+                RiderWatchControlResponder.Declined(request, "this resident host does not serve watch control"),
+                cancellationToken
+            );
+            return;
+        }
+
+        var response = await _serveWatchControl(request, cancellationToken);
+        await RespondWatchControlAsync(pipe, response, cancellationToken);
+        if (response.RestartAccepted)
+        {
+            _requestWatchRestart?.Invoke();
+        }
+    }
+
+    private static Task RespondWatchControlAsync(
+        NamedPipeServerStream pipe,
+        RiderWatchControlResponse response,
         CancellationToken cancellationToken
     ) => WriteFrameAsync(pipe, JsonSerializer.SerializeToUtf8Bytes(response, Json), cancellationToken);
 }

@@ -1,6 +1,6 @@
 # CodeRig Rider plugin
 
-Minimal backend-only Rider plugin for the resident CodeRig file-effect read model. It targets Rider
+Minimal Rider plugin for the resident CodeRig file-effect read model. It targets Rider
 2026.2 and renders SQL and file-system reachability at two semantic levels:
 
 - one Code Vision row per effect family above each affected declaration, with Rider's database-query or
@@ -11,6 +11,12 @@ The plugin does not open SQLite. A visible-document daemon pass performs one non
 request to `rig watch`, joins returned enclosing/target DocID pairs to Rider's current PSI invocations,
 and lets Rider own the editor ranges. The wire contract deliberately contains no line/column spans.
 Solution-wide daemon modes, generated files, and non-user files are no-ops.
+
+The status bar shows whether the resident facts are `exact`, `stale`, `missing`, `restarting`, or in an
+error state. Clicking the icon opens **Refresh Status** and **Restart Watch**; both actions are also under
+**Tools | CodeRig** and Rider's **Find Action**. Restart is graceful: Rider receives an acknowledgement,
+the old host exits, and the frontend launches `rig watch <solution>` with output appended to
+`.rig/rider-watch.log`.
 
 An ambiguous direct-effect source line containing multiple different invocation targets fails closed at
 the call-site layer; its method-level Code Vision summary remains. This avoids bolding a call the index did
@@ -28,7 +34,7 @@ Create an installable ZIP:
 pwsh scripts/build-rider-plugin.ps1
 ```
 
-The artifact is `artifacts/rider/CodeRig-0.3.0.zip`. Rider can install it through
+The artifact is `artifacts/rider/CodeRig-0.4.0.zip`. Rider can install it through
 **Settings | Plugins | Install Plugin from Disk**.
 
 Build and copy it directly into the default Rider 2026.2 profile:
@@ -37,7 +43,8 @@ Build and copy it directly into the default Rider 2026.2 profile:
 pwsh scripts/build-rider-plugin.ps1 -Install
 ```
 
-Pass `-RiderProfile <path>` to target another profile. Rider must be restarted after a direct install.
+Pass `-RiderProfile <path>` to target another profile and `-RiderHome <path>` if Rider cannot be discovered
+for frontend compilation. Rider must be restarted after a direct install.
 
 ## Runtime contract validated on 2026-08-31
 
@@ -61,10 +68,17 @@ use Rider's opened-folder glyph. A call reaching both families gets one stable `
 packaged plugin was loaded from the normal Rider profile and projected a mixed-family `CliApplication.cs`
 response (four method rows plus four call-site rows) into 13 UI highlighters without registration errors.
 
+`CodeRig 0.4.0` adds a small JVM frontend for the status-bar widget and GUI lifecycle actions. Its status
+request uses the same per-working-directory, current-user named pipe as the effect read model. Restart is
+acknowledged before shutdown begins, so the frontend never needs PID discovery or a force-kill. The new
+control response includes the host PID so Windows waits for the exact process to exit instead of probing the
+named pipe or relying on a fixed delay. Typed round-trip, validation, exact/stale, and acknowledgement-order
+tests cover the protocol.
+
 The first implementation accidentally participated in solution analysis and issued 569 requests for 489
 files at startup. The `DaemonProcessKind.VISIBLE_DOCUMENT` gate reduced the repeat run to two TTL-separated
 requests for the one visible file. Do not remove that gate.
 
-This remains intentionally small. It has no frontend/Kotlin module, settings page, click action, full witness
-path UI, automatic `rig watch` process management, or project/compilation selector. A physical file in more
-than one indexed compilation context fails closed as `ambiguous`.
+This remains intentionally small. It has no settings page, full witness-path UI, explicit solution picker,
+or project/compilation selector. Restart currently selects the first root-level `.slnx` or `.sln`; a physical
+file in more than one indexed compilation context still fails closed as `ambiguous`.

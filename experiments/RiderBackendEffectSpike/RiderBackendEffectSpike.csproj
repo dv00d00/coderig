@@ -7,7 +7,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>CodeRig.Rider</AssemblyName>
     <RootNamespace>CodeRig.Rider</RootNamespace>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Authors>CodeRig</Authors>
     <Description>Projects resident CodeRig effect reachability into Rider Code Vision and semantic call-site highlighting.</Description>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
