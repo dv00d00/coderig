@@ -207,7 +207,9 @@ internal static class WatchCommand
             // the width of a cold boot. It cannot close it entirely, and a host that loses the race declines to
             // serve rather than binding alongside.
             var owned = !noServe && !LiveQueryTransport.ServerExists(LiveQueryTransport.PipeNameFor(workingDirectory));
-            await using var server = owned ? LiveQueryServer.TryStart(workingDirectory, host.ServeAsync, output) : null;
+            await using var server = owned
+                ? LiveQueryServer.TryStart(workingDirectory, host.ServeAsync, output, serveFileEffects: host.ServeFileEffectsAsync)
+                : null;
             if (!owned)
             {
                 output.WriteLine(
@@ -607,6 +609,62 @@ internal sealed class WatchHost : IAsyncDisposable
             standardError: notes.ToString(),
             disclosure: capture.Disclosure
         );
+    }
+
+    // Rider's whole-file semantic read. Capture is deliberately the ONLY region under `_gate`: the immutable
+    // snapshot, its generation, the generation-owned LiveFactSource and exactness inputs move together. The
+    // reverse closure is forced by RiderFileEffectResponder only AFTER the gate has been released.
+    internal async Task<RiderFileEffectResponse> ServeFileEffectsAsync(
+        RiderFileEffectRequest request,
+        CancellationToken cancellationToken = default
+    )
+    {
+        RiderFileEffectCapture capture;
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var snapshot = _index.CaptureSnapshot();
+            var facts = CurrentLiveFacts(snapshot);
+            capture = new RiderFileEffectCapture(
+                snapshot.Revision.Value,
+                RiderFileEffectResponder.IndexedProjectContexts(snapshot, request.FilePath),
+                FileEffectUnavailableReason(snapshot),
+                () => facts.FileEffects(RiderFileEffectResponder.SqlSelector)
+            );
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        return RiderFileEffectResponder.Respond(request, capture);
+    }
+
+    // Caller holds `_gate`. This first slice does not attempt demand refinement: any global reconciliation
+    // debt or source-integrity caveat makes a clean-looking file answer unsafe, so it fails closed as stale.
+    private string? FileEffectUnavailableReason(FactSnapshot snapshot)
+    {
+        if (Volatile.Read(ref _topologyChanged) != 0)
+        {
+            return TopologyStatusSegment;
+        }
+
+        if (Volatile.Read(ref _watcherOverflowed) != 0)
+        {
+            return "file-watcher overflowed — exact file effects cannot be established; restart required";
+        }
+
+        if (snapshot.Dirty.PendingProjects.Count > 0)
+        {
+            return $"{snapshot.Dirty.PendingProjects.Count} project(s) unreconciled";
+        }
+
+        if (snapshot.GetCompilationHealth() is { IsClean: false } health)
+        {
+            return $"compilation is incomplete ({health.TotalErrorCount} error diagnostic(s), {health.PartialProjects.Count} partial project(s))";
+        }
+
+        return null;
     }
 
     // Commands with keyed demand topology capture their planning basis briefly under the
