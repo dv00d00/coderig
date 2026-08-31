@@ -1,25 +1,23 @@
 using JetBrains.DocumentModel;
 using JetBrains.ReSharper.Feature.Services.Daemon;
-using JetBrains.ReSharper.Psi.CSharp;
 using JetBrains.ReSharper.Psi.CSharp.Tree;
+using JetBrains.TextControl.DocumentMarkup;
 
-namespace RiderBackendEffectSpike;
+namespace CodeRig.Rider;
 
-[RegisterConfigurableSeverity(
+[RegisterHighlighter(
     SeverityId,
-    CompoundItemName: null,
-    CompoundItemNameResourceType: null,
-    CompoundItemNameResourceName: null,
-    Group: HighlightingGroupIds.CodeInfo,
-    Title: "rig reachable effect",
-    TitleResourceType: null,
-    TitleResourceName: null,
-    Description: "A method reaches an effect reported by the rig index.",
-    DescriptionResourceType: null,
-    DescriptionResourceName: null,
-    DefaultSeverity: Severity.INFO
+    Layer = (HighlighterLayer)2001,
+    EffectType = EffectType.GUTTER_MARK,
+    GutterMarkType = typeof(RigEffectGutterMarkType)
 )]
-[ConfigurableSeverityHighlighting(SeverityId, CSharpLanguage.Name, OverlapResolve = OverlapResolveKind.NONE)]
+[StaticSeverityHighlighting(
+    Severity.INFO,
+    typeof(HighlightingGroupIds.GutterMarks),
+    OverlapResolve = OverlapResolveKind.NONE,
+    AttributeId = SeverityId,
+    ShowToolTipInStatusBar = false
+)]
 internal sealed class RigEffectHighlighting : IHighlighting
 {
     public const string SeverityId = "RigReachableEffect";

@@ -1,4 +1,4 @@
-namespace RiderBackendEffectSpike;
+namespace CodeRig.Rider;
 
 internal sealed class FileEffectRow
 {

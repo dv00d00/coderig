@@ -14,7 +14,7 @@ using DataContractAttribute = runtimeSerialization::System.Runtime.Serialization
 using DataContractJsonSerializer = runtimeSerialization::System.Runtime.Serialization.Json.DataContractJsonSerializer;
 using DataMemberAttribute = runtimeSerialization::System.Runtime.Serialization.DataMemberAttribute;
 
-namespace RiderBackendEffectSpike;
+namespace CodeRig.Rider;
 
 /// <summary>
 /// Non-blocking client for the resident rig host. Daemon passes only inspect the bounded cache; all
@@ -88,10 +88,6 @@ internal sealed class RigFileEffectHost
                 throw new InvalidOperationException("no parent containing .git or .rig was found");
 
             var pipeName = PipeNameFor(workingDirectory);
-            Console.WriteLine(
-                $"[rig-spike] pipe={pipeName} request={requestId} file={key.FilePath} snapshot={key.SnapshotToken}"
-            );
-
             var request = new FileEffectRequest
             {
                 Protocol = Protocol,
@@ -141,15 +137,14 @@ internal sealed class RigFileEffectHost
             var cacheDuration = exact ? ExactCacheDuration : NonExactCacheDuration;
             Cache(key, rows, DateTime.UtcNow.Add(cacheDuration));
             Console.WriteLine(
-                $"[rig-spike] request={requestId} status={response.Status}/{response.SourceStatus} "
-                    + $"generation={response.GraphGeneration} methods={rows.Length} cacheTtl={cacheDuration.TotalSeconds:F0}s "
-                    + $"reason={response.Reason ?? ""}"
+                $"[CodeRig Rider] file-effects {response.Status}/{response.SourceStatus}: "
+                    + $"rows={rows.Length}, generation={response.GraphGeneration}, file={key.FilePath}"
             );
         }
         catch (Exception exception)
         {
             Cache(key, Array.Empty<FileEffectRow>(), DateTime.UtcNow.Add(FailureCacheDuration));
-            Console.WriteLine($"[rig-spike] request={requestId} failed: {exception.GetType().Name}: {exception.Message}");
+            Console.WriteLine($"[CodeRig Rider] file-effects unavailable: {exception.GetType().Name}: {exception.Message}");
         }
         finally
         {

@@ -1,72 +1,50 @@
-# Rider backend effect spike
+# CodeRig Rider plugin
 
-**Verdict:** validated end to end against a real isolated Rider 2026.2.0.1 instance and a resident
-`rig watch` on 2026-08-31. This is still throwaway code, not a product plugin.
+Minimal backend-only Rider plugin for the resident CodeRig file-effect read model. It targets Rider
+2026.2 and renders every C# method that can reach a SQL effect in two places:
 
-Throwaway compile spike for the smallest useful Rider integration:
+- Code Vision above the declaration: `rig: SQL · depth N`;
+- a gutter icon beside the declaration, with the same effect/depth tooltip.
 
-1. a visible-document daemon pass receives one `ICSharpFile`;
-2. a cache miss schedules one asynchronous whole-file named-pipe request and returns no highlights;
-3. resident `rig watch` returns method DocIDs plus SQL family/depth rows from its generation-owned read model;
-4. the next daemon pass maps those DocIDs to current PSI declarations;
-5. declaration name ranges become `IHighlighting` instances with a semantic tooltip.
+The plugin does not open SQLite. A visible-document daemon pass performs one non-blocking whole-file
+request to `rig watch`, joins returned method DocIDs to Rider's current PSI declarations, and lets Rider
+own the editor ranges. Solution-wide daemon modes, generated files, and non-user files are no-ops.
 
-The experiment contains no SQLite access in Rider, Kotlin frontend, settings UI, witness-path interaction,
-or product error handling. It answers whether the resident transport, backend daemon lifecycle, async
-invalidation, install layout, and DocID-to-current-range projection work against the exact Rider SDK.
+If no matching resident host is available, the plugin fails closed: it commits no CodeRig highlighting
+and does not block editing or the build. A host failure is cached, so one daemon pass cannot spin on a
+missing pipe.
 
-## Observed runtime contract
+## Build and install
 
-Rider loaded `plugin/META-INF/plugin.xml` plus the DLL under `dotnet/` as a
-"simplified Rider.Backend plugin". With `rig watch RuntimeIntelligenceGraph.slnx` serving the repository,
-opening `src/Rig.Storage/Queries/Reads.cs` produced:
+Create an installable ZIP:
 
-```text
-[rig-spike] daemon stage constructed
-[rig-spike] pipe=rig-live-e77c4441e7e35b54 request=... file=.../Reads.cs snapshot=...
-[rig-spike] request=... status=ok/exact generation=0 methods=34 cacheTtl=10s reason=
-[rig-spike] PSI method: M:Rig.Storage.Queries.Reads.SearchSymbolsAsync(...)
-...
-[rig-spike] committed 34 highlightings for .../Reads.cs
+```pwsh
+pwsh scripts/build-rider-plugin.ps1
 ```
 
-The Rider UI showed the resulting markers in `Reads.cs`. The backend made one request for the file snapshot,
-then invalidated the daemon and did one cheap pass over current declarations. There are no per-method host
-requests. Exact answers are cached for 10 seconds; non-exact answers and transport failures have short TTLs,
-so a temporary stale host or an effect introduced through another file does not poison the editor forever.
+The artifact is `artifacts/rider/CodeRig-0.1.0.zip`. Rider can install it through
+**Settings | Plugins | Install Plugin from Disk**.
 
-The first real run exposed a more serious lifecycle trap: an ungated daemon stage participated in Rider's
-solution analysis and issued **569 requests for 489 distinct files** during startup. Restricting the stage to
-`DaemonProcessKind.VISIBLE_DOCUMENT` reduced the repeated run to **2 TTL-separated requests for one distinct
-file**, while still committing all 34 highlights. Product code must retain this process-kind gate as well as
-the `IsGeneratedFile` / `IsNonUserFile` filters.
+Build and copy it directly into the default Rider 2026.2 profile:
 
-The public 2021-era examples are stale in two small but relevant ways for 2026.2:
-
-- `CSharpDaemonStageBase` lives in
-  `JetBrains.ReSharper.Feature.Services.CSharp.Daemon`;
-- `IDaemonProcess.InterruptFlag` is a `bool`, not an object with
-  `ThrowIfInterrupted()`.
-
-## Known spike limits
-
-- The client finds the resident host by walking to the nearest `.git` or `.rig` parent. Product packaging
-  needs an explicit project/host association rather than this convention.
-- A physical file present in more than one project context fails closed as `ambiguous`; the request does not
-  yet carry the accepted project/compilation identity.
-- The snapshot token sees unsaved Rider-buffer changes, but `rig watch` indexes saved source. An `exact`
-  answer therefore describes the resident disk generation, not unsaved editor text.
-- `INFO` highlighting is only the smallest visible proof. Product UX still needs a deliberate marker,
-  inspection severity, interaction, and witness-path design.
-
-Build gently with:
-
-```bash
-nice -n 15 dotnet build experiments/RiderBackendEffectSpike/RiderBackendEffectSpike.csproj \
-  -m:1 /p:UseSharedCompilation=false --no-restore
+```pwsh
+pwsh scripts/build-rider-plugin.ps1 -Install
 ```
 
-For a manual runtime run, create an isolated Rider profile, copy `plugin/META-INF`
-and the built DLL into `<profile>/plugins/rig-effect-spike/{META-INF,dotnet}`, and
-launch Rider with that profile's `idea.config.path`, `idea.system.path`,
-`idea.plugins.path`, and `idea.log.path`. The normal Rider profile is not needed.
+Pass `-RiderProfile <path>` to target another profile. Rider must be restarted after a direct install.
+
+## Runtime contract validated on 2026-08-31
+
+Both an isolated Rider 2026.2.0.1 instance and the packaged `CodeRig 0.1.0` installed in the normal profile
+loaded the backend DLL and queried a real resident `rig watch` for `src/Rig.Storage/Queries/Reads.cs`. The
+host returned 34 exact method rows; the daemon mapped all 34 to current declarations and committed 68 UI
+highlightings: one Code Vision entry plus one gutter mark per row. The normal-profile backend log contained
+no CodeRig registration or rendering errors.
+
+The first implementation accidentally participated in solution analysis and issued 569 requests for 489
+files at startup. The `DaemonProcessKind.VISIBLE_DOCUMENT` gate reduced the repeat run to two TTL-separated
+requests for the one visible file. Do not remove that gate.
+
+This remains intentionally small. It has no frontend/Kotlin module, settings page, click action, witness
+path UI, automatic `rig watch` process management, or project/compilation selector. A physical file in more
+than one indexed compilation context fails closed as `ambiguous`.

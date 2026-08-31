@@ -1,23 +1,34 @@
 using System;
 using System.Collections.Generic;
 using JetBrains.Application.Settings;
+using JetBrains.ReSharper.Daemon.CodeInsights;
 using JetBrains.ReSharper.Feature.Services.CSharp.Daemon;
 using JetBrains.ReSharper.Feature.Services.Daemon;
+using JetBrains.ReSharper.Feature.Services.Resources;
 using JetBrains.ReSharper.Psi;
 using JetBrains.ReSharper.Psi.CSharp.Tree;
 using JetBrains.ReSharper.Psi.Tree;
+using JetBrains.Rider.Backend.Platform.Icons;
+using JetBrains.Rider.Model;
 
-namespace RiderBackendEffectSpike;
+namespace CodeRig.Rider;
 
 [DaemonStage]
 internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
 {
     private readonly RigFileEffectHost _host;
+    private readonly RigEffectCodeInsightsProvider _codeInsightsProvider;
+    private readonly IconModel _codeInsightsIcon;
 
-    public RigEffectDaemonStage(IDaemon daemon)
+    public RigEffectDaemonStage(
+        IDaemon daemon,
+        RigEffectCodeInsightsProvider codeInsightsProvider,
+        IconHost iconHost
+    )
     {
-        Console.WriteLine("[rig-spike] daemon stage constructed");
         _host = new RigFileEffectHost(daemon);
+        _codeInsightsProvider = codeInsightsProvider;
+        _codeInsightsIcon = iconHost.Transform(DaemonThemedIcons.Recursion.Id);
     }
 
     protected override IDaemonStageProcess CreateProcess(
@@ -25,19 +36,38 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
         IContextBoundSettingsStore settings,
         DaemonProcessKind processKind,
         ICSharpFile file
-    ) => new Process(process, file, _host, processKind == DaemonProcessKind.VISIBLE_DOCUMENT);
+    ) =>
+        new Process(
+            process,
+            file,
+            _host,
+            _codeInsightsProvider,
+            _codeInsightsIcon,
+            processKind == DaemonProcessKind.VISIBLE_DOCUMENT
+        );
 
     private sealed class Process : IDaemonStageProcess
     {
         private readonly ICSharpFile _file;
         private readonly RigFileEffectHost _host;
+        private readonly RigEffectCodeInsightsProvider _codeInsightsProvider;
+        private readonly IconModel _codeInsightsIcon;
         private readonly bool _visibleDocument;
 
-        public Process(IDaemonProcess daemonProcess, ICSharpFile file, RigFileEffectHost host, bool visibleDocument)
+        public Process(
+            IDaemonProcess daemonProcess,
+            ICSharpFile file,
+            RigFileEffectHost host,
+            RigEffectCodeInsightsProvider codeInsightsProvider,
+            IconModel codeInsightsIcon,
+            bool visibleDocument
+        )
         {
             DaemonProcess = daemonProcess;
             _file = file;
             _host = host;
+            _codeInsightsProvider = codeInsightsProvider;
+            _codeInsightsIcon = codeInsightsIcon;
             _visibleDocument = visibleDocument;
         }
 
@@ -91,15 +121,32 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                 if (method.DeclaredElement is not IXmlDocIdOwner docOwner)
                     continue;
 
-                Console.WriteLine($"[rig-spike] PSI method: {docOwner.XMLDocId}");
                 if (!byDocId.TryGetValue(docOwner.XMLDocId, out var row))
                     continue;
 
                 var range = method.NameIdentifier.GetDocumentRange();
                 highlightings.Add(new HighlightingInfo(range, new RigEffectHighlighting(method, range, row)));
+                highlightings.Add(
+                    new HighlightingInfo(
+                        range,
+                        new CodeInsightsHighlighting(
+                            range,
+                            displayText: $"rig: {row.Family.ToUpperInvariant()} · depth {row.NearestDepth}",
+                            tooltipText: $"rig: reaches {row.Family} · nearest depth {row.NearestDepth}",
+                            moreText: string.Empty,
+                            _codeInsightsProvider,
+                            method.DeclaredElement,
+                            _codeInsightsIcon
+                        )
+                    )
+                );
             }
 
-            Console.WriteLine($"[rig-spike] committed {highlightings.Count} highlightings for {filePath}");
+            if (highlightings.Count > 0)
+                Console.WriteLine(
+                    $"[CodeRig Rider] projected methods={highlightings.Count / 2}, "
+                        + $"uiHighlightings={highlightings.Count}, file={filePath}"
+                );
             committer(new DaemonStageResult(highlightings));
         }
 

@@ -5,6 +5,11 @@
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>CodeRig.Rider</AssemblyName>
+    <RootNamespace>CodeRig.Rider</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>CodeRig</Authors>
+    <Description>Projects resident CodeRig effect reachability into Rider Code Vision and the editor gutter.</Description>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <BaseIntermediateOutputPath>obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
     <OutputPath>bin\$(MSBuildProjectName)\$(Configuration)\</OutputPath>
