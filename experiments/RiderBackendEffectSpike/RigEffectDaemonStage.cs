@@ -133,9 +133,21 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                 projectedMethods++;
             }
 
-            var callSites = new Dictionary<string, FileEffectCallSiteRow>(StringComparer.Ordinal);
+            // Anchored on the LINE the host mined rather than on a PSI re-resolution of every invocation in
+            // the file: resolving the reference is the expensive step, and it is now paid only when one line
+            // carries more than one projected target (`Use(Read(), Fetch())`). Two calls to the same target
+            // from one body are also distinguishable now, which the (enclosing, target) key could not do.
+            var callSitesByLine = new Dictionary<int, List<FileEffectCallSiteRow>>();
             foreach (var row in model.CallSites)
-                callSites[CallSiteKey(row.EnclosingSymbolDocId, row.TargetSymbolDocId)] = row;
+            {
+                if (!callSitesByLine.TryGetValue(row.Line, out var rowsOnLine))
+                {
+                    rowsOnLine = new List<FileEffectCallSiteRow>();
+                    callSitesByLine.Add(row.Line, rowsOnLine);
+                }
+
+                rowsOnLine.Add(row);
+            }
 
             var projectedCalls = 0;
             foreach (var invocation in _file.Descendants<IInvocationExpression>())
@@ -143,17 +155,22 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                 if (DaemonProcess.InterruptFlag)
                     throw new OperationCanceledException();
 
-                var enclosingMethod = invocation.GetContainingNode<IMethodDeclaration>();
-                if (enclosingMethod?.DeclaredElement is not IXmlDocIdOwner enclosingOwner)
-                    continue;
                 if (invocation.InvokedExpression is not IReferenceExpression invokedReference)
                     continue;
-                if (invokedReference.Reference.Resolve().DeclaredElement is not IXmlDocIdOwner targetOwner)
-                    continue;
-                if (!callSites.TryGetValue(CallSiteKey(enclosingOwner.XMLDocId, targetOwner.XMLDocId), out var row))
+
+                var nameRange = invokedReference.NameIdentifier.GetDocumentRange();
+                if (!nameRange.IsValid())
                     continue;
 
-                var range = invokedReference.NameIdentifier.GetDocumentRange();
+                var line = (int)nameRange.Document.GetCoordsByOffset(nameRange.StartOffset.Offset).Line + 1;
+                if (!callSitesByLine.TryGetValue(line, out var candidates))
+                    continue;
+
+                var row = MatchOnLine(invocation, invokedReference, candidates);
+                if (row == null)
+                    continue;
+
+                var range = nameRange;
                 highlightings.Add(new HighlightingInfo(range, new RigEffectHighlighting(invocation, range, row)));
 
                 // Second rendering arm: an intra-text adornment anchored on the empty range right after the
@@ -171,8 +188,46 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
             committer(new DaemonStageResult(highlightings));
         }
 
-        private static string CallSiteKey(string enclosingSymbolDocId, string targetSymbolDocId) =>
-            enclosingSymbolDocId + "\n" + targetSymbolDocId;
+        // The host's line already picked the invocation; the enclosing DocID stays as a cheap sanity check
+        // (no reference resolve). Only a line carrying several projected targets forces the resolve.
+        private static FileEffectCallSiteRow MatchOnLine(
+            IInvocationExpression invocation,
+            IReferenceExpression invokedReference,
+            List<FileEffectCallSiteRow> candidates
+        )
+        {
+            if (invocation.GetContainingNode<IMethodDeclaration>()?.DeclaredElement is not IXmlDocIdOwner enclosingOwner)
+                return null;
+
+            FileEffectCallSiteRow inEnclosing = null;
+            var matches = 0;
+            foreach (var candidate in candidates)
+            {
+                if (!string.Equals(candidate.EnclosingSymbolDocId, enclosingOwner.XMLDocId, StringComparison.Ordinal))
+                    continue;
+                matches++;
+                inEnclosing = candidate;
+            }
+
+            if (matches == 0)
+                return null;
+            if (matches == 1)
+                return inEnclosing;
+
+            if (invokedReference.Reference.Resolve().DeclaredElement is not IXmlDocIdOwner targetOwner)
+                return null;
+
+            foreach (var candidate in candidates)
+            {
+                if (
+                    string.Equals(candidate.EnclosingSymbolDocId, enclosingOwner.XMLDocId, StringComparison.Ordinal)
+                    && string.Equals(candidate.TargetSymbolDocId, targetOwner.XMLDocId, StringComparison.Ordinal)
+                )
+                    return candidate;
+            }
+
+            return null;
+        }
 
         private static string SnapshotToken(IPsiSourceFile sourceFile)
         {

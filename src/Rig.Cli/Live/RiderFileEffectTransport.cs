@@ -1,4 +1,4 @@
-using Rig.Analysis.Inventory;
+﻿using Rig.Analysis.Inventory;
 using Rig.Domain.Functions;
 using static Rig.Cli.Live.LiveQueryTransport;
 
@@ -17,7 +17,7 @@ internal sealed record RiderFileEffectRequest(
 
 internal sealed record RiderFileEffectMethod(string SymbolId, string Family, int NearestDepth);
 
-internal sealed record RiderFileEffectCallSite(string EnclosingSymbolId, string TargetSymbolId, string Family, int NearestDepth);
+internal sealed record RiderFileEffectCallSite(string EnclosingSymbolId, string TargetSymbolId, int Line, string Family, int NearestDepth);
 
 internal sealed record RiderFileEffectResponse(
     int Protocol,
@@ -111,11 +111,13 @@ internal static class RiderFileEffectResponder
                     callSite.Effects.Select(effect => new RiderFileEffectCallSite(
                         callSite.EnclosingSymbolId,
                         callSite.TargetSymbolId,
+                        callSite.Line,
                         effect.Family,
                         effect.NearestDepth
                     ))
                 )
                 .OrderBy(callSite => callSite.EnclosingSymbolId, StringComparer.Ordinal)
+                .ThenBy(callSite => callSite.Line)
                 .ThenBy(callSite => callSite.TargetSymbolId, StringComparer.Ordinal)
                 .ThenBy(callSite => callSite.Family, StringComparer.Ordinal)
                 .ToArray();

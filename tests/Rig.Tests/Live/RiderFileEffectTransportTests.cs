@@ -46,7 +46,7 @@ public sealed class RiderFileEffectTransportTests
                             GraphGeneration: 42,
                             RiderFileEffectResponder.SourceExact,
                             [new RiderFileEffectMethod("M:Fixture.Query", "sql", 1)],
-                            [new RiderFileEffectCallSite("M:Fixture.Query", "M:Fixture.Read", "sql", 0)],
+                            [new RiderFileEffectCallSite("M:Fixture.Query", "M:Fixture.Read", 17, "sql", 0)],
                             Reason: ""
                         )
                     );
@@ -65,7 +65,7 @@ public sealed class RiderFileEffectTransportTests
             response.GraphGeneration.ShouldBe(42);
             response.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceExact);
             response.Methods.ShouldBe([new RiderFileEffectMethod("M:Fixture.Query", "sql", 1)]);
-            response.CallSites.ShouldBe([new RiderFileEffectCallSite("M:Fixture.Query", "M:Fixture.Read", "sql", 0)]);
+            response.CallSites.ShouldBe([new RiderFileEffectCallSite("M:Fixture.Query", "M:Fixture.Read", 17, "sql", 0)]);
         }
         finally
         {
@@ -175,8 +175,10 @@ public sealed class RiderFileEffectTransportTests
             .Methods.Select(method => (method.SymbolId, method.Family, method.NearestDepth))
             .ShouldBe([("M:File.Command", "sql", 1), ("M:File.Ef", "sql", 1)]);
         effectful
-            .CallSites.Select(callSite => (callSite.EnclosingSymbolId, callSite.TargetSymbolId, callSite.Family, callSite.NearestDepth))
-            .ShouldBe([("M:File.Command", "M:CommandOwner", "sql", 0), ("M:File.Ef", "M:EfOwner", "sql", 0)]);
+            .CallSites.Select(callSite =>
+                (callSite.EnclosingSymbolId, callSite.TargetSymbolId, callSite.Line, callSite.Family, callSite.NearestDepth)
+            )
+            .ShouldBe([("M:File.Command", "M:CommandOwner", 20, "sql", 0), ("M:File.Ef", "M:EfOwner", 10, "sql", 0)]);
         RiderFileEffectResponder
             .SqlSelector.Predicates.Select(predicate => predicate.Provider)
             .ShouldBe(["efcore", "db_connection", "db_reader", "db_command", "db_transaction", "yessql"]);

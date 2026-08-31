@@ -1,4 +1,4 @@
-using Rig.Domain.Data;
+﻿using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
 
@@ -31,7 +31,16 @@ public sealed record FileEffectAggregate(string Family, int NearestDepth);
 
 public sealed record FileEffectMethod(string SymbolId, IReadOnlyList<FileEffectAggregate> Effects);
 
-public sealed record FileEffectCallSite(string EnclosingSymbolId, string TargetSymbolId, IReadOnlyList<FileEffectAggregate> Effects);
+// Line is the 1-based source line of the CALL, carried straight from the CallEdge. It is what lets a
+// consumer anchor a mark on the invocation it belongs to instead of re-resolving every invocation in the
+// file, and it separates two calls to the same target from one body. There is no column: extraction never
+// mined one (ReferenceFact stores Line only), so two calls to the same target on ONE line still collapse.
+public sealed record FileEffectCallSite(
+    string EnclosingSymbolId,
+    string TargetSymbolId,
+    int Line,
+    IReadOnlyList<FileEffectAggregate> Effects
+);
 
 public sealed record FileEffectReadModel(
     string FilePath,
@@ -90,6 +99,23 @@ public sealed class FileEffectReadModelIndex
             mode: FactPathFinder.TraversalMode.SyncCut
         );
 
+        // Static monomorphization splits one generic member into `{baseId}~mono⟨binding⟩` NODES and redirects
+        // concrete calls to them, while both ends of this projection speak BASE ids: the closure is seeded
+        // from effect owners (reference facts, always base) and Rider resolves what it gets against a PSI
+        // declaration, which carries no binding. So collapse every reached instantiation onto its base id,
+        // keeping the SHORTEST distance — without it a generic callee is simply absent from the join, which
+        // cost Writes.SaveFactsBatchedAsync all five of its InsertRows``1 call sites and would cost a method
+        // its whole summary when its only route to the family runs through an instantiation.
+        var reachedByBase = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var pair in reached)
+        {
+            var canonical = MonomorphizedNodeId.BaseOf(pair.Key);
+            if (!reachedByBase.TryGetValue(canonical, out var known) || pair.Value < known)
+            {
+                reachedByBase[canonical] = pair.Value;
+            }
+        }
+
         var knownFiles = (indexedFilePaths ?? symbolRows.Select(symbol => symbol.FilePath))
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(FilePathComparer)
@@ -111,18 +137,18 @@ public sealed class FileEffectReadModelIndex
             var fileMethodIds = fileMethods.Select(method => method.SymbolId).ToHashSet(StringComparer.Ordinal);
             var methods = Array.AsReadOnly(
                 fileMethods
-                    .Where(symbol => reached.ContainsKey(symbol.SymbolId))
+                    .Where(symbol => reachedByBase.ContainsKey(symbol.SymbolId))
                     .OrderBy(symbol => symbol.SymbolId, StringComparer.Ordinal)
                     .Select(symbol => new FileEffectMethod(
                         symbol.SymbolId,
-                        Array.AsReadOnly([new FileEffectAggregate(selector.Family, reached[symbol.SymbolId])])
+                        Array.AsReadOnly([new FileEffectAggregate(selector.Family, reachedByBase[symbol.SymbolId])])
                     ))
                     .ToArray()
             );
             var callSites = BuildCallSites(
                 invocationEdgesByFile.GetValueOrDefault(filePath) ?? [],
                 selectedEffectsByFile.GetValueOrDefault(filePath) ?? [],
-                reached,
+                reachedByBase,
                 fileMethodIds,
                 selector.Family
             );
@@ -150,7 +176,18 @@ public sealed class FileEffectReadModelIndex
         string family
     )
     {
-        var invocationEdges = fileInvocationEdges.Where(edge => fileMethodIds.Contains(edge.Caller)).ToArray();
+        // Both ends are canonicalised first: a call INTO an instantiation carries a `~mono` callee, and a
+        // call FROM inside a cloned instantiation body carries a `~mono` caller that no file declares.
+        var invocationEdges = fileInvocationEdges
+            .Select(edge =>
+                edge with
+                {
+                    Caller = MonomorphizedNodeId.BaseOf(edge.Caller),
+                    Callee = MonomorphizedNodeId.BaseOf(edge.Callee),
+                }
+            )
+            .Where(edge => fileMethodIds.Contains(edge.Caller))
+            .ToArray();
 
         // A direct derived effect retains its owner + physical source site, but not the matched target.
         // Recover the target only when that site contains exactly one invocation edge. An expression such
@@ -164,7 +201,7 @@ public sealed class FileEffectReadModelIndex
             .Where(effect => effect.EnclosingSymbolId is not null && fileMethodIds.Contains(effect.EnclosingSymbolId))
             .Select(effect => new SourceSite(effect.EnclosingSymbolId!, effect.Line))
             .Where(directTargets.ContainsKey)
-            .Select(site => new CallSiteKey(site.EnclosingSymbolId, directTargets[site]));
+            .Select(site => new CallSiteKey(site.EnclosingSymbolId, directTargets[site], site.Line));
 
         // For an indirect call, the question a reader asks of a call site is "does going in here end in the
         // family?" — reverse REACHABILITY of the callee, not whether this particular call shortens the
@@ -176,17 +213,19 @@ public sealed class FileEffectReadModelIndex
         // concern; Rider receives only the static DocIDs it can resolve against the current PSI invocation.
         var indirectSites = invocationEdges
             .Where(edge => reached.ContainsKey(edge.Callee))
-            .Select(edge => new CallSiteKey(edge.Caller, edge.Callee));
+            .Select(edge => new CallSiteKey(edge.Caller, edge.Callee, edge.Line));
 
         return Array.AsReadOnly(
             directSites
                 .Concat(indirectSites)
                 .Distinct()
                 .OrderBy(site => site.EnclosingSymbolId, StringComparer.Ordinal)
+                .ThenBy(site => site.Line)
                 .ThenBy(site => site.TargetSymbolId, StringComparer.Ordinal)
                 .Select(site => new FileEffectCallSite(
                     site.EnclosingSymbolId,
                     site.TargetSymbolId,
+                    site.Line,
                     Array.AsReadOnly([new FileEffectAggregate(family, reached.TryGetValue(site.TargetSymbolId, out var depth) ? depth : 0)])
                 ))
                 .ToArray()
@@ -195,5 +234,5 @@ public sealed class FileEffectReadModelIndex
 
     private readonly record struct SourceSite(string EnclosingSymbolId, int Line);
 
-    private readonly record struct CallSiteKey(string EnclosingSymbolId, string TargetSymbolId);
+    private readonly record struct CallSiteKey(string EnclosingSymbolId, string TargetSymbolId, int Line);
 }

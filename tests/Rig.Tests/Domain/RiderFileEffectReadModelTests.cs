@@ -1,4 +1,4 @@
-using Rig.Domain.Data;
+﻿using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
 
@@ -63,11 +63,12 @@ public sealed class RiderFileEffectReadModelTests
                 (
                     callSite.EnclosingSymbolId,
                     callSite.TargetSymbolId,
+                    callSite.Line,
                     Family: callSite.Effects.Single().Family,
                     NearestDepth: callSite.Effects.Single().NearestDepth
                 )
             )
-            .ShouldBe([("M:File.Alpha", "M:Bridge", "sql", 1), ("M:File.Zed", "M:ReadOwner", "sql", 0)]);
+            .ShouldBe([("M:File.Alpha", "M:Bridge", 20, "sql", 1), ("M:File.Zed", "M:ReadOwner", 10, "sql", 0)]);
         index.Find(File).ShouldBeSameAs(file);
         if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
         {
@@ -96,6 +97,7 @@ public sealed class RiderFileEffectReadModelTests
             .ShouldBe([
                 nameof(FileEffectCallSite.EnclosingSymbolId),
                 nameof(FileEffectCallSite.TargetSymbolId),
+                nameof(FileEffectCallSite.Line),
                 nameof(FileEffectCallSite.Effects),
             ]);
     }
@@ -120,7 +122,9 @@ public sealed class RiderFileEffectReadModelTests
             .Find(File)
             .ShouldNotBeNull();
 
-        model.CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId)).ShouldBe([("M:File.Direct", "M:Db.Execute")]);
+        model
+            .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Line))
+            .ShouldBe([("M:File.Direct", "M:Db.Execute", 10)]);
     }
 
     // The tie case that a strict `calleeDepth < callerDepth` test dropped: one body calls two effectful
@@ -149,8 +153,84 @@ public sealed class RiderFileEffectReadModelTests
             .ShouldNotBeNull();
 
         model
-            .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Effects.Single().NearestDepth))
-            .ShouldBe([("M:File.Caller", "M:NearOwner", 0), ("M:File.Caller", "M:Sibling", 1)]);
+            .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Line, site.Effects.Single().NearestDepth))
+            .ShouldBe([("M:File.Caller", "M:NearOwner", 10, 0), ("M:File.Caller", "M:Sibling", 11, 1)]);
+    }
+
+    // Static monomorphization REDIRECTS a concrete generic call to a `{baseId}~mono⟨binding⟩` node
+    // (FactPathFinder.IsExactNodeMatch documents the redirect), while the reverse closure is seeded from
+    // effect owners, which are always BASE ids. Comparing raw ids therefore dropped every generic call site:
+    // Writes.SaveFactsBatchedAsync calls InsertRows``1 five times, and all five went unmarked in Rider.
+    [Test]
+    public void A_generic_call_site_is_projected_through_its_monomorphized_node_id()
+    {
+        var baseId = "M:Owners.Insert``1(System.String,``0)";
+        var monoId = MonomorphizedNodeId.For(baseId, [], ["System.String"]);
+        var graph = Graph([new CallEdge("M:File.Caller", monoId, "invocation", File, 10)], baseId);
+        var symbols = new[] { Method("M:File.Caller", File, 9), Method(baseId, OwnersFile, 30) };
+        var effects = new[] { Effect("ado", "read", baseId, 31) };
+
+        var model = FileEffectReadModelIndex
+            .Build(graph, symbols, effects, new FileEffectSelector("sql", [new EffectPredicate("ado")]))
+            .Find(File)
+            .ShouldNotBeNull();
+
+        // The TARGET is reported as the base id: Rider resolves it against a PSI declaration, which never
+        // carries a monomorphized binding.
+        model
+            .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Line, site.Effects.Single().NearestDepth))
+            .ShouldBe([("M:File.Caller", baseId, 10, 0)]);
+    }
+
+    // The same normalisation, one layer up: when the ONLY way from a method to the family runs through a
+    // monomorphized node, the method summary itself went missing — so a caller of a generic repository lost
+    // its Code Vision line, not just its call-site marks.
+    [Test]
+    public void A_method_reaching_the_family_only_through_a_monomorphized_node_keeps_its_summary()
+    {
+        var midId = "M:Owners.Mid``1(``0)";
+        var ownerId = "M:Owners.Owner()";
+        var graph = Graph([
+            new CallEdge(MonomorphizedNodeId.For(midId, [], ["System.String"]), ownerId, "invocation", OwnersFile, 40),
+            new CallEdge("M:File.Caller", MonomorphizedNodeId.For(midId, [], ["System.String"]), "invocation", File, 10),
+        ]);
+        var symbols = new[] { Method("M:File.Caller", File, 9), Method(midId, OwnersFile, 39), Method(ownerId, OwnersFile, 45) };
+        var effects = new[] { Effect("ado", "read", ownerId, 46) };
+
+        var index = FileEffectReadModelIndex.Build(graph, symbols, effects, new FileEffectSelector("sql", [new EffectPredicate("ado")]));
+
+        index
+            .Find(OwnersFile)
+            .ShouldNotBeNull()
+            .Methods.Select(method => (method.SymbolId, method.Effects.Single().NearestDepth))
+            .ShouldBe([(midId, 1), (ownerId, 0)]);
+        index
+            .Find(File)
+            .ShouldNotBeNull()
+            .Methods.Select(method => (method.SymbolId, method.Effects.Single().NearestDepth))
+            .ShouldBe([("M:File.Caller", 2)]);
+    }
+
+    // Before the call line was carried, the projection deduplicated on (enclosing, target) alone, so a body
+    // calling one effectful method twice produced a SINGLE row and a consumer had to re-derive the positions
+    // itself. Two lines, two rows; the same line twice still collapses, because extraction mines no column.
+    [Test]
+    public void Repeated_calls_to_one_target_are_projected_once_per_line()
+    {
+        var graph = Graph([
+            new CallEdge("M:File.Caller", "M:Owner", "invocation", File, 10),
+            new CallEdge("M:File.Caller", "M:Owner", "invocation", File, 14),
+            new CallEdge("M:File.Caller", "M:Owner", "invocation", File, 14),
+        ]);
+        var symbols = new[] { Method("M:File.Caller", File, 9), Method("M:Owner", OwnersFile, 30) };
+        var effects = new[] { Effect("ado", "read", "M:Owner", 31) };
+
+        var model = FileEffectReadModelIndex
+            .Build(graph, symbols, effects, new FileEffectSelector("sql", [new EffectPredicate("ado")]))
+            .Find(File)
+            .ShouldNotBeNull();
+
+        model.CallSites.Select(site => (site.TargetSymbolId, site.Line)).ShouldBe([("M:Owner", 10), ("M:Owner", 14)]);
     }
 
     [Test]

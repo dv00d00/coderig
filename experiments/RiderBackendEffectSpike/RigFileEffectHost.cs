@@ -1,4 +1,4 @@
-extern alias runtimeSerialization;
+﻿extern alias runtimeSerialization;
 
 using System;
 using System.Collections.Generic;
@@ -149,6 +149,7 @@ internal sealed class RigFileEffectHost
                         return new FileEffectCallSiteRow(
                             callSite.EnclosingSymbolId,
                             callSite.TargetSymbolId,
+                            callSite.Line,
                             callSite.Family,
                             callSite.NearestDepth
                         );
@@ -411,6 +412,9 @@ internal sealed class RigFileEffectHost
 
         [DataMember(Name = "targetSymbolId", IsRequired = true)]
         public string TargetSymbolId { get; set; }
+
+        [DataMember(Name = "line", IsRequired = true)]
+        public int Line { get; set; }
 
         [DataMember(Name = "family", IsRequired = true)]
         public string Family { get; set; }

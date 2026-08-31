@@ -1136,6 +1136,51 @@
       "reason": "efcore_rollback_transaction"
     },
     {
+      "provider": "db_transaction",
+      "operation": "begin",
+      "methods": [
+        "BeginTransaction",
+        "BeginTransactionAsync"
+      ],
+      "receiverTypes": [
+        "System.Data.Common.DbConnection"
+      ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "raw_ado_begin_transaction: the raw-ADO half of the transaction triad. Only the EF Core DatabaseFacade/IDbContextTransaction pair was described, so a bulk writer holding a DbConnection + DbTransaction directly showed db_connection:open and db_command:execute but no transaction at all."
+    },
+    {
+      "provider": "db_transaction",
+      "operation": "commit",
+      "methods": [
+        "Commit",
+        "CommitAsync"
+      ],
+      "receiverTypes": [
+        "System.Data.Common.DbTransaction"
+      ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "raw_ado_commit_transaction"
+    },
+    {
+      "provider": "db_transaction",
+      "operation": "rollback",
+      "methods": [
+        "Rollback",
+        "RollbackAsync"
+      ],
+      "receiverTypes": [
+        "System.Data.Common.DbTransaction"
+      ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "raw_ado_rollback_transaction"
+    },
+    {
       "provider": "http",
       "operation": "GET",
       "methods": [ "GetByteArrayAsync", "GetStreamAsync" ],

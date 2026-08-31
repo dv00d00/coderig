@@ -57,11 +57,7 @@ var sourceOuterMiddle = CompileOne(
 scenarios.Add(
     (
         "source_then_hidden_metadata_body",
-        CompileOne(
-            "Spike.HiddenMetadata.Root",
-            RootSource(),
-            [.. frameworkReferences, sourceOuterMiddle.ToMetadataReference()]
-        )
+        CompileOne("Spike.HiddenMetadata.Root", RootSource(), [.. frameworkReferences, sourceOuterMiddle.ToMetadataReference()])
     )
 );
 
@@ -76,7 +72,9 @@ foreach (var (name, compilation) in scenarios)
     var compileErrors = compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).ToArray();
     if (compileErrors.Length > 0)
     {
-        throw new InvalidOperationException($"{name} did not compile:{Environment.NewLine}{string.Join(Environment.NewLine, compileErrors)}");
+        throw new InvalidOperationException(
+            $"{name} did not compile:{Environment.NewLine}{string.Join(Environment.NewLine, compileErrors)}"
+        );
     }
 
     var diagnostics = await compilation
@@ -100,12 +98,7 @@ return;
 CSharpCompilation SameCompilation() =>
     Compile(
         "Spike.SameCompilation",
-        [
-            AttributeSource(),
-            LeafSource(includeEffectAttribute: false),
-            MiddleSource(),
-            RootSource(includeRootAttribute: false),
-        ],
+        [AttributeSource(), LeafSource(includeEffectAttribute: false), MiddleSource(), RootSource(includeRootAttribute: false)],
         frameworkReferences
     );
 
@@ -139,41 +132,41 @@ CSharpCompilation InterfaceDispatchCompilation() =>
 
 static string AttributeSource() =>
     """
-    using System;
+        using System;
 
-    public sealed class SpikeRootAttribute : Attribute;
-    public sealed class SpikeEffectAttribute : Attribute;
-    """;
+        public sealed class SpikeRootAttribute : Attribute;
+        public sealed class SpikeEffectAttribute : Attribute;
+        """;
 
 static string LeafSource(bool includeEffectAttribute = true) =>
     $$"""
-    {{(includeEffectAttribute ? "using System;\npublic sealed class SpikeEffectAttribute : Attribute;" : "")}}
+        {{(includeEffectAttribute ? "using System;\npublic sealed class SpikeEffectAttribute : Attribute;" : "")}}
 
-    public static class Db
-    {
-        [SpikeEffect]
-        public static void Touch() { }
-    }
-    """;
+        public static class Db
+        {
+            [SpikeEffect]
+            public static void Touch() { }
+        }
+        """;
 
 static string MiddleSource() =>
     """
-    public static class Middle
-    {
-        public static void Run() => Db.Touch();
-    }
-    """;
+        public static class Middle
+        {
+            public static void Run() => Db.Touch();
+        }
+        """;
 
 static string RootSource(bool includeRootAttribute = true) =>
     $$"""
-    {{(includeRootAttribute ? "using System;\npublic sealed class SpikeRootAttribute : Attribute;" : "")}}
+        {{(includeRootAttribute ? "using System;\npublic sealed class SpikeRootAttribute : Attribute;" : "")}}
 
-    public static class Root
-    {
-        [SpikeRoot]
-        public static void Start() => Middle.Run();
-    }
-    """;
+        public static class Root
+        {
+            [SpikeRoot]
+            public static void Start() => Middle.Run();
+        }
+        """;
 
 static CSharpCompilation CompileOne(string assemblyName, string source, IEnumerable<MetadataReference> references) =>
     Compile(assemblyName, [source], references);
@@ -227,15 +220,13 @@ internal sealed class ReachabilitySpikeAnalyzer : DiagnosticAnalyzer
         foreach (var root in RootMethods(context.Compilation))
         {
             var result = Traverse(root, universe, context.CancellationToken);
-            var properties = ImmutableDictionary<string, string?>.Empty
-                .Add("effects", result.Chains.Count.ToString())
+            var properties = ImmutableDictionary<string, string?>
+                .Empty.Add("effects", result.Chains.Count.ToString())
                 .Add("maxDepth", result.Chains.Count == 0 ? "-" : result.Chains.Max(chain => chain.Depth).ToString())
                 .Add("chains", result.Chains.Count == 0 ? "-" : string.Join(" | ", result.Chains.Select(chain => chain.Text)))
                 .Add("boundaries", result.Boundaries.Count == 0 ? "-" : string.Join(" | ", result.Boundaries));
             var message = $"effects={properties["effects"]}; boundaries={properties["boundaries"]}";
-            context.ReportDiagnostic(
-                Diagnostic.Create(ResultDescriptor, root.Locations.FirstOrDefault(), properties, message)
-            );
+            context.ReportDiagnostic(Diagnostic.Create(ResultDescriptor, root.Locations.FirstOrDefault(), properties, message));
         }
     }
 
@@ -350,12 +341,7 @@ internal sealed class ReachabilitySpikeAnalyzer : DiagnosticAnalyzer
             return new CompilationUniverse(owners);
         }
 
-        internal bool TryGetBody(
-            IMethodSymbol method,
-            CancellationToken cancellationToken,
-            out SyntaxNode body,
-            out SemanticModel model
-        )
+        internal bool TryGetBody(IMethodSymbol method, CancellationToken cancellationToken, out SyntaxNode body, out SemanticModel model)
         {
             foreach (var reference in method.DeclaringSyntaxReferences)
             {

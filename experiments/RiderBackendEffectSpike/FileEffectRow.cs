@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace CodeRig.Rider;
 
@@ -20,10 +20,11 @@ internal sealed class FileEffectRow
 
 internal sealed class FileEffectCallSiteRow
 {
-    public FileEffectCallSiteRow(string enclosingSymbolDocId, string targetSymbolDocId, string family, int nearestDepth)
+    public FileEffectCallSiteRow(string enclosingSymbolDocId, string targetSymbolDocId, int line, string family, int nearestDepth)
     {
         EnclosingSymbolDocId = enclosingSymbolDocId;
         TargetSymbolDocId = targetSymbolDocId;
+        Line = line;
         Family = family;
         NearestDepth = nearestDepth;
     }
@@ -31,6 +32,9 @@ internal sealed class FileEffectCallSiteRow
     public string EnclosingSymbolDocId { get; }
 
     public string TargetSymbolDocId { get; }
+
+    // 1-based source line of the call, as the resident host mined it.
+    public int Line { get; }
 
     public string Family { get; }
 
