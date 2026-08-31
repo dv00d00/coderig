@@ -35,6 +35,9 @@ public sealed record FileEffectMethod(string SymbolId, IReadOnlyList<FileEffectA
 // consumer anchor a mark on the invocation it belongs to instead of re-resolving every invocation in the
 // file, and it separates two calls to the same target from one body. There is no column: extraction never
 // mined one (ReferenceFact stores Line only), so two calls to the same target on ONE line still collapse.
+// TargetSymbolId is EMPTY (never null) for a row projected from an effect observed at a call into external
+// library code: there is no in-solution callee, hence no node and no DocID to name. Consumers use it only to
+// separate two projected targets on one line, so an empty value is a well-formed "the effect is right here".
 public sealed record FileEffectCallSite(
     string EnclosingSymbolId,
     string TargetSymbolId,
@@ -192,16 +195,20 @@ public sealed class FileEffectReadModelIndex
         // A direct derived effect retains its owner + physical source site, but not the matched target.
         // Recover the target only when that site contains exactly one invocation edge. An expression such
         // as `Use(Read(), Other())` shares one line across several calls, so guessing there would turn a
-        // semantic editor annotation into a false positive; the method summary remains available instead.
+        // semantic editor annotation into a false positive; the method summary remains available instead. A site
+        // with NO in-solution edge at all falls through to the external-call arm below.
         var directTargets = invocationEdges
             .GroupBy(edge => new SourceSite(edge.Caller, edge.Line))
             .Where(group => group.Select(edge => edge.Callee).Distinct(StringComparer.Ordinal).Take(2).Count() == 1)
             .ToDictionary(group => group.Key, group => group.First().Callee);
-        var directSites = selectedEffects
+        var ownEffects = selectedEffects
             .Where(effect => effect.EnclosingSymbolId is not null && fileMethodIds.Contains(effect.EnclosingSymbolId))
+            .ToArray();
+        var directSites = ownEffects
             .Select(effect => new SourceSite(effect.EnclosingSymbolId!, effect.Line))
             .Where(directTargets.ContainsKey)
-            .Select(site => new CallSiteKey(site.EnclosingSymbolId, directTargets[site], site.Line));
+            .Select(site => new CallSiteKey(site.EnclosingSymbolId, directTargets[site], site.Line))
+            .ToArray();
 
         // For an indirect call, the question a reader asks of a call site is "does going in here end in the
         // family?" — reverse REACHABILITY of the callee, not whether this particular call shortens the
@@ -213,11 +220,25 @@ public sealed class FileEffectReadModelIndex
         // concern; Rider receives only the static DocIDs it can resolve against the current PSI invocation.
         var indirectSites = invocationEdges
             .Where(edge => reached.ContainsKey(edge.Callee))
-            .Select(edge => new CallSiteKey(edge.Caller, edge.Callee, edge.Line));
+            .Select(edge => new CallSiteKey(edge.Caller, edge.Callee, edge.Line))
+            .ToArray();
+
+        // A call into EXTERNAL/library code produces neither a CallEdge nor a graph node — nothing to join
+        // and nothing to recover a target from — so `DbConnection.BeginTransactionAsync` /
+        // `DbTransaction.CommitAsync` / `DbCommand.ExecuteNonQueryAsync` left their lines unmarked and the
+        // method summary as the only signal (live: Writes.SaveFactsBatchedAsync, lines 338 and 499). The
+        // effect fact carries its OWN physical site, which is enough: the row is emitted with NearestDepth 0
+        // (the effect is right there) and an EMPTY target, because there is no in-solution symbol to name.
+        // An edge-derived row wins on a shared (enclosing, line): it carries a target Rider can resolve.
+        var targetedSites = directSites.Concat(indirectSites).Select(site => new SourceSite(site.EnclosingSymbolId, site.Line)).ToHashSet();
+        var externalSites = ownEffects
+            .Where(effect => effect.Line > 0 && !targetedSites.Contains(new SourceSite(effect.EnclosingSymbolId!, effect.Line)))
+            .Select(effect => new CallSiteKey(effect.EnclosingSymbolId!, "", effect.Line));
 
         return Array.AsReadOnly(
             directSites
                 .Concat(indirectSites)
+                .Concat(externalSites)
                 .Distinct()
                 .OrderBy(site => site.EnclosingSymbolId, StringComparer.Ordinal)
                 .ThenBy(site => site.Line)

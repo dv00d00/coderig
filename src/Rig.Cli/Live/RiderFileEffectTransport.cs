@@ -17,6 +17,9 @@ internal sealed record RiderFileEffectRequest(
 
 internal sealed record RiderFileEffectMethod(string SymbolId, string Family, int NearestDepth);
 
+// TargetSymbolId is possibly EMPTY (never null): an effect observed at a call into external library code has
+// no in-solution callee, so there is no DocID to send. The field is kept because the client uses it to
+// disambiguate two projected targets on ONE line; an empty value means "the effect is at this line itself".
 internal sealed record RiderFileEffectCallSite(string EnclosingSymbolId, string TargetSymbolId, int Line, string Family, int NearestDepth);
 
 internal sealed record RiderFileEffectResponse(

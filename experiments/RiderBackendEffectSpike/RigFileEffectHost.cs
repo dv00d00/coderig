@@ -140,15 +140,18 @@ internal sealed class RigFileEffectHost
                 ? (response.CallSites ?? Array.Empty<FileEffectCallSite>())
                     .Select(callSite =>
                     {
+                        // An EMPTY target is well-formed: the row is an effect observed at a call into external
+                        // library code, which has no in-solution node to name. The line still identifies the
+                        // invocation, and the target is only ever needed to separate two targets on one line.
                         if (
                             string.IsNullOrWhiteSpace(callSite.EnclosingSymbolId)
-                            || string.IsNullOrWhiteSpace(callSite.TargetSymbolId)
                             || string.IsNullOrWhiteSpace(callSite.Family)
+                            || callSite.Line <= 0
                         )
                             throw new InvalidDataException("an exact response contained an incomplete call-site row");
                         return new FileEffectCallSiteRow(
                             callSite.EnclosingSymbolId,
-                            callSite.TargetSymbolId,
+                            callSite.TargetSymbolId ?? string.Empty,
                             callSite.Line,
                             callSite.Family,
                             callSite.NearestDepth

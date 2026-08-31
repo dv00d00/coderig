@@ -102,6 +102,9 @@ public sealed class RiderFileEffectReadModelTests
             ]);
     }
 
+    // A TARGET is recovered only when the site holds exactly one invocation edge — `Use(Read(), Other())`
+    // shares one line, so naming one of them would be a false positive. The ambiguous line still gets a row,
+    // just with an EMPTY target: "an effect is here, no resolvable callee to name".
     [Test]
     public void Direct_effect_call_site_is_projected_only_when_its_target_is_unambiguous()
     {
@@ -124,7 +127,99 @@ public sealed class RiderFileEffectReadModelTests
 
         model
             .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Line))
-            .ShouldBe([("M:File.Direct", "M:Db.Execute", 10)]);
+            .ShouldBe([("M:File.Ambiguous", "", 20), ("M:File.Direct", "M:Db.Execute", 10)]);
+    }
+
+    // A call into EXTERNAL code produces neither a CallEdge nor a node, so there was nothing to join and the
+    // line went unmarked — live proof: Writes.SaveFactsBatchedAsync's DbConnection.BeginTransactionAsync
+    // (338) and DbTransaction.CommitAsync (499) both report `d0 db_transaction` yet had no call-site row.
+    // The effect fact's own FilePath+Line is the anchor; the target is empty because no in-solution symbol
+    // exists to name, and the depth is 0 because the effect is right there.
+    [Test]
+    public void An_effect_at_a_call_into_external_code_is_projected_with_an_empty_target_at_depth_zero()
+    {
+        var graph = Graph([new CallEdge("M:File.Save", "M:File.Pure", "invocation", File, 12)]);
+        var symbols = new[] { Method("M:File.Save", File, 9), Method("M:File.Pure", File, 60) };
+        var effects = new[]
+        {
+            new DerivedEffect("db_transaction", "begin", "Common.DbConnection", "M:File.Save", File, 338),
+            new DerivedEffect("db_transaction", "commit", "Common.DbTransaction", "M:File.Save", File, 499),
+            // No mined position: there is no line to anchor a mark to, so no row.
+            new DerivedEffect("db_transaction", "rollback", "Common.DbTransaction", "M:File.Save", File, 0),
+        };
+
+        var model = FileEffectReadModelIndex
+            .Build(graph, symbols, effects, new FileEffectSelector("sql", [new EffectPredicate("db_transaction")]))
+            .Find(File)
+            .ShouldNotBeNull();
+
+        model.Methods.Select(method => (method.SymbolId, method.Effects.Single().NearestDepth)).ShouldBe([("M:File.Save", 0)]);
+        model
+            .CallSites.Select(site =>
+                (site.EnclosingSymbolId, site.TargetSymbolId, site.Line, site.Effects.Single().Family, site.Effects.Single().NearestDepth)
+            )
+            .ShouldBe([("M:File.Save", "", 338, "sql", 0), ("M:File.Save", "", 499, "sql", 0)]);
+    }
+
+    // Both arms can claim one (enclosing, line). The edge-derived row wins because it names a target Rider
+    // can resolve against the PSI invocation; two rows on one line would double-mark it.
+    [Test]
+    public void An_edge_derived_call_site_wins_over_an_effect_derived_one_on_the_same_line()
+    {
+        var graph = Graph([
+            new CallEdge("M:File.Caller", "M:Owner", "invocation", File, 10),
+            new CallEdge("M:File.Caller", "M:Bridge", "invocation", File, 20),
+            new CallEdge("M:Bridge", "M:Owner", "invocation", OwnersFile, 25),
+        ]);
+        var symbols = new[] { Method("M:File.Caller", File, 9), Method("M:Bridge", OwnersFile, 24), Method("M:Owner", OwnersFile, 30) };
+        var effects = new[]
+        {
+            Effect("ado", "read", "M:Owner", 31),
+            // Same line as the single-edge site: the recovered target must survive, the empty one must not.
+            new DerivedEffect("ado", "read", "db", "M:File.Caller", File, 10),
+            // Same line as an INDIRECT site: the reachable callee still wins over the empty target.
+            new DerivedEffect("ado", "read", "db", "M:File.Caller", File, 20),
+        };
+
+        var model = FileEffectReadModelIndex
+            .Build(graph, symbols, effects, new FileEffectSelector("sql", [new EffectPredicate("ado")]))
+            .Find(File)
+            .ShouldNotBeNull();
+
+        model
+            .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Line, site.Effects.Single().NearestDepth))
+            .ShouldBe([("M:File.Caller", "M:Owner", 10, 0), ("M:File.Caller", "M:Bridge", 20, 1)]);
+    }
+
+    // The effect-derived arm keys off the effect's OWN FilePath, so an effect in the callee's body belongs to
+    // the callee's file. Projecting it into the caller's file would put a mark on an unrelated line number.
+    [Test]
+    public void An_effect_in_another_file_is_not_projected_as_a_call_site_of_this_file()
+    {
+        var graph = Graph([new CallEdge("M:File.Caller", "M:Owner", "invocation", File, 10)]);
+        var symbols = new[] { Method("M:File.Caller", File, 9), Method("M:Owner", OwnersFile, 30) };
+        var effects = new[]
+        {
+            // Lives in the callee's own body/file.
+            Effect("ado", "read", "M:Owner", 31),
+            // Physically in THIS file, but enclosed by a method this file does not declare (a partial-class
+            // sibling or a `~mono` clone body): still not a call site of this file.
+            new DerivedEffect("ado", "read", "db", "M:Owner", File, 77),
+        };
+
+        var index = FileEffectReadModelIndex.Build(graph, symbols, effects, new FileEffectSelector("sql", [new EffectPredicate("ado")]));
+
+        index
+            .Find(File)
+            .ShouldNotBeNull()
+            .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Line))
+            .ShouldBe([("M:File.Caller", "M:Owner", 10)]);
+        // The effect-derived row lands in the file the effect is actually in.
+        index
+            .Find(OwnersFile)
+            .ShouldNotBeNull()
+            .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Line))
+            .ShouldBe([("M:Owner", "", 31)]);
     }
 
     // The tie case that a strict `calleeDepth < callerDepth` test dropped: one body calls two effectful

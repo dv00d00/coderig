@@ -149,6 +149,22 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                 rowsOnLine.Add(row);
             }
 
+            // A row with an EMPTY target is an effect observed at a call into external code: the host knows the
+            // line but has no callee to name, so nothing distinguishes the intended invocation from the others
+            // on that line — `await conn.BeginTransactionAsync(t).ConfigureAwait(false)` holds two. Marking both
+            // would put a mark on `ConfigureAwait`, so an untargeted row claims only the LEFTMOST invocation on
+            // its line. Same limitation as everywhere else here: extraction mines no column.
+            var leftmostNameOffsetByLine = new Dictionary<int, int>();
+            foreach (var (line, nameRange) in InvocationNameRanges())
+            {
+                if (!callSitesByLine.ContainsKey(line))
+                    continue;
+
+                var offset = nameRange.StartOffset.Offset;
+                if (!leftmostNameOffsetByLine.TryGetValue(line, out var known) || offset < known)
+                    leftmostNameOffsetByLine[line] = offset;
+            }
+
             var projectedCalls = 0;
             foreach (var invocation in _file.Descendants<IInvocationExpression>())
             {
@@ -170,6 +186,13 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                 if (row == null)
                     continue;
 
+                if (
+                    row.TargetSymbolDocId.Length == 0
+                    && leftmostNameOffsetByLine.TryGetValue(line, out var leftmost)
+                    && nameRange.StartOffset.Offset != leftmost
+                )
+                    continue;
+
                 var range = nameRange;
                 highlightings.Add(new HighlightingInfo(range, new RigEffectHighlighting(invocation, range, row)));
 
@@ -186,6 +209,24 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                         + $"uiHighlightings={highlightings.Count}, file={filePath}"
                 );
             committer(new DaemonStageResult(highlightings));
+        }
+
+        private IEnumerable<(int Line, DocumentRange NameRange)> InvocationNameRanges()
+        {
+            foreach (var invocation in _file.Descendants<IInvocationExpression>())
+            {
+                if (DaemonProcess.InterruptFlag)
+                    throw new OperationCanceledException();
+
+                if (invocation.InvokedExpression is not IReferenceExpression invokedReference)
+                    continue;
+
+                var nameRange = invokedReference.NameIdentifier.GetDocumentRange();
+                if (!nameRange.IsValid())
+                    continue;
+
+                yield return ((int)nameRange.Document.GetCoordsByOffset(nameRange.StartOffset.Offset).Line + 1, nameRange);
+            }
         }
 
         // The host's line already picked the invocation; the enclosing DocID stays as a cheap sanity check

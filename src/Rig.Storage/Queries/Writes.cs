@@ -554,6 +554,7 @@ public static class Writes
             }
 
             bind(parameters, items[i], i);
+            
             command.ExecuteNonQuery();
 
             var cumulative = alreadySaved + i + 1;

@@ -226,6 +226,35 @@ public sealed class RiderFileEffectTransportTests
         builds.ShouldBe(builtBeforeFailures, "non-exact source states must not force the reverse read model");
     }
 
+    // An effect observed at a call into EXTERNAL library code has no in-solution callee, so the projected row
+    // carries an EMPTY TargetSymbolId. The field is kept on the wire (the client uses it only to separate two
+    // projected targets on one line), so it must survive projection AND serialization as "" — not as null and
+    // not as a dropped member, which is what an IsRequired client contract would reject.
+    [Test]
+    public void An_external_call_effect_is_answered_and_serialized_with_an_empty_target_symbol_id()
+    {
+        var response = RiderFileEffectResponder.Respond(
+            Request(RepoRoot, "external-id", "external-token", EffectFile),
+            new RiderFileEffectCapture(31, ["project:A"], StaleReason: null, ExternalCallIndex)
+        );
+
+        response.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceExact);
+        response.Methods.Select(method => (method.SymbolId, method.Family, method.NearestDepth)).ShouldBe([("M:File.Save", "sql", 0)]);
+        response
+            .CallSites.Select(callSite =>
+                (callSite.EnclosingSymbolId, callSite.TargetSymbolId, callSite.Line, callSite.Family, callSite.NearestDepth)
+            )
+            .ShouldBe([("M:File.Save", "", 338, "sql", 0), ("M:File.Save", "", 499, "sql", 0)]);
+
+        var wire = JsonSerializer.Serialize(response, Json);
+        var replayed = JsonSerializer.Deserialize<RiderFileEffectResponse>(wire, Json).ShouldNotBeNull();
+
+        // The member must be PRESENT and empty — a dropped one fails an IsRequired client contract outright.
+        wire.ShouldContain("\"targetSymbolId\":\"\"");
+        replayed.CallSites.Select(callSite => callSite.TargetSymbolId).ShouldBe(["", ""]);
+        JsonSerializer.Serialize(replayed, Json).ShouldBe(wire);
+    }
+
     [Test]
     public void Indexed_context_detection_distinguishes_one_project_from_a_linked_file()
     {
@@ -325,6 +354,20 @@ public sealed class RiderFileEffectTransportTests
             new DerivedEffect("efcore", "read", "db", "M:EfOwner", OwnerFile, 10),
             new DerivedEffect("db_command", "execute", "db", "M:CommandOwner", OwnerFile, 20),
             new DerivedEffect("http", "send", "network", "M:HttpOwner", OwnerFile, 30),
+        };
+        return FileEffectReadModelIndex.Build(graph, symbols, effects, RiderFileEffectResponder.SqlSelector);
+    }
+
+    // Mirrors Writes.SaveFactsBatchedAsync: DbConnection.BeginTransactionAsync (338) and
+    // DbTransaction.CommitAsync (499) are calls into library code, so the graph holds no edge and no node.
+    private static FileEffectReadModelIndex ExternalCallIndex()
+    {
+        var graph = Graph([new CallEdge("M:File.Save", "M:File.Pure", "invocation", EffectFile, 12)]);
+        var symbols = new[] { Method("M:File.Save", EffectFile, 300), Method("M:File.Pure", EffectFile, 600) };
+        var effects = new[]
+        {
+            new DerivedEffect("db_transaction", "begin", "Common.DbConnection", "M:File.Save", EffectFile, 338),
+            new DerivedEffect("db_transaction", "commit", "Common.DbTransaction", "M:File.Save", EffectFile, 499),
         };
         return FileEffectReadModelIndex.Build(graph, symbols, effects, RiderFileEffectResponder.SqlSelector);
     }
