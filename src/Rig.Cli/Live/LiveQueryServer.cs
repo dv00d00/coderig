@@ -48,6 +48,7 @@ internal sealed class LiveQueryServer : IAsyncDisposable
 
     private readonly string _workingDirectory;
     private readonly Func<LiveQueryRequest, CancellationToken, Task<LiveServeResult>> _serve;
+    private readonly Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? _serveFileEffects;
     private readonly TextWriter _log;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly TaskCompletionSource _armed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -57,6 +58,7 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         string pipeName,
         string workingDirectory,
         Func<LiveQueryRequest, CancellationToken, Task<LiveServeResult>> serve,
+        Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? serveFileEffects,
         TextWriter log,
         NamedPipeServerStream first
     )
@@ -64,6 +66,7 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         PipeName = pipeName;
         _workingDirectory = workingDirectory;
         _serve = serve;
+        _serveFileEffects = serveFileEffects;
         _log = log;
         _loop = Task.Run(() => AcceptLoopAsync(first, _shutdown.Token));
     }
@@ -80,7 +83,8 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         string workingDirectory,
         Func<LiveQueryRequest, CancellationToken, Task<LiveServeResult>> serve,
         TextWriter log,
-        string? pipeName = null
+        string? pipeName = null,
+        Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? serveFileEffects = null
     )
     {
         var name = pipeName ?? PipeNameFor(workingDirectory);
@@ -95,7 +99,7 @@ internal sealed class LiveQueryServer : IAsyncDisposable
             );
         }
 
-        return new LiveQueryServer(name, workingDirectory, serve, log, CreateServerStream(name));
+        return new LiveQueryServer(name, workingDirectory, serve, serveFileEffects, log, CreateServerStream(name));
     }
 
     // Start the endpoint, or DON'T — and either way keep watching. The transport is an addition to the
@@ -107,12 +111,13 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         string workingDirectory,
         Func<LiveQueryRequest, CancellationToken, Task<LiveServeResult>> serve,
         TextWriter log,
-        string? pipeName = null
+        string? pipeName = null,
+        Func<RiderFileEffectRequest, CancellationToken, Task<RiderFileEffectResponse>>? serveFileEffects = null
     )
     {
         try
         {
-            return Start(workingDirectory, serve, log, pipeName);
+            return Start(workingDirectory, serve, log, pipeName, serveFileEffects);
         }
         catch (Exception exception)
             when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or PlatformNotSupportedException)
@@ -306,6 +311,29 @@ internal sealed class LiveQueryServer : IAsyncDisposable
             return; // client gave up before sending a whole request; nothing to answer
         }
 
+        LiveRequestHeader? header;
+        try
+        {
+            header = JsonSerializer.Deserialize<LiveRequestHeader>(frame, Json);
+        }
+        catch (JsonException exception)
+        {
+            await RespondAsync(pipe, LiveServeResult.Declined($"unreadable request ({exception.Message})"), cancellationToken);
+            return;
+        }
+
+        if (header is null)
+        {
+            await RespondAsync(pipe, LiveServeResult.Declined("empty request"), cancellationToken);
+            return;
+        }
+
+        if (string.Equals(header.Verb, RiderFileEffectResponder.Verb, StringComparison.Ordinal))
+        {
+            await HandleFileEffectsAsync(pipe, frame, header, cancellationToken);
+            return;
+        }
+
         LiveQueryRequest? request;
         try
         {
@@ -348,6 +376,89 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         await RespondAsync(pipe, await _serve(request, cancellationToken), cancellationToken);
     }
 
+    private async Task HandleFileEffectsAsync(
+        NamedPipeServerStream pipe,
+        byte[] frame,
+        LiveRequestHeader header,
+        CancellationToken cancellationToken
+    )
+    {
+        RiderFileEffectRequest? request;
+        try
+        {
+            request = JsonSerializer.Deserialize<RiderFileEffectRequest>(frame, Json);
+        }
+        catch (JsonException exception)
+        {
+            var unreadable = new RiderFileEffectRequest(
+                header.Protocol,
+                header.Verb,
+                header.WorkingDirectory,
+                RequestId: "",
+                FilePath: "",
+                ClientSnapshotToken: ""
+            );
+            await RespondFileEffectsAsync(
+                pipe,
+                RiderFileEffectResponder.Declined(unreadable, $"unreadable request ({exception.Message})"),
+                cancellationToken
+            );
+            return;
+        }
+
+        if (request is null)
+        {
+            request = new RiderFileEffectRequest(
+                header.Protocol,
+                header.Verb,
+                header.WorkingDirectory,
+                RequestId: "",
+                FilePath: "",
+                ClientSnapshotToken: ""
+            );
+            await RespondFileEffectsAsync(pipe, RiderFileEffectResponder.Declined(request, "empty request"), cancellationToken);
+            return;
+        }
+
+        if (request.Protocol != Protocol)
+        {
+            await RespondFileEffectsAsync(
+                pipe,
+                RiderFileEffectResponder.Declined(
+                    request,
+                    $"protocol mismatch (client speaks {request.Protocol}, this host speaks {Protocol})"
+                ),
+                cancellationToken
+            );
+            return;
+        }
+
+        if (!SameDirectory(request.WorkingDirectory, _workingDirectory))
+        {
+            await RespondFileEffectsAsync(
+                pipe,
+                RiderFileEffectResponder.Declined(
+                    request,
+                    $"this resident index is watching '{_workingDirectory}', not '{request.WorkingDirectory}'"
+                ),
+                cancellationToken
+            );
+            return;
+        }
+
+        if (_serveFileEffects is null)
+        {
+            await RespondFileEffectsAsync(
+                pipe,
+                RiderFileEffectResponder.Declined(request, "this resident host does not serve file effects"),
+                cancellationToken
+            );
+            return;
+        }
+
+        await RespondFileEffectsAsync(pipe, await _serveFileEffects(request, cancellationToken), cancellationToken);
+    }
+
     private static async Task RespondAsync(NamedPipeServerStream pipe, LiveServeResult result, CancellationToken cancellationToken)
     {
         var response = new LiveQueryResponse(
@@ -361,4 +472,10 @@ internal sealed class LiveQueryServer : IAsyncDisposable
         );
         await WriteFrameAsync(pipe, JsonSerializer.SerializeToUtf8Bytes(response, Json), cancellationToken);
     }
+
+    private static Task RespondFileEffectsAsync(
+        NamedPipeServerStream pipe,
+        RiderFileEffectResponse response,
+        CancellationToken cancellationToken
+    ) => WriteFrameAsync(pipe, JsonSerializer.SerializeToUtf8Bytes(response, Json), cancellationToken);
 }

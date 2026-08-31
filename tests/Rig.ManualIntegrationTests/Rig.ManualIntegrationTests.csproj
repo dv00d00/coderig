@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\Rig.IntegrationTests\MsBuildIntegrationSources.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Rig.IntegrationTests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Rig.Analysis\Rig.Analysis.csproj" />
+    <ProjectReference Include="..\..\src\Rig.Cli\Rig.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Rig.Storage\Rig.Storage.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="@(ManualIntegrationSource)" Link="%(ManualIntegrationSource.Link)" />
+    <Compile Include="@(MsBuildIntegrationSupport)" Link="%(MsBuildIntegrationSupport.Link)" />
+    <Compile Include="..\Rig.IntegrationTests\IntegrationTestSession.cs" Link="IntegrationTestSession.cs" />
+    <Content Include="..\..\src\Rig.Cli\builtin-rules.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

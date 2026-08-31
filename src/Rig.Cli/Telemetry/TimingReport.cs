@@ -28,14 +28,10 @@ internal static class TimingReport
             var pct = total > 0 ? entry.Elapsed.TotalSeconds / total * 100 : 0;
             var secs = entry.Elapsed.TotalSeconds;
             output.WriteLine(
-                $"  {entry.Name, -20} {FormatElapsed(entry.Elapsed), 8} {pct, 5:0.0}%  "
-                    + $"{FormatPercent(Average(inPhase, s => s.ProcessCpuPercent)), 8} "
-                    + $"{FormatPercent(Average(inPhase, s => s.SystemCpuPercent)), 8} "
-                    + $"{FormatGcPercent(inPhase, secs), 6}  "
-                    + $"{FormatBytes(Peak(inPhase, s => s.WorkingSetBytes)), 8} "
-                    + $"{FormatRate(DiskDelta(inPhase, s => s.AllocatedBytes), secs), 9}  "
-                    + $"{FormatBytes(DiskDelta(inPhase, s => s.DiskReadBytes)), 8} "
-                    + $"{FormatBytes(DiskDelta(inPhase, s => s.DiskWriteBytes)), 8}"
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"  {entry.Name, -20} {FormatElapsed(entry.Elapsed), 8} {pct, 5:0.0}%  {FormatPercent(Average(inPhase, s => s.ProcessCpuPercent)), 8} {FormatPercent(Average(inPhase, s => s.SystemCpuPercent)), 8} {FormatGcPercent(inPhase, secs), 6}  {FormatBytes(Peak(inPhase, s => s.WorkingSetBytes)), 8} {FormatRate(DiskDelta(inPhase, s => s.AllocatedBytes), secs), 9}  {FormatBytes(DiskDelta(inPhase, s => s.DiskReadBytes)), 8} {FormatBytes(DiskDelta(inPhase, s => s.DiskWriteBytes)), 8}"
+                )
             );
         }
 
@@ -99,7 +95,12 @@ internal static class TimingReport
     }
 
     public static string FormatElapsed(TimeSpan elapsed) =>
-        elapsed.TotalMinutes >= 1 ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s" : $"{elapsed.TotalSeconds:0.0}s";
+        elapsed.TotalMinutes >= 1
+            ? ((int)elapsed.TotalMinutes).ToString(CultureInfo.InvariantCulture)
+                + "m"
+                + elapsed.Seconds.ToString("00", CultureInfo.InvariantCulture)
+                + "s"
+            : elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + "s";
 
     // The phase whose [Start, End) contains the sample time, else "startup" (before any phase) / "tail".
     private static string PhaseAt(IReadOnlyList<PhaseTimings.PhaseEntry> entries, TimeSpan at)
@@ -173,7 +174,8 @@ internal static class TimingReport
         return first < 0 ? -1 : last - first;
     }
 
-    private static string FormatPercent(double percent) => double.IsNaN(percent) ? "n/a" : $"{percent:0}%";
+    private static string FormatPercent(double percent) =>
+        double.IsNaN(percent) ? "n/a" : percent.ToString("0", CultureInfo.InvariantCulture) + "%";
 
     // Share of the phase wall spent paused for GC: (GC pause-ms accrued in the phase) / phase-ms. A high
     // value on a low-cpu:self phase is the smoking gun that the phase is GC-bound, not compute-bound.
@@ -185,7 +187,7 @@ internal static class TimingReport
         }
 
         var pauseMs = samples[^1].GcPauseMs - samples[0].GcPauseMs;
-        return $"{Math.Max(val1: 0, val2: pauseMs / (seconds * 1000) * 100):0}%";
+        return Math.Max(val1: 0, val2: pauseMs / (seconds * 1000) * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
     }
 
     // Allocation throughput: bytes allocated during the phase / phase seconds, formatted as a byte rate.
@@ -194,8 +196,8 @@ internal static class TimingReport
 
     private static string FormatBytes(long bytes) =>
         bytes < 0 ? "n/a"
-        : bytes >= 1L << 30 ? $"{bytes / (double)(1L << 30):0.0}GB"
-        : $"{bytes / (double)(1L << 20):0}MB";
+        : bytes >= 1L << 30 ? (bytes / (double)(1L << 30)).ToString("0.0", CultureInfo.InvariantCulture) + "GB"
+        : (bytes / (double)(1L << 20)).ToString("0", CultureInfo.InvariantCulture) + "MB";
 
     private static double Mb(long bytes) => bytes / (double)(1L << 20);
 

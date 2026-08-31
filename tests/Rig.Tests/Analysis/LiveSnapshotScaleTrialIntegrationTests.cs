@@ -27,7 +27,7 @@ namespace Rig.Tests.Analysis;
 //   RIG_LIVE_TRIAL_EDITS=50
 //   RIG_LIVE_TRIAL_CHECKPOINTS=10,50
 //   RIG_LIVE_TRIAL_REPORT=artifacts/live-scale/trials/live-trial.jsonl
-//   dotnet run --project tests/Rig.IntegrationTests --no-build -- --maximum-parallel-tests 1 --treenode-filter "/*/*/LiveSnapshotScaleTrial/*"
+//   dotnet run --project tests/Rig.ManualIntegrationTests -- --maximum-parallel-tests 1 --treenode-filter "/*/*/LiveSnapshotScaleTrial/*"
 //
 // `snapshot` is deliberately rejected until the future same-binary engine arm exists. JSONL is appended
 // and flushed after every milestone; the sibling Markdown file is regenerated from JSONL and is never the

@@ -2,6 +2,7 @@ param(
     [string]$Configuration = "Release",
     [string]$ToolVersion = "",
     [switch]$SkipTests,
+    [switch]$FullTests,
     [switch]$SkipToolInstall
 )
 
@@ -35,19 +36,22 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE) - not testing/packing." }
 
     if (-not $SkipTests) {
-        # Keep the ordinary suite at its normal parallelism. The shared integration lane keeps every
-        # PerTestSession AnalyzedPlaygrounds consumer together so its expensive fixture is built once.
-        # Every other general MSBuild class gets a fresh process, then the resident/live lane gets its own.
+        # The local release gate is the parallel, MSBuild-free suite. It is intentionally the default:
+        # synthetic indexing and resident/live integration belong to the explicit full correctness gate.
         dotnet test $mainTestProject -c $Configuration --no-build --no-restore
         if ($LASTEXITCODE -ne 0) { throw "Main tests failed (exit $LASTEXITCODE) - not packing/installing." }
 
-        dotnet test $integrationTestProject -c $Configuration --no-build --no-restore -- --maximum-parallel-tests 1 --minimum-expected-tests 1
-        if ($LASTEXITCODE -ne 0) { throw "Shared integration tests failed (exit $LASTEXITCODE) - not packing/installing." }
+        if ($FullTests) {
+            # The shared integration lane builds its AnalyzedPlaygrounds fixture once. Independent
+            # correctness classes retain fresh-process isolation; resident/live tests own the last host.
+            dotnet test $integrationTestProject -c $Configuration --no-build --no-restore -- --maximum-parallel-tests 1 --minimum-expected-tests 1
+            if ($LASTEXITCODE -ne 0) { throw "Shared integration tests failed (exit $LASTEXITCODE) - not packing/installing." }
 
-        & $independentIntegrationTestScript -Configuration $Configuration
+            & $independentIntegrationTestScript -Configuration $Configuration
 
-        dotnet test $liveIntegrationTestProject -c $Configuration --no-build --no-restore -- --maximum-parallel-tests 1 --minimum-expected-tests 1
-        if ($LASTEXITCODE -ne 0) { throw "Live integration tests failed (exit $LASTEXITCODE) - not packing/installing." }
+            dotnet test $liveIntegrationTestProject -c $Configuration --no-build --no-restore -- --maximum-parallel-tests 1 --minimum-expected-tests 1
+            if ($LASTEXITCODE -ne 0) { throw "Live integration tests failed (exit $LASTEXITCODE) - not packing/installing." }
+        }
     }
     
     dotnet pack $toolProject `

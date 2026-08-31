@@ -23,7 +23,7 @@ namespace Rig.Tests.Analysis;
 //   $env:RIG_TRIAL_BUILD_CACHE="<a dtb-cache dir reused across all runs>"
 //   $env:RIG_INTERN_TRIAL_EDIT_FILE="<abs path to a .cs file in a HUB project>"  # picks cascade size
 //   $env:RIG_NO_INTERN="1"   # base arm; unset/anything else = interned arm
-//   dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/InternerMemoryTrial/*"
+//   dotnet run --project tests/Rig.ManualIntegrationTests -- --maximum-parallel-tests 1 --treenode-filter "/*/*/InternerMemoryTrial/*"
 //
 // Report goes to a FILE (RIG_INTERN_TRIAL_REPORT, appended as it goes) — TUnit does not surface
 // Console.WriteLine, and this program already lost an 8-minute run to that.

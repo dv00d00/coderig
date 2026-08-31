@@ -36,3 +36,4 @@ trace-*.txt
 
 # Deterministic LiveScaleGenerator outputs (the generator and seed manifest are tracked).
 artifacts/live-scale/
+artifacts/rider/

@@ -6,6 +6,20 @@ effect observations, and deployment attribution live in [README.md](README.md). 
 [docs/README.md](docs/README.md). Work tracking: [docs/backlog/](docs/backlog/README.md).
 This file is only the things that aren't obvious from those and that you'd otherwise re-derive.
 
+## Agent skills
+
+### Issue tracker
+
+Work is tracked as one Markdown card per issue under `docs/backlog/{todo,progress,done}`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Matt Pocock skills use the default five-role triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository. The canonical glossary is `docs/ubiquitous-language.md`; architectural decisions live under `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Current state — 2026-07-19
 
 - `main` is one local commit ahead of `origin/main`: HEAD `8498260f` preserves strong-name compilation
@@ -123,25 +137,29 @@ The rules that make this produce mergeable code, not plausible diffs:
 
 ## Build / test / ship
 
-- **Ship flow is `scripts/mini-ci.ps1`** — csharpier **format** (in place) → `dotnet build` → all tests →
-  pack → reinstall the global `rig` tool. Run it after any source change you intend to use from the CLI.
+- **Local ship flow is `scripts/mini-ci.ps1`** — csharpier **format** (in place) → `dotnet build` → the
+  parallel MSBuild-free suite (~30 s) → pack → reinstall the global `rig` tool. Use `-FullTests` to add
+  the shared, fresh-process MSBuild, and resident/live integration lanes before merging risky extraction,
+  indexing, workspace, or live changes. Run the local flow after any source change you intend to use from the CLI.
   **No need to format first / inline** — mini-ci formats the whole repo on publish as its first step (the
   repo is kept clean, so it only rewrites the files that drifted). `scripts/format.ps1 -Check` still gives a
   verify-only pass if you want one.
 - **Tests are TUnit on Microsoft.Testing.Platform, not vstest.** The ordinary suite and MSBuild-touching tests
-  are separate executables. The integration manifest classifies every slow class into one of three lanes:
-  shared `AnalyzedPlaygrounds` consumers, independent classes that each need a fresh process, or resident/live
-  tests. This keeps nested Buildalyzer/MSBuild state out of the main suite and prevents evaluated project state
-  crossing unrelated temporary roots. Focused commands are:
+  are separate executables. The integration manifest classifies every slow class into one of four lanes:
+  shared `AnalyzedPlaygrounds` consumers, independent correctness classes that each need a fresh process,
+  resident/live tests, or manual audits/spikes/scale trials excluded from release gates. This keeps nested
+  Buildalyzer/MSBuild state out of the main suite and prevents evaluated project state crossing unrelated
+  temporary roots. Focused commands are:
 
   ```bash
   dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"
   dotnet run --project tests/Rig.IntegrationTests --no-build -- --maximum-parallel-tests 1 --treenode-filter "/*/*/<ClassName>/*"
   dotnet run --project tests/Rig.IndependentIntegrationTests --no-build -- --maximum-parallel-tests 1 --treenode-filter "/*/*/<ClassName>/*"
   dotnet run --project tests/Rig.LiveIntegrationTests --no-build -- --maximum-parallel-tests 1 --treenode-filter "/*/*/<ClassName>/*"
+  dotnet run --project tests/Rig.ManualIntegrationTests -- --maximum-parallel-tests 1 --treenode-filter "/*/*/<ClassName>/*"
   ```
 
-  The full local gate is these four commands in order. All integration processes are single-worker; their
+  The explicit full gate (`scripts/mini-ci.ps1 -FullTests`) is these four commands in order. All integration processes are single-worker; their
   shared session hook also pins `SolutionAnalyzer` to one project worker and sets
   `MSBUILDDISABLENODEREUSE=1`. The independent runner validates the manifest, then starts one fresh process per
   class and requires at least one discovered test, so a stale class name cannot silently remove coverage:
@@ -153,7 +171,7 @@ The rules that make this produce mergeable code, not plausible diffs:
   dotnet test tests/Rig.LiveIntegrationTests/Rig.LiveIntegrationTests.csproj --no-build --no-restore -- --maximum-parallel-tests 1 --minimum-expected-tests 1
   ```
 
-  `mini-ci.ps1` enforces the same process boundaries on every OS. Add or move integration classes through
+  `mini-ci.ps1 -FullTests` enforces the same process boundaries on every OS. Add or move integration classes through
   `tests/Rig.IntegrationTests/MsBuildIntegrationSources.props`; its item type is the required lane choice.
   `dotnet test --filter` does NOT work (prints
   help, "Zero tests ran"). TUnit paths are `/Assembly/Namespace/Class/Test`; `*` wildcards each segment.
