@@ -1,3 +1,4 @@
+using System.Drawing;
 using JetBrains.DocumentModel;
 using JetBrains.ReSharper.Feature.Services.Daemon;
 using JetBrains.ReSharper.Psi.CSharp.Tree;
@@ -8,7 +9,8 @@ namespace CodeRig.Rider;
 [RegisterHighlighter(
     SeverityId,
     Layer = (HighlighterLayer)2001,
-    EffectType = EffectType.GUTTER_MARK,
+    EffectType = EffectType.GUTTER_MARK | EffectType.TEXT,
+    FontStyle = FontStyle.Bold,
     GutterMarkType = typeof(RigEffectGutterMarkType)
 )]
 [StaticSeverityHighlighting(
@@ -22,14 +24,14 @@ internal sealed class RigEffectHighlighting : IHighlighting
 {
     public const string SeverityId = "RigReachableEffect";
 
-    private readonly IMethodDeclaration _method;
+    private readonly IInvocationExpression _invocation;
     private readonly DocumentRange _range;
 
-    public RigEffectHighlighting(IMethodDeclaration method, DocumentRange range, FileEffectRow row)
+    public RigEffectHighlighting(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row)
     {
-        _method = method;
+        _invocation = invocation;
         _range = range;
-        ToolTip = $"rig: reaches {row.Family} · nearest depth {row.NearestDepth}";
+        ToolTip = $"rig: this call reaches {row.Family} · remaining depth {row.NearestDepth}";
         ErrorStripeToolTip = ToolTip;
     }
 
@@ -37,7 +39,7 @@ internal sealed class RigEffectHighlighting : IHighlighting
 
     public string ErrorStripeToolTip { get; }
 
-    public bool IsValid() => _method.IsValid();
+    public bool IsValid() => _invocation.IsValid();
 
     public DocumentRange CalculateRange() => _range;
 }

@@ -17,6 +17,8 @@ internal sealed record RiderFileEffectRequest(
 
 internal sealed record RiderFileEffectMethod(string SymbolId, string Family, int NearestDepth);
 
+internal sealed record RiderFileEffectCallSite(string EnclosingSymbolId, string TargetSymbolId, string Family, int NearestDepth);
+
 internal sealed record RiderFileEffectResponse(
     int Protocol,
     string Status,
@@ -26,6 +28,7 @@ internal sealed record RiderFileEffectResponse(
     long GraphGeneration,
     string SourceStatus,
     IReadOnlyList<RiderFileEffectMethod> Methods,
+    IReadOnlyList<RiderFileEffectCallSite> CallSites,
     string Reason
 );
 
@@ -63,7 +66,7 @@ internal static class RiderFileEffectResponder
     {
         if (capture.StaleReason is not null)
         {
-            return Answer(request, capture.GraphGeneration, SourceStale, [], capture.StaleReason);
+            return Answer(request, capture.GraphGeneration, SourceStale, [], [], capture.StaleReason);
         }
 
         if (capture.IndexedProjectContexts.Count == 0)
@@ -72,6 +75,7 @@ internal static class RiderFileEffectResponder
                 request,
                 capture.GraphGeneration,
                 SourceUnindexed,
+                [],
                 [],
                 "the requested physical file is not indexed in this resident generation"
             );
@@ -83,6 +87,7 @@ internal static class RiderFileEffectResponder
                 request,
                 capture.GraphGeneration,
                 SourceAmbiguous,
+                [],
                 [],
                 $"the requested physical file is indexed in {capture.IndexedProjectContexts.Count} project contexts"
             );
@@ -99,7 +104,22 @@ internal static class RiderFileEffectResponder
                 .OrderBy(method => method.SymbolId, StringComparer.Ordinal)
                 .ThenBy(method => method.Family, StringComparer.Ordinal)
                 .ToArray();
-        return Answer(request, capture.GraphGeneration, SourceExact, methods, "");
+        var callSites = model is null
+            ? []
+            : model
+                .CallSites.SelectMany(callSite =>
+                    callSite.Effects.Select(effect => new RiderFileEffectCallSite(
+                        callSite.EnclosingSymbolId,
+                        callSite.TargetSymbolId,
+                        effect.Family,
+                        effect.NearestDepth
+                    ))
+                )
+                .OrderBy(callSite => callSite.EnclosingSymbolId, StringComparer.Ordinal)
+                .ThenBy(callSite => callSite.TargetSymbolId, StringComparer.Ordinal)
+                .ThenBy(callSite => callSite.Family, StringComparer.Ordinal)
+                .ToArray();
+        return Answer(request, capture.GraphGeneration, SourceExact, methods, callSites, "");
     }
 
     internal static RiderFileEffectResponse Declined(RiderFileEffectRequest request, string reason) =>
@@ -112,6 +132,7 @@ internal static class RiderFileEffectResponder
             GraphGeneration: 0,
             SourceStale,
             Methods: [],
+            CallSites: [],
             reason
         );
 
@@ -157,6 +178,7 @@ internal static class RiderFileEffectResponder
         long graphGeneration,
         string sourceStatus,
         IReadOnlyList<RiderFileEffectMethod> methods,
+        IReadOnlyList<RiderFileEffectCallSite> callSites,
         string reason
     ) =>
         new(
@@ -168,6 +190,7 @@ internal static class RiderFileEffectResponder
             graphGeneration,
             sourceStatus,
             methods,
+            callSites,
             reason
         );
 

@@ -41,7 +41,7 @@ internal sealed class RigFileEffectHost
         _daemon = daemon;
     }
 
-    public bool TryGet(string filePath, string snapshotToken, out IReadOnlyList<FileEffectRow> rows)
+    public bool TryGet(string filePath, string snapshotToken, out FileEffectReadModel model)
     {
         var key = new CacheKey(filePath, snapshotToken);
         lock (_gate)
@@ -50,7 +50,7 @@ internal sealed class RigFileEffectHost
             {
                 if (entry.ExpiresUtc > DateTime.UtcNow)
                 {
-                    rows = entry.Rows;
+                    model = entry.Model;
                     return true;
                 }
 
@@ -58,7 +58,7 @@ internal sealed class RigFileEffectHost
             }
         }
 
-        rows = null;
+        model = null;
         return false;
     }
 
@@ -110,9 +110,11 @@ internal sealed class RigFileEffectHost
             }
 
             ValidateResponse(response, key, requestId);
-            var exact = string.Equals(response.Status, "ok", StringComparison.Ordinal)
+            var exact =
+                string.Equals(response.Status, "ok", StringComparison.Ordinal)
                 && string.Equals(response.SourceStatus, "exact", StringComparison.Ordinal);
-            var negative = string.Equals(response.Status, "declined", StringComparison.Ordinal)
+            var negative =
+                string.Equals(response.Status, "declined", StringComparison.Ordinal)
                 || (
                     string.Equals(response.Status, "ok", StringComparison.Ordinal)
                     && (
@@ -124,7 +126,7 @@ internal sealed class RigFileEffectHost
             if (!exact && !negative)
                 throw new InvalidDataException($"unsupported response status '{response.Status}/{response.SourceStatus}'");
 
-            var rows = exact
+            var methods = exact
                 ? (response.Methods ?? Array.Empty<FileEffectMethod>())
                     .Select(method =>
                     {
@@ -134,16 +136,40 @@ internal sealed class RigFileEffectHost
                     })
                     .ToArray()
                 : Array.Empty<FileEffectRow>();
+            var callSites = exact
+                ? (response.CallSites ?? Array.Empty<FileEffectCallSite>())
+                    .Select(callSite =>
+                    {
+                        if (
+                            string.IsNullOrWhiteSpace(callSite.EnclosingSymbolId)
+                            || string.IsNullOrWhiteSpace(callSite.TargetSymbolId)
+                            || string.IsNullOrWhiteSpace(callSite.Family)
+                        )
+                            throw new InvalidDataException("an exact response contained an incomplete call-site row");
+                        return new FileEffectCallSiteRow(
+                            callSite.EnclosingSymbolId,
+                            callSite.TargetSymbolId,
+                            callSite.Family,
+                            callSite.NearestDepth
+                        );
+                    })
+                    .ToArray()
+                : Array.Empty<FileEffectCallSiteRow>();
             var cacheDuration = exact ? ExactCacheDuration : NonExactCacheDuration;
-            Cache(key, rows, DateTime.UtcNow.Add(cacheDuration));
+            Cache(key, new FileEffectReadModel(methods, callSites), DateTime.UtcNow.Add(cacheDuration));
             Console.WriteLine(
                 $"[CodeRig Rider] file-effects {response.Status}/{response.SourceStatus}: "
-                    + $"rows={rows.Length}, generation={response.GraphGeneration}, file={key.FilePath}"
+                    + $"methods={methods.Length}, callSites={callSites.Length}, "
+                    + $"generation={response.GraphGeneration}, file={key.FilePath}"
             );
         }
         catch (Exception exception)
         {
-            Cache(key, Array.Empty<FileEffectRow>(), DateTime.UtcNow.Add(FailureCacheDuration));
+            Cache(
+                key,
+                new FileEffectReadModel(Array.Empty<FileEffectRow>(), Array.Empty<FileEffectCallSiteRow>()),
+                DateTime.UtcNow.Add(FailureCacheDuration)
+            );
             Console.WriteLine($"[CodeRig Rider] file-effects unavailable: {exception.GetType().Name}: {exception.Message}");
         }
         finally
@@ -154,11 +180,11 @@ internal sealed class RigFileEffectHost
         }
     }
 
-    private void Cache(CacheKey key, IReadOnlyList<FileEffectRow> rows, DateTime expiresUtc)
+    private void Cache(CacheKey key, FileEffectReadModel model, DateTime expiresUtc)
     {
         lock (_gate)
         {
-            _cache[key] = new CacheEntry(rows, expiresUtc, DateTime.UtcNow);
+            _cache[key] = new CacheEntry(model, expiresUtc, DateTime.UtcNow);
             if (_cache.Count <= CacheCapacity)
                 return;
 
@@ -296,14 +322,14 @@ internal sealed class RigFileEffectHost
 
     private sealed class CacheEntry
     {
-        public CacheEntry(IReadOnlyList<FileEffectRow> rows, DateTime expiresUtc, DateTime createdUtc)
+        public CacheEntry(FileEffectReadModel model, DateTime expiresUtc, DateTime createdUtc)
         {
-            Rows = rows;
+            Model = model;
             ExpiresUtc = expiresUtc;
             CreatedUtc = createdUtc;
         }
 
-        public IReadOnlyList<FileEffectRow> Rows { get; }
+        public FileEffectReadModel Model { get; }
         public DateTime ExpiresUtc { get; }
         public DateTime CreatedUtc { get; }
     }
@@ -357,6 +383,9 @@ internal sealed class RigFileEffectHost
         [DataMember(Name = "methods", IsRequired = true)]
         public FileEffectMethod[] Methods { get; set; }
 
+        [DataMember(Name = "callSites", IsRequired = true)]
+        public FileEffectCallSite[] CallSites { get; set; }
+
         [DataMember(Name = "reason", IsRequired = true)]
         public string Reason { get; set; }
     }
@@ -366,6 +395,22 @@ internal sealed class RigFileEffectHost
     {
         [DataMember(Name = "symbolId", IsRequired = true)]
         public string SymbolId { get; set; }
+
+        [DataMember(Name = "family", IsRequired = true)]
+        public string Family { get; set; }
+
+        [DataMember(Name = "nearestDepth", IsRequired = true)]
+        public int NearestDepth { get; set; }
+    }
+
+    [DataContract]
+    private sealed class FileEffectCallSite
+    {
+        [DataMember(Name = "enclosingSymbolId", IsRequired = true)]
+        public string EnclosingSymbolId { get; set; }
+
+        [DataMember(Name = "targetSymbolId", IsRequired = true)]
+        public string TargetSymbolId { get; set; }
 
         [DataMember(Name = "family", IsRequired = true)]
         public string Family { get; set; }

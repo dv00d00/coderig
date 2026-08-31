@@ -20,11 +20,7 @@ internal sealed class RigEffectCodeInsightsProvider : ICodeInsightsProvider
 
     public bool IsAvailableIn(ISolution solution) => true;
 
-    public void OnClick(
-        CodeInsightHighlightInfo highlightInfo,
-        ISolution solution,
-        CodeInsightsClickInfo clickInfo
-    ) { }
+    public void OnClick(CodeInsightHighlightInfo highlightInfo, ISolution solution, CodeInsightsClickInfo clickInfo) { }
 
     public void OnExtraActionClick(CodeInsightHighlightInfo highlightInfo, string actionId, ISolution solution) { }
 }

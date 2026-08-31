@@ -42,6 +42,7 @@ public sealed class RiderFileEffectTransportTests
                             GraphGeneration: 42,
                             RiderFileEffectResponder.SourceExact,
                             [new RiderFileEffectMethod("M:Fixture.Query", "sql", 1)],
+                            [new RiderFileEffectCallSite("M:Fixture.Query", "M:Fixture.Read", "sql", 0)],
                             Reason: ""
                         )
                     );
@@ -60,6 +61,7 @@ public sealed class RiderFileEffectTransportTests
             response.GraphGeneration.ShouldBe(42);
             response.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceExact);
             response.Methods.ShouldBe([new RiderFileEffectMethod("M:Fixture.Query", "sql", 1)]);
+            response.CallSites.ShouldBe([new RiderFileEffectCallSite("M:Fixture.Query", "M:Fixture.Read", "sql", 0)]);
         }
         finally
         {
@@ -95,6 +97,7 @@ public sealed class RiderFileEffectTransportTests
             wrongProtocol.ClientSnapshotToken.ShouldBe("protocol-token");
             wrongProtocol.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceStale);
             wrongProtocol.Methods.ShouldBeEmpty();
+            wrongProtocol.CallSites.ShouldBeEmpty();
             wrongProtocol.Reason.ShouldContain("protocol mismatch");
 
             var wrongDirectoryRequest = Request(otherDirectory, "directory-id", "directory-token", CleanFile);
@@ -167,6 +170,9 @@ public sealed class RiderFileEffectTransportTests
         effectful
             .Methods.Select(method => (method.SymbolId, method.Family, method.NearestDepth))
             .ShouldBe([("M:File.Command", "sql", 1), ("M:File.Ef", "sql", 1)]);
+        effectful
+            .CallSites.Select(callSite => (callSite.EnclosingSymbolId, callSite.TargetSymbolId, callSite.Family, callSite.NearestDepth))
+            .ShouldBe([("M:File.Command", "M:CommandOwner", "sql", 0), ("M:File.Ef", "M:EfOwner", "sql", 0)]);
         RiderFileEffectResponder
             .SqlSelector.Predicates.Select(predicate => predicate.Provider)
             .ShouldBe(["efcore", "db_connection", "db_reader", "db_command", "db_transaction", "yessql"]);
@@ -178,6 +184,7 @@ public sealed class RiderFileEffectTransportTests
         clean.Status.ShouldBe(StatusOk);
         clean.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceExact);
         clean.Methods.ShouldBeEmpty();
+        clean.CallSites.ShouldBeEmpty();
         clean.Reason.ShouldBe("");
 
         var builtBeforeFailures = builds;
@@ -188,6 +195,7 @@ public sealed class RiderFileEffectTransportTests
         unindexed.Status.ShouldBe(StatusOk);
         unindexed.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceUnindexed);
         unindexed.Methods.ShouldBeEmpty();
+        unindexed.CallSites.ShouldBeEmpty();
         unindexed.Reason.ShouldNotBeEmpty();
 
         var ambiguous = RiderFileEffectResponder.Respond(
@@ -197,6 +205,7 @@ public sealed class RiderFileEffectTransportTests
         ambiguous.Status.ShouldBe(StatusOk);
         ambiguous.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceAmbiguous);
         ambiguous.Methods.ShouldBeEmpty();
+        ambiguous.CallSites.ShouldBeEmpty();
         ambiguous.Reason.ShouldContain("2 project contexts");
 
         var stale = RiderFileEffectResponder.Respond(
@@ -206,6 +215,7 @@ public sealed class RiderFileEffectTransportTests
         stale.Status.ShouldBe(StatusOk);
         stale.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceStale);
         stale.Methods.ShouldBeEmpty();
+        stale.CallSites.ShouldBeEmpty();
         stale.Reason.ShouldBe("one project unreconciled");
         builds.ShouldBe(builtBeforeFailures, "non-exact source states must not force the reverse read model");
     }

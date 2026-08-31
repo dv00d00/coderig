@@ -59,6 +59,15 @@ public sealed class RiderFileEffectReadModelTests
                 (method.SymbolId, Family: method.Effects.Single().Family, NearestDepth: method.Effects.Single().NearestDepth)
             )
             .ShouldBe([("M:File.Alpha", "sql", 2), ("M:File.Zed", "sql", 1)]);
+        file.CallSites.Select(callSite =>
+                (
+                    callSite.EnclosingSymbolId,
+                    callSite.TargetSymbolId,
+                    Family: callSite.Effects.Single().Family,
+                    NearestDepth: callSite.Effects.Single().NearestDepth
+                )
+            )
+            .ShouldBe([("M:File.Alpha", "M:Bridge", "sql", 1), ("M:File.Zed", "M:ReadOwner", "sql", 0)]);
         index.Find(File).ShouldBeSameAs(file);
         if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
         {
@@ -72,6 +81,7 @@ public sealed class RiderFileEffectReadModelTests
         var clean = index.Find(CleanFile);
         clean.ShouldNotBeNull();
         clean!.Methods.ShouldBeEmpty();
+        clean.CallSites.ShouldBeEmpty();
         index.Find(CleanFile).ShouldBeSameAs(clean);
 
         index.Find("/repo/NoMethods.cs").ShouldNotBeNull().Methods.ShouldBeEmpty();
@@ -80,6 +90,37 @@ public sealed class RiderFileEffectReadModelTests
 
         var contractProperties = typeof(FileEffectMethod).GetProperties().Select(property => property.Name).ToArray();
         contractProperties.ShouldBe([nameof(FileEffectMethod.SymbolId), nameof(FileEffectMethod.Effects)]);
+        typeof(FileEffectCallSite)
+            .GetProperties()
+            .Select(property => property.Name)
+            .ShouldBe([
+                nameof(FileEffectCallSite.EnclosingSymbolId),
+                nameof(FileEffectCallSite.TargetSymbolId),
+                nameof(FileEffectCallSite.Effects),
+            ]);
+    }
+
+    [Test]
+    public void Direct_effect_call_site_is_projected_only_when_its_target_is_unambiguous()
+    {
+        var graph = Graph([
+            new CallEdge("M:File.Direct", "M:Db.Execute", "invocation", File, 10),
+            new CallEdge("M:File.Ambiguous", "M:Db.Execute", "invocation", File, 20),
+            new CallEdge("M:File.Ambiguous", "M:Log.Write", "invocation", File, 20),
+        ]);
+        var symbols = new[] { Method("M:File.Direct", File, 9), Method("M:File.Ambiguous", File, 19) };
+        var effects = new[]
+        {
+            new DerivedEffect("ado", "read", "db", "M:File.Direct", File, 10),
+            new DerivedEffect("ado", "read", "db", "M:File.Ambiguous", File, 20),
+        };
+
+        var model = FileEffectReadModelIndex
+            .Build(graph, symbols, effects, new FileEffectSelector("sql", [new EffectPredicate("ado")]))
+            .Find(File)
+            .ShouldNotBeNull();
+
+        model.CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId)).ShouldBe([("M:File.Direct", "M:Db.Execute")]);
     }
 
     [Test]

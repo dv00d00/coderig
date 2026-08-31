@@ -20,11 +20,7 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
     private readonly RigEffectCodeInsightsProvider _codeInsightsProvider;
     private readonly IconModel _codeInsightsIcon;
 
-    public RigEffectDaemonStage(
-        IDaemon daemon,
-        RigEffectCodeInsightsProvider codeInsightsProvider,
-        IconHost iconHost
-    )
+    public RigEffectDaemonStage(IDaemon daemon, RigEffectCodeInsightsProvider codeInsightsProvider, IconHost iconHost)
     {
         _host = new RigFileEffectHost(daemon);
         _codeInsightsProvider = codeInsightsProvider;
@@ -36,15 +32,7 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
         IContextBoundSettingsStore settings,
         DaemonProcessKind processKind,
         ICSharpFile file
-    ) =>
-        new Process(
-            process,
-            file,
-            _host,
-            _codeInsightsProvider,
-            _codeInsightsIcon,
-            processKind == DaemonProcessKind.VISIBLE_DOCUMENT
-        );
+    ) => new Process(process, file, _host, _codeInsightsProvider, _codeInsightsIcon, processKind == DaemonProcessKind.VISIBLE_DOCUMENT);
 
     private sealed class Process : IDaemonStageProcess
     {
@@ -101,7 +89,7 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
 
             var filePath = sourceFile.GetLocation().FullPath;
             var snapshotToken = SnapshotToken(sourceFile);
-            if (!_host.TryGet(filePath, snapshotToken, out var rows))
+            if (!_host.TryGet(filePath, snapshotToken, out var model))
             {
                 _host.Request(filePath, snapshotToken);
                 committer(new DaemonStageResult(Array.Empty<HighlightingInfo>()));
@@ -109,10 +97,11 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
             }
 
             var byDocId = new Dictionary<string, FileEffectRow>(StringComparer.Ordinal);
-            foreach (var row in rows)
+            foreach (var row in model.Methods)
                 byDocId[row.SymbolDocId] = row;
 
             var highlightings = new List<HighlightingInfo>();
+            var projectedMethods = 0;
             foreach (var method in _file.Descendants<IMethodDeclaration>())
             {
                 if (DaemonProcess.InterruptFlag)
@@ -125,7 +114,6 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                     continue;
 
                 var range = method.NameIdentifier.GetDocumentRange();
-                highlightings.Add(new HighlightingInfo(range, new RigEffectHighlighting(method, range, row)));
                 highlightings.Add(
                     new HighlightingInfo(
                         range,
@@ -140,15 +128,44 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                         )
                     )
                 );
+                projectedMethods++;
+            }
+
+            var callSites = new Dictionary<string, FileEffectCallSiteRow>(StringComparer.Ordinal);
+            foreach (var row in model.CallSites)
+                callSites[CallSiteKey(row.EnclosingSymbolDocId, row.TargetSymbolDocId)] = row;
+
+            var projectedCalls = 0;
+            foreach (var invocation in _file.Descendants<IInvocationExpression>())
+            {
+                if (DaemonProcess.InterruptFlag)
+                    throw new OperationCanceledException();
+
+                var enclosingMethod = invocation.GetContainingNode<IMethodDeclaration>();
+                if (enclosingMethod?.DeclaredElement is not IXmlDocIdOwner enclosingOwner)
+                    continue;
+                if (invocation.InvokedExpression is not IReferenceExpression invokedReference)
+                    continue;
+                if (invokedReference.Reference.Resolve().DeclaredElement is not IXmlDocIdOwner targetOwner)
+                    continue;
+                if (!callSites.TryGetValue(CallSiteKey(enclosingOwner.XMLDocId, targetOwner.XMLDocId), out var row))
+                    continue;
+
+                var range = invokedReference.NameIdentifier.GetDocumentRange();
+                highlightings.Add(new HighlightingInfo(range, new RigEffectHighlighting(invocation, range, row)));
+                projectedCalls++;
             }
 
             if (highlightings.Count > 0)
                 Console.WriteLine(
-                    $"[CodeRig Rider] projected methods={highlightings.Count / 2}, "
+                    $"[CodeRig Rider] projected methods={projectedMethods}, calls={projectedCalls}, "
                         + $"uiHighlightings={highlightings.Count}, file={filePath}"
                 );
             committer(new DaemonStageResult(highlightings));
         }
+
+        private static string CallSiteKey(string enclosingSymbolDocId, string targetSymbolDocId) =>
+            enclosingSymbolDocId + "\n" + targetSymbolDocId;
 
         private static string SnapshotToken(IPsiSourceFile sourceFile)
         {

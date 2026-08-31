@@ -7,9 +7,9 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>CodeRig.Rider</AssemblyName>
     <RootNamespace>CodeRig.Rider</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>CodeRig</Authors>
-    <Description>Projects resident CodeRig effect reachability into Rider Code Vision and the editor gutter.</Description>
+    <Description>Projects resident CodeRig effect reachability into Rider Code Vision and semantic call-site highlighting.</Description>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <BaseIntermediateOutputPath>obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
     <OutputPath>bin\$(MSBuildProjectName)\$(Configuration)\</OutputPath>

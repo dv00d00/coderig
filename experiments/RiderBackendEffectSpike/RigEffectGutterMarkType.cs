@@ -14,6 +14,5 @@ internal sealed class RigEffectGutterMarkType : IconGutterMarkType
 
     public override IAnchor Priority => BulbMenuAnchors.PermanentBackgroundItems;
 
-    public override IEnumerable<BulbMenuItem> GetBulbMenuItems(IHighlighter highlighter) =>
-        EmptyList<BulbMenuItem>.Instance;
+    public override IEnumerable<BulbMenuItem> GetBulbMenuItems(IHighlighter highlighter) => EmptyList<BulbMenuItem>.Instance;
 }
