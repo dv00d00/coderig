@@ -1,8 +1,8 @@
 # Rider file-effect read-model spike
 
 **Status:** PROGRESS — the generation-owned semantic file read model, official Rider contract research,
-interactive daemon/cache lifecycle spike, exact-SDK compile, and isolated manual Rider run are completed;
-real resident-store falsification and host transport remain.
+interactive daemon/cache lifecycle spike, exact-SDK compile, isolated manual Rider run, and CodeRig self-scale
+falsification are completed; structured host transport remains.
 
 ## Problem
 
@@ -37,11 +37,33 @@ the number of symbols in the file.
   extension rather than a claim this slice cannot cheaply support.
 - `LiveFactSource` owns a small two-selector memo for each immutable fact generation. Equivalent reordered
   predicate sets reuse one index; a new fact generation starts empty. The Rider artifact is not part of
-  `WarmQueryArtifacts` while its MedDBase build cost is unknown.
+  `WarmQueryArtifacts`: it is needed only when a Rider client connects, and self-calibration puts its lazy
+  generation cost at about 100 ms.
 - The source-file catalog distinguishes an indexed file with no methods (authoritative empty model) from an
   unknown file (`null`). Rig still transports no source coordinates.
-- Focused domain/live tests pass, and the ordinary MSBuild-free suite passes 1,178/1,178 on macOS. The
-  MedDBase store is not available on this host, so the scale/semantic falsification gate below remains open.
+- Focused domain/live tests pass, and the ordinary MSBuild-free suite passes 1,178/1,178 on macOS.
+
+## CodeRig self-calibration — 2026-08-31
+
+The reproducible manual harness is `RiderFileEffectReadModelSelfTrial`. It analyzes
+`RuntimeIntelligenceGraph.slnx` without test projects, warms the normal resident query artifacts, and then
+measures only the Rider reverse projection. Two consecutive runs (cold and warm design-time-build cache)
+produced:
+
+| Corpus / metric | Cold DTB cache | Warm DTB cache |
+|---|---:|---:|
+| Indexed files / symbols / references | 353 / 6,201 / 39,203 | same |
+| Normal resident query-artifact warm | 190 ms | 190 ms |
+| SQL effects / direct owners | 98 / 61 | same |
+| File read-model build | 101.51 ms | 99.31 ms |
+| Managed-memory delta | 5.91 MiB | 5.92 MiB |
+| Positive files / methods | 59 / 222 | same |
+| Warm file lookup (176,500 lookups) | 0.138 us average | 0.139 us average |
+| Forward/reverse semantic sample | 24 positive + 24 negative, 0 mismatches | same |
+
+The whole Roslyn/MSBuild setup was 38.06 s cold and 29.65 s warm, but that is resident-host startup/indexing,
+not file-query latency. The Rider model itself satisfies the spike shape on the repository we can reproduce
+and evolve with the code. Re-run this harness after traversal semantics or the model payload changes.
 
 The executable and protocol-shaped notes live in
 [`experiments/RiderEffectQuerySpike/README.md`](../../../experiments/RiderEffectQuerySpike/README.md). The actual
@@ -63,8 +85,8 @@ The exact-SDK backend plugin and runtime transcript are in
   `CSharpHighlightingTestBase` (or the current equivalent).
 - Filter `IPsiSourceFile.Properties.IsGeneratedFile` and `IsNonUserFile` before host lookup; a real Rider run
   showed daemon passes for generated files under `obj/`.
-- Before product work, measure reverse-build cost, eager/lazy projection cost, warm file lookup, and sampled
-  forward/reverse semantic agreement on the MedDBase resident generation.
+- Keep the CodeRig self-trial anti-vacuous: it must continue to find selected effects, positive and negative
+  methods, and zero sampled forward/reverse disagreements.
 
 ## Out of scope
 
@@ -76,5 +98,5 @@ The exact-SDK backend plugin and runtime transcript are in
 
 ## Exit
 
-Move this card to `done/` as either validated or discarded. Do not turn the prototype into a supported host
-interface until the real-store falsification gate passes.
+Move this card to `done/` as either validated or discarded after the structured host transport is proved.
+The read-model scale/semantic gate is now the reproducible CodeRig self-trial above.

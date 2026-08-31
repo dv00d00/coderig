@@ -229,6 +229,12 @@
       Namespace="Rig.Tests.Live"
       TestClass="LiveHazardCostTrial"
     />
+    <ManualIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\RiderFileEffectReadModelSelfTrial.cs"
+      Link="Live\RiderFileEffectReadModelSelfTrial.cs"
+      Namespace="Rig.Tests.Live"
+      TestClass="RiderFileEffectReadModelSelfTrial"
+    />
     <IndependentIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Live\LiveTransportTests.cs"
       Link="Live\LiveTransportTests.cs"

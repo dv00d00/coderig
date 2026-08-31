@@ -65,21 +65,24 @@ backend from current PSI declarations; rig does not transport source coordinates
   and disclosed dispatch heuristics remain limits.
 - The prototype uses the synchronous-cut traversal lens. Async handoffs and delivery edges would need a distinct
   traversal-mode/index key rather than being silently mixed into the same answer.
-- The prototype consumes an already materialized `FactGraphData` and symbol/effect collections. It does not yet
-  prove the memory or rebuild cost against the full MedDBase resident generation.
-- The prototype eagerly creates a read model for every source file. A measured resident-store trial should decide
-  whether that projection remains eager or becomes a lazy per-file cache over the one global reverse closure.
+- The prototype consumes an already materialized `FactGraphData` and symbol/effect collections. Its product-shaped
+  successor is now self-calibrated on `RuntimeIntelligenceGraph.slnx`; the Roslyn/MSBuild setup remains separate
+  from the generation-local projection measurement.
+- The model eagerly creates a read model for every source file. The CodeRig self-trial measured that projection
+  at ~100 ms / ~5.9 MiB over 353 files, so eager projection stays for now; a material self-baseline regression
+  is the trigger to reconsider a lazy per-file cache over the one global reverse closure.
 - No SQLite query belongs on Rider's UI thread or in a build-time `DiagnosticAnalyzer`. The intended host is an
   out-of-process resident index; Rider is a thin versioned adapter.
 
-## Next falsification gate
+## Reproducible falsification gate
 
-On a real resident MedDBase generation, measure separately:
+Run `RiderFileEffectReadModelSelfTrial` on the CodeRig solution and measure separately:
 
 1. one-time reverse-closure construction for a broad direct-effect selector;
 2. file projection memory and time, eager versus lazy;
 3. warm lookup latency for a large source file;
 4. agreement with exact forward one-hop reachability for a sampled set of positive and negative declarations.
 
-If the reverse closure or its projection cannot be maintained within the resident host's normal generation
-budget, discard this shape before building the Rider plugin.
+The 2026-08-31 baseline is ~100 ms and ~5.9 MiB for the projection over 353 files, with a 48-method
+positive/negative forward oracle sample reporting zero disagreements. If that materially regresses, discard or
+redesign this shape before extending the Rider plugin.
