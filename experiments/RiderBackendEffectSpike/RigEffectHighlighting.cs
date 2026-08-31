@@ -6,16 +6,24 @@ using JetBrains.TextControl.DocumentMarkup;
 
 namespace CodeRig.Rider;
 
+// EXPERIMENT (2026-08-31): the call-site style. Bold alone was indistinguishable from ordinary method
+// colouring, so this arm adds an explicit foreground per theme plus a solid underline in the same colour.
+// Revert to `EffectType.GUTTER_MARK | EffectType.TEXT` + bare Bold if it reads as noise.
 [RegisterHighlighter(
     SeverityId,
     Layer = (HighlighterLayer)2001,
-    EffectType = EffectType.GUTTER_MARK | EffectType.TEXT,
+    EffectType = EffectType.GUTTER_MARK | EffectType.TEXT | EffectType.SOLID_UNDERLINE,
     FontStyle = FontStyle.Bold,
+    ForegroundColor = "#8C4B00",
+    DarkForegroundColor = "#E8A33D",
+    EffectColor = "#8C4B00",
     GutterMarkType = typeof(RigEffectGutterMarkType)
 )]
+// EXPERIMENT arm 2: the group. GutterMarks got the gutter icon rendered but no text attribute reached the
+// Rider frontend; IdentifierHighlightings is the group semantic identifier colours travel in.
 [StaticSeverityHighlighting(
     Severity.INFO,
-    typeof(HighlightingGroupIds.GutterMarks),
+    typeof(HighlightingGroupIds.IdentifierHighlightings),
     OverlapResolve = OverlapResolveKind.NONE,
     AttributeId = SeverityId,
     ShowToolTipInStatusBar = false

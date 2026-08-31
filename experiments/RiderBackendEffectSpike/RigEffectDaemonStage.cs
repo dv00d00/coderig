@@ -1,6 +1,7 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using JetBrains.Application.Settings;
+using JetBrains.DocumentModel;
 using JetBrains.ReSharper.Daemon.CodeInsights;
 using JetBrains.ReSharper.Feature.Services.CSharp.Daemon;
 using JetBrains.ReSharper.Feature.Services.Daemon;
@@ -10,6 +11,7 @@ using JetBrains.ReSharper.Psi.CSharp.Tree;
 using JetBrains.ReSharper.Psi.Tree;
 using JetBrains.Rider.Backend.Platform.Icons;
 using JetBrains.Rider.Model;
+using JetBrains.Util;
 
 namespace CodeRig.Rider;
 
@@ -153,6 +155,11 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
 
                 var range = invokedReference.NameIdentifier.GetDocumentRange();
                 highlightings.Add(new HighlightingInfo(range, new RigEffectHighlighting(invocation, range, row)));
+
+                // Second rendering arm: an intra-text adornment anchored on the empty range right after the
+                // invoked name, so the hint reads `Foo sql·1(` rather than relying on a text attribute.
+                var hintRange = new DocumentRange(range.Document, new TextRange(range.EndOffset.Offset));
+                highlightings.Add(new HighlightingInfo(hintRange, new RigEffectInlayHighlighting(invocation, hintRange, row)));
                 projectedCalls++;
             }
 
