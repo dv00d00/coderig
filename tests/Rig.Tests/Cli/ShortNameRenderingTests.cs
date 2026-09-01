@@ -11,10 +11,7 @@ public sealed class ShortNameRenderingTests
     [Arguments("M:App.TypedListExtension.Fill``1(App.TypedList,``0)", "TypedListExtension.Fill<T>")]
     [Arguments("M:App.Router.fromConfig``2(``0,``1)", "Router.fromConfig<T, U>")]
     [Arguments("M:App.Cache`2.Get``1(`0,`1,``0)", "Cache<T, U>.Get<T>")]
-    [Arguments(
-        "M:App.Outer{System.String,System.Collections.Generic.List{System.Int32}}.Run()",
-        "Outer<String, List<Int32>>.Run"
-    )]
+    [Arguments("M:App.Outer{System.String,System.Collections.Generic.List{System.Int32}}.Run()", "Outer<String, List<Int32>>.Run")]
     [Arguments("M:App.Worker.Run(System.String)", "Worker.Run")]
     public void Short_names_render_generic_arity_as_csharp_placeholders(string symbolId, string expected)
     {

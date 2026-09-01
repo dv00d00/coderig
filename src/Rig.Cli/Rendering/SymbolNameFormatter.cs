@@ -65,8 +65,7 @@ internal static class SymbolNameFormatter
 
     // Tree/LLM-only companion to RawShortName. Pretty trees consume the preserved arity for concrete
     // substitution; compact LLM rows intentionally strip it rather than expanding placeholders.
-    internal static string RawShortNamePreservingLambda(string? symbolId) =>
-        PreserveLambdaSuffix(RawShortName(symbolId), symbolId);
+    internal static string RawShortNamePreservingLambda(string? symbolId) => PreserveLambdaSuffix(RawShortName(symbolId), symbolId);
 
     private static string PreserveLambdaSuffix(string label, string? symbolId)
     {

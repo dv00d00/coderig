@@ -37,13 +37,7 @@ public sealed class FileEffectLensCoverageTests
     {
         var lens = Project(
             requested: ["rpc", "db"],
-            methods:
-            [
-                new FileEffectMethod(
-                    "M:Demo.Work.Run",
-                    [new FileEffectAggregate("io", 2), new FileEffectAggregate("db", 0)]
-                ),
-            ]
+            methods: [new FileEffectMethod("M:Demo.Work.Run", [new FileEffectAggregate("io", 2), new FileEffectAggregate("db", 0)])]
         );
 
         lens.RequestedFamilies.ShouldBe(["db", "rpc"]);

@@ -97,7 +97,10 @@ public sealed class AnnotateCommandContractTests
     }
 
     private static IReadOnlyList<string> SourceRows(string output) =>
-        output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Where(line => line.StartsWith("src\t", StringComparison.Ordinal)).ToArray();
+        output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("src\t", StringComparison.Ordinal))
+            .ToArray();
 
     private sealed class AnnotateStore : IAsyncDisposable
     {

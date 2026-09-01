@@ -47,9 +47,7 @@ public sealed class FileEffectReadModelCorrectnessTests
 
         // FileEffectsQueryService deliberately supplies only canonical declared methods. The whole graph is
         // already resident, so lambda ownership must not depend on loading solution-wide lambda SymbolFacts.
-        var model = Build(graph, [Method(method, File, 5)], [Effect("ado", lambda, File, 18)], SqlSelector)
-            .Find(File)
-            .ShouldNotBeNull();
+        var model = Build(graph, [Method(method, File, 5)], [Effect("ado", lambda, File, 18)], SqlSelector).Find(File).ShouldNotBeNull();
 
         model.Methods.Select(Row).ShouldBe([(method, "sql", 0)]);
         model.CallSites.Select(Site).ShouldBe([(method, target, 18, "sql", 0)]);
@@ -111,7 +109,8 @@ public sealed class FileEffectReadModelCorrectnessTests
 
         var model = Build(graph, symbols, effects, selectors).Find(File).ShouldNotBeNull();
 
-        model.Methods.SelectMany(method => method.Effects.Select(effect => (method.SymbolId, effect.Family, effect.NearestDepth)))
+        model
+            .Methods.SelectMany(method => method.Effects.Select(effect => (method.SymbolId, effect.Family, effect.NearestDepth)))
             .ShouldBe([(caller, "io", 0), (caller, "rpc", 2)]);
         model.CallSites.Select(Site).ShouldBe([(caller, "", 20, "io", 0), (caller, bridge, 20, "rpc", 1)]);
     }
@@ -152,15 +151,12 @@ public sealed class FileEffectReadModelCorrectnessTests
         var graph = Graph([new CallEdge(caller, owner, EdgeKinds.Invocation, File, 30)], isolated);
         var symbols = new[] { Method(isolated, File, 5), Method(caller, File, 25), Method(owner, OwnersFile, 40) };
         var effects = new[] { Effect("file", isolated, File, 8), Effect("ado", owner, OwnersFile, 41) };
-        var selectors = new[]
-        {
-            new FileEffectSelector("io", [new EffectPredicate("file")]),
-            SqlSelector,
-        };
+        var selectors = new[] { new FileEffectSelector("io", [new EffectPredicate("file")]), SqlSelector };
 
         var model = Build(graph, symbols, effects, selectors).Find(File).ShouldNotBeNull();
 
-        model.Methods.SelectMany(method => method.Effects.Select(effect => (method.SymbolId, effect.Family, effect.NearestDepth)))
+        model
+            .Methods.SelectMany(method => method.Effects.Select(effect => (method.SymbolId, effect.Family, effect.NearestDepth)))
             .ShouldBe([(caller, "sql", 1), (isolated, "io", 0)]);
         model.CallSites.Select(Site).ShouldBe([(caller, owner, 30, "sql", 0), (isolated, "", 8, "io", 0)]);
 
@@ -189,19 +185,28 @@ public sealed class FileEffectReadModelCorrectnessTests
         (method.SymbolId, method.Effects.Single().Family, method.Effects.Single().NearestDepth);
 
     private static (string Enclosing, string Target, int Line, string Family, int Depth) Site(FileEffectCallSite site) =>
-        (
-            site.EnclosingSymbolId,
-            site.TargetSymbolId,
-            site.Line,
-            site.Effects.Single().Family,
-            site.Effects.Single().NearestDepth
-        );
+        (site.EnclosingSymbolId, site.TargetSymbolId, site.Line, site.Effects.Single().Family, site.Effects.Single().NearestDepth);
 
     private static DerivedEffect Effect(string provider, string owner, string file, int line) =>
         new(provider, "read", provider, owner, file, line);
 
     private static SymbolFact Method(string id, string file, int line) =>
-        new(id, SymbolKinds.Method, id, "Fixture", "T:Fixture", "", "", $"void {id}()", file, line, line + 20, "Fixture", false, BodyHash: id);
+        new(
+            id,
+            SymbolKinds.Method,
+            id,
+            "Fixture",
+            "T:Fixture",
+            "",
+            "",
+            $"void {id}()",
+            file,
+            line,
+            line + 20,
+            "Fixture",
+            false,
+            BodyHash: id
+        );
 
     private static SymbolFact Lambda(string id, string containing, string file, int line) =>
         new(id, "lambda", "lambda", "Fixture", containing, "", "", "lambda", file, line, line + 5, "Fixture", false, BodyHash: id);

@@ -184,14 +184,7 @@ public sealed class FileEffectReadModelIndex
                 }
 
                 var fileEffects = selectedByFilePerFamily[family].GetValueOrDefault(filePath) ?? [];
-                var sites = BuildCallSiteKeys(
-                    fileEdges,
-                    fileEffects,
-                    reached,
-                    reachedByAnyFamily,
-                    fileMethodIds,
-                    declaredOwnerByLambda
-                );
+                var sites = BuildCallSiteKeys(fileEdges, fileEffects, reached, reachedByAnyFamily, fileMethodIds, declaredOwnerByLambda);
                 foreach (var site in sites)
                 {
                     var depth = reached.TryGetValue(site.TargetSymbolId, out var known) ? known : 0;
@@ -207,11 +200,13 @@ public sealed class FileEffectReadModelIndex
                 // A direct effect owner is a depth-zero seed even when it has no incoming/outgoing edges and
                 // therefore never entered the traversal index. Lambda effects have already been folded to the
                 // outer declared method, so this also removes invisible lambda hops from editor-facing depth.
-                foreach (var owner in fileEffects
-                    .Select(effect => effect.EnclosingSymbolId)
-                    .Where(owner => owner is not null && fileMethodIds.Contains(owner))
-                    .Cast<string>()
-                    .Distinct(StringComparer.Ordinal))
+                foreach (
+                    var owner in fileEffects
+                        .Select(effect => effect.EnclosingSymbolId)
+                        .Where(owner => owner is not null && fileMethodIds.Contains(owner))
+                        .Cast<string>()
+                        .Distinct(StringComparer.Ordinal)
+                )
                 {
                     methodRows.Add((owner!, new FileEffectAggregate(families[family], 0)));
                 }
@@ -264,19 +259,15 @@ public sealed class FileEffectReadModelIndex
             // discover those nodes from preserved method-group/handoff edges without loading all lambda rows.
             // The marker only identifies the node; ownership still comes exclusively from semantic edges.
             .Concat(
-                graph.CallEdges
-                    .Where(edge => edge.Kind is EdgeKinds.MethodGroup or EdgeKinds.Handoff)
+                graph
+                    .CallEdges.Where(edge => edge.Kind is EdgeKinds.MethodGroup or EdgeKinds.Handoff)
                     .Select(edge => MonomorphizedNodeId.BaseOf(edge.Callee))
                     .Where(IsSyntheticLambdaNode)
             )
             .ToHashSet(StringComparer.Ordinal);
-        var parentsByLambda = graph.CallEdges
-            .Where(edge => edge.Kind is EdgeKinds.MethodGroup or EdgeKinds.Handoff)
-            .Select(edge => new
-            {
-                Parent = MonomorphizedNodeId.BaseOf(edge.Caller),
-                Lambda = MonomorphizedNodeId.BaseOf(edge.Callee),
-            })
+        var parentsByLambda = graph
+            .CallEdges.Where(edge => edge.Kind is EdgeKinds.MethodGroup or EdgeKinds.Handoff)
+            .Select(edge => new { Parent = MonomorphizedNodeId.BaseOf(edge.Caller), Lambda = MonomorphizedNodeId.BaseOf(edge.Callee) })
             .Where(edge => lambdaIds.Contains(edge.Lambda))
             .GroupBy(edge => edge.Lambda, StringComparer.Ordinal)
             .ToDictionary(
@@ -425,8 +416,7 @@ public sealed class FileEffectReadModelIndex
             .Where(group => group.Select(edge => edge.Callee).Distinct(StringComparer.Ordinal).Take(2).Count() == 1)
             .Where(group =>
                 group.All(edge =>
-                    !reachedByAnyFamily.Contains(edge.Callee)
-                    || (reached.TryGetValue(edge.Callee, out var targetDepth) && targetDepth == 0)
+                    !reachedByAnyFamily.Contains(edge.Callee) || (reached.TryGetValue(edge.Callee, out var targetDepth) && targetDepth == 0)
                 )
             )
             .ToDictionary(group => group.Key, group => group.First().Callee);

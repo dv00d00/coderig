@@ -199,11 +199,7 @@ internal static class AnnotateCommand
     // The line windows to render: --method spans when asked for, otherwise the single --from/--to range.
     // Diagnosis deliberately joins both halves of the shared artifact: Artifact.Methods is every declared
     // canonical method, while lens.Methods is the effectful subset rendered by web/editor/CLI alike.
-    private static WindowSelection SelectWindows(
-        Options opts,
-        FileEffectsQueryService.Artifact artifact,
-        FileEffectLens.LensModel lens
-    )
+    private static WindowSelection SelectWindows(Options opts, FileEffectsQueryService.Artifact artifact, FileEffectLens.LensModel lens)
     {
         if (string.IsNullOrWhiteSpace(opts.Method))
         {

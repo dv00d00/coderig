@@ -189,11 +189,7 @@ public sealed class RiderFileEffectReadModelTests
 
         model
             .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Line, site.Effects.Single().NearestDepth))
-            .ShouldBe([
-                ("M:File.Caller", "M:Owner", 10, 0),
-                ("M:File.Caller", "", 20, 0),
-                ("M:File.Caller", "M:Bridge", 20, 1),
-            ]);
+            .ShouldBe([("M:File.Caller", "M:Owner", 10, 0), ("M:File.Caller", "", 20, 0), ("M:File.Caller", "M:Bridge", 20, 1)]);
     }
 
     // The effect-derived arm keys off the effect's OWN FilePath, so an effect in the callee's body belongs to

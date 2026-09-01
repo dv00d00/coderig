@@ -55,12 +55,7 @@ public sealed class AnnotateLegibilityTests
         AnnotateCommand.WriteFactRows(output, lens);
 
         var nl = Environment.NewLine;
-        output
-            .ToString()
-            .ShouldBe(
-                $"method\t7\t14\tRun\tdb:1 io!\tM:Demo.Work.Run{nl}"
-                    + $"site\t10\tio!\tFile.WriteAllText{nl}"
-            );
+        output.ToString().ShouldBe($"method\t7\t14\tRun\tdb:1 io!\tM:Demo.Work.Run{nl}" + $"site\t10\tio!\tFile.WriteAllText{nl}");
     }
 
     private static FileEffectLens.LensModel Lens()

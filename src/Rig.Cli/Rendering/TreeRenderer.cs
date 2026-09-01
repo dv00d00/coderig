@@ -399,8 +399,7 @@ internal static class TreeRenderer
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
         // A folded single-impl hop shows «via IFoo» (the collapsed interface) in place of the dispatch tag.
         var dispatch =
-            node.FoldedVia is not null
-                ? $" «via {PrettyGenericName(node.FoldedVia, declaringArgs: declaringConcrete, methodArgs: null)}»"
+            node.FoldedVia is not null ? $" «via {PrettyGenericName(node.FoldedVia, declaringArgs: declaringConcrete, methodArgs: null)}»"
             : node.EdgeKind is "impl-dispatch" or "override-dispatch"
                 ? (children.Count > 1 ? $" «{dispatchTag} ×{children.Count} fan-out»" : $" «{dispatchTag}»")
             // Delegate-field join: a real sync call, so it gets the dispatch marker not the ⤳ handoff glyph.
