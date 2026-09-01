@@ -1,0 +1,22 @@
+{
+  "name": "rig-web-client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-diff-view": "3.3.3",
+    "react-dom": "19.2.8",
+    "refractor": "5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
+  }
+}

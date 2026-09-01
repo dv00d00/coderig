@@ -48,10 +48,12 @@ function setBusy(on) {
   refs.impact.classList.toggle("busy", on);
   refs.hotspots.classList.toggle("busy", on);
   refs.file.classList.toggle("busy", on);
+  refs.review.classList.toggle("busy", on);
   refs.go.disabled = on;
   refs.impactGo.disabled = on;
   refs.hotspotGo.disabled = on;
   refs.fileGo.disabled = on;
+  refs.reviewGo.disabled = on;
 }
 
 // ---- data actions ---------------------------------------------------------------------------------------
@@ -176,6 +178,97 @@ async function pageFile(direction) {
       ? source.endLine + 1
       : Math.max(1, source.startLine - FILE_PAGE_SIZE);
   await openFile(get().filePath, start + 30);
+}
+
+let fileDiffModule;
+async function mountFileDiff(data) {
+  fileDiffModule ||= await import("./assets/file-diff.js");
+  fileDiffModule.mountFileDiff(refs.review, data, {
+    onOpenTree: (id) => actions.openFileTree(id),
+  });
+}
+
+function reviewDefaults(file = "") {
+  const s = get();
+  const head = s.reviewHead || activeStoreId(s) || "";
+  const base =
+    s.reviewBase ||
+    (s.runs.find((run) => run.storeId !== head) || {}).storeId ||
+    "";
+  return { reviewBase: base, reviewHead: head, reviewFile: file || s.reviewFile };
+}
+
+async function loadFileDiff(file = get().reviewFile) {
+  const { reviewBase: base, reviewHead: head } = get();
+  if (!base || !head) {
+    status("pick a base and a head store", true);
+    return;
+  }
+  if (base === head) {
+    status("base and head are the same store", true);
+    return;
+  }
+  if (!file) {
+    status("choose an indexed file", true);
+    return;
+  }
+
+  set({ appMode: "review", reviewFile: file, reviewData: null, reviewError: "" });
+  refs.reviewFile.value = file;
+  setBusy(true);
+  status("building semantic file diff…");
+  try {
+    const data = await api.fileDiff(base, head, file);
+    set({ reviewData: data, reviewError: "" });
+    status(
+      `${baseName(file)} · ${data.base.effects.sites.length} base marks · ${data.head.effects.sites.length} head marks`,
+    );
+  } catch (error) {
+    set({ reviewData: null, reviewError: error.message });
+    status("review: " + error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function openReviewQuery(value) {
+  const query = value.trim();
+  if (!query) {
+    status("enter a file name or path", true);
+    return;
+  }
+  const head = get().reviewHead;
+  if (!head) {
+    status("pick a head store first", true);
+    return;
+  }
+  setBusy(true);
+  status("finding indexed file in head…");
+  try {
+    const result = await api.files(head, query, 50);
+    const exact = result.files.find(
+      (file) => file.path === query || file.name.toLowerCase() === query.toLowerCase(),
+    );
+    const selected = exact || result.files[0];
+    if (!selected) {
+      status(`no indexed file matches '${query}'`, true);
+      return;
+    }
+    await loadFileDiff(selected.path);
+  } catch (error) {
+    status("review files: " + error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function openReviewFile(file) {
+  const patch = reviewDefaults(file);
+  set({ appMode: "review", ...patch });
+  refs.reviewBase.value = patch.reviewBase;
+  refs.reviewHead.value = patch.reviewHead;
+  refs.reviewFile.value = patch.reviewFile;
+  if (patch.reviewBase && patch.reviewHead) loadFileDiff(file);
 }
 async function loadHazards() {
   const s = get();
@@ -439,6 +532,8 @@ const actions = {
   openFile,
   openFileQuery,
   pageFile,
+  openReviewFile,
+  openReviewQuery,
   openFileTree(id) {
     set({ appMode: "tree", from: id });
     refs.from.value = id;
@@ -534,6 +629,9 @@ const actions = {
     } else if (get().appMode === "file" && get().filePath) {
       set({ fileEffects: null, fileSource: null, fileError: "" });
       openFile(get().filePath, get().fileStart + 30);
+    } else if (get().appMode === "review" && get().reviewFile) {
+      set({ reviewData: null, reviewError: "" });
+      loadFileDiff();
     } else if (get().treeFrom) openTree(get().treeFrom);
     else status("cache purged");
   },
@@ -545,6 +643,14 @@ const actions = {
     if (m === "hotspots" && !get().hotspotData) loadHotspots();
     if (m === "file" && get().filePath && (!get().fileEffects || !get().fileSource))
       openFile(get().filePath, get().fileStart + 30);
+    if (m === "review") {
+      const patch = reviewDefaults();
+      set(patch);
+      refs.reviewBase.value = patch.reviewBase;
+      refs.reviewHead.value = patch.reviewHead;
+      refs.reviewFile.value = patch.reviewFile;
+      if (patch.reviewFile && !get().reviewData) loadFileDiff(patch.reviewFile);
+    }
   },
   loadHotspots,
   setHotspotSort(sort, reload) {
@@ -579,6 +685,9 @@ const actions = {
   },
   setImpactStore(which, id) {
     set(which === "base" ? { impactBase: id } : { impactHead: id });
+  },
+  setReviewStore(which, id) {
+    set(which === "base" ? { reviewBase: id, reviewData: null } : { reviewHead: id, reviewData: null });
   },
   setImpactFilter(v) {
     set({ impactFilter: v });
@@ -915,6 +1024,8 @@ function applyAppMode(m) {
   refs.tree.classList.toggle("hidden", m !== "tree");
   refs.fileToolbar.classList.toggle("hidden", m !== "file");
   refs.file.classList.toggle("hidden", m !== "file");
+  refs.reviewToolbar.classList.toggle("hidden", m !== "review");
+  refs.review.classList.toggle("hidden", m !== "review");
   refs.impactToolbar.classList.toggle("hidden", m !== "impact");
   refs.impact.classList.toggle("hidden", m !== "impact");
   refs.refsToolbar.classList.toggle("hidden", m !== "refs");
@@ -939,6 +1050,10 @@ function populateImpactStores(s) {
   mount(refs.impactHead, opts("head…"));
   refs.impactBase.value = s.impactBase;
   refs.impactHead.value = s.impactHead;
+  mount(refs.reviewBase, opts("base…"));
+  mount(refs.reviewHead, opts("head…"));
+  refs.reviewBase.value = s.reviewBase;
+  refs.reviewHead.value = s.reviewHead;
 }
 
 // ---- sync uncontrolled inputs from state (once, after URL restore) --------------------------------------
@@ -964,6 +1079,9 @@ function syncControls(s) {
   refs.hotspotNoLambdas.querySelector("input").checked = s.hotspotNoLambdas;
   refs.hotspotIntrinsic.querySelector("input").checked = s.hotspotIntrinsic;
   refs.fileQuery.value = s.filePath;
+  refs.reviewBase.value = s.reviewBase;
+  refs.reviewHead.value = s.reviewHead;
+  refs.reviewFile.value = s.reviewFile;
   applyAppMode(s.appMode);
 }
 
@@ -993,6 +1111,25 @@ function setupWatches() {
     (s) => [s.fileEffects, s.fileSource, s.filePath, s.fileError, s.appMode],
     (s) => {
       if (s.appMode === "file") mount(refs.file, FileEffectsView(s, actions));
+    },
+  );
+  watch(
+    store,
+    (s) => [s.reviewData, s.reviewError, s.appMode],
+    (s) => {
+      if (s.appMode !== "review") return;
+      if (s.reviewError) {
+        fileDiffModule?.unmountFileDiff(refs.review);
+        refs.review.textContent = "Review unavailable: " + s.reviewError;
+      } else if (s.reviewData) {
+        mountFileDiff(s.reviewData).catch((error) => {
+          fileDiffModule?.unmountFileDiff(refs.review);
+          refs.review.textContent = "Diff renderer failed: " + error.message;
+        });
+      } else {
+        fileDiffModule?.unmountFileDiff(refs.review);
+        refs.review.textContent = "Choose two indexed revisions and a file.";
+      }
     },
   );
   watch(
@@ -1114,6 +1251,9 @@ function setupWatches() {
     syncControls(get());
     if (patch.appMode === "file") {
       if (patch.filePath) openFile(patch.filePath, patch.fileStart + 30);
+    } else if (patch.appMode === "review") {
+      if (patch.reviewBase && patch.reviewHead && patch.reviewFile)
+        loadFileDiff(patch.reviewFile);
     } else if (patch.appMode === "impact") {
       if (patch.impactBase && patch.impactHead) loadImpact();
     } else if (patch.appMode === "refs") {

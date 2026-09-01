@@ -38,3 +38,21 @@ effect families they reach.
   cold-load timing and a more compact persistent artifact are follow-on calibration, not hidden.
 - Concrete witness paths are not part of this response. A link opens the existing tree at the method/callee;
   witness-path interaction remains a later slice.
+
+## Semantic review proof
+
+The browser now has a renderer-neutral one-file diff contract and a small TypeScript/React island:
+
+- `GET /api/file-diff?base=<store>&head=<store>&file=<indexed path>` returns the exact Git patch, exact
+  base/head source blobs, and the existing file-effect projection for each immutable store.
+- Review joins deleted rows to base annotations and inserted/head rows to head annotations. Effect glyphs
+  disclose family/depth on hover, expand into a line widget, and pivot into the existing Tree by DocID.
+- The island uses `react-diff-view` for unified/split Git hunks and modern `refractor` for C# tokenization;
+  the rest of the explorer remains the existing plain-ES-module application.
+- Stores indexed from a dirty tree fail closed: Git cannot reproduce the source text that owns those frozen
+  semantic line coordinates.
+
+The proof deliberately requires the same indexed physical path on both sides. Added/deleted/renamed-file
+mapping, multi-file review navigation, hunk expansion, and provider adapters for remote GitHub/GitLab patches
+remain product follow-ons. The renderer survey and decision record live in
+[`docs/spikes/browser-diff-renderer-library-survey.md`](../../spikes/browser-diff-renderer-library-survey.md).

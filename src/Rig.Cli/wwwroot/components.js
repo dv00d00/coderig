@@ -334,7 +334,17 @@ export function FileEffectsView(s, actions) {
     h(
       "div",
       { class: "file-lens-head" },
-      h("div", {}, h("strong", {}, baseName(effects.file)), h("span", { title: effects.file }, effects.file)),
+      h(
+        "div",
+        {},
+        h("strong", {}, baseName(effects.file)),
+        h("span", { title: effects.file }, effects.file),
+        h(
+          "button",
+          { class: "file-review-link", onClick: () => actions.openReviewFile(effects.file) },
+          "review diff ↗",
+        ),
+      ),
       h("div", { class: "file-summary" }, `${effects.methods.length} effectful methods · ${siteCount} marked calls · ${provenance}`),
     ),
     h(
@@ -1593,6 +1603,7 @@ export function Shell(actions) {
     { class: "appmode" },
     modeBtn("tree", "Tree"),
     modeBtn("file", "File"),
+    modeBtn("review", "Review"),
     modeBtn("impact", "Impact"),
     modeBtn("hotspots", "Hotspots"),
     modeBtn("refs", "Refs"),
@@ -1750,6 +1761,33 @@ export function Shell(actions) {
   refs.fileGo = h("button", { class: "go", onClick: () => actions.openFileQuery(refs.fileQuery.value) }, "Open file");
   refs.fileToolbar = h("div", { class: "controls impact-toolbar hidden" }, fileSearchWrap, refs.fileGo);
 
+  // One-file semantic review: same indexed-file lookup as File view, but projected onto a base/head Git
+  // patch by the React island. Stores stay explicit because the two sets of line coordinates are distinct.
+  refs.reviewBase = h(
+    "select",
+    { title: "base store", onChange: (e) => actions.setReviewStore("base", e.target.value) },
+    h("option", { value: "" }, "base…"),
+  );
+  refs.reviewHead = h(
+    "select",
+    { title: "head store", onChange: (e) => actions.setReviewStore("head", e.target.value) },
+    h("option", { value: "" }, "head…"),
+  );
+  refs.reviewFile = h("input", {
+    placeholder: "indexed file name or path…",
+    autocomplete: "off",
+  });
+  refs.reviewGo = h("button", { class: "go", onClick: () => actions.openReviewQuery(refs.reviewFile.value) }, "Review");
+  refs.reviewToolbar = h(
+    "div",
+    { class: "controls impact-toolbar hidden" },
+    refs.reviewBase,
+    h("span", { class: "arrow" }, "→"),
+    refs.reviewHead,
+    refs.reviewFile,
+    refs.reviewGo,
+  );
+
   // impact toolbar (base/head store pickers + Diff + filter) — hidden until appMode=impact
   refs.impactBase = h(
     "select",
@@ -1859,6 +1897,7 @@ export function Shell(actions) {
   refs.refs = h("div", { class: "tree impact-wrap hidden" }); // refs report content area (mirrors refs.impact)
   refs.hotspots = h("div", { class: "tree impact-wrap hidden" });
   refs.file = h("div", { class: "file-view hidden" });
+  refs.review = h("div", { class: "tree impact-wrap hidden" });
   refs.callers = h("div", { class: "callers-mount" }); // reverse-nav drawer mounts here (overlays the tree area)
   refs.crumbs = h("div", { class: "crumbs-mount" }); // pivot-history breadcrumb trail mounts here (see BreadcrumbTrail)
   const section = h(
@@ -1867,12 +1906,14 @@ export function Shell(actions) {
     refs.crumbs,
     refs.treeToolbar,
     refs.fileToolbar,
+    refs.reviewToolbar,
     refs.impactToolbar,
     refs.refsToolbar,
     refs.hotspotToolbar,
     refs.statusbar,
     refs.tree,
     refs.file,
+    refs.review,
     refs.impact,
     refs.refs,
     refs.hotspots,

@@ -27,12 +27,18 @@ export const store = createStore({
   eps: [], // entry points for the active store
   hazardMarks: null, // /api/hazards response (array of {methodId,type,confidence,sites}) for the current tree
   // impact mode (store-vs-store diff)
-  appMode: "tree", // tree | file | impact | refs | hotspots  (top-level view)
+  appMode: "tree", // tree | file | review | impact | refs | hotspots  (top-level view)
   filePath: "", // exact path from /api/files
   fileStart: 1, // first source line in the current file page
   fileEffects: null, // immutable semantic read model for filePath
   fileSource: null, // provenance-aware source page
   fileError: "",
+  // one-file semantic review (exact Git patch + annotations from both immutable stores)
+  reviewBase: "",
+  reviewHead: "",
+  reviewFile: "",
+  reviewData: null,
+  reviewError: "",
   impactBase: "", // base store id
   impactHead: "", // head store id
   impactAsync: false, // --async for the diff: walk async/scheduled handoffs (changes the diff → refetch)
@@ -101,6 +107,9 @@ export const querySlice = (s) => [
   s.appMode,
   s.filePath,
   s.fileStart,
+  s.reviewBase,
+  s.reviewHead,
+  s.reviewFile,
   s.impactBase,
   s.impactHead,
   s.impactAsync,
@@ -132,6 +141,11 @@ export function serializeUrl(s = get()) {
     p.set("app", "file");
     if (s.filePath) p.set("file", s.filePath);
     if (s.fileStart > 1) p.set("line", String(s.fileStart));
+  } else if (s.appMode === "review") {
+    p.set("app", "review");
+    if (s.reviewBase) p.set("base", s.reviewBase);
+    if (s.reviewHead) p.set("head", s.reviewHead);
+    if (s.reviewFile) p.set("file", s.reviewFile);
   } else if (s.appMode === "impact") {
     p.set("app", "impact");
     if (s.impactBase) p.set("ibase", s.impactBase);
@@ -187,15 +201,20 @@ export function readUrl(runs, search = location.search) {
     appMode:
       p.get("app") === "file"
         ? "file"
-        : p.get("app") === "impact"
-          ? "impact"
-          : p.get("app") === "refs"
-          ? "refs"
-          : p.get("app") === "hotspots"
-            ? "hotspots"
-            : "tree",
+        : p.get("app") === "review"
+          ? "review"
+          : p.get("app") === "impact"
+            ? "impact"
+            : p.get("app") === "refs"
+              ? "refs"
+              : p.get("app") === "hotspots"
+                ? "hotspots"
+                : "tree",
     filePath: p.get("file") || "",
     fileStart: Math.max(1, Number.parseInt(p.get("line") || "1", 10) || 1),
+    reviewBase: runs.some((r) => r.storeId === p.get("base")) ? p.get("base") : "",
+    reviewHead: runs.some((r) => r.storeId === p.get("head")) ? p.get("head") : "",
+    reviewFile: p.get("file") || "",
     impactBase: runs.some((r) => r.storeId === p.get("ibase"))
       ? p.get("ibase")
       : "",

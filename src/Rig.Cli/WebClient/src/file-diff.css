@@ -1,0 +1,203 @@
+.rig-diff-island {
+  color: var(--fg);
+  background: var(--bg);
+  min-width: 0;
+}
+
+.rig-diff-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  background: var(--panel);
+}
+
+.rig-diff-head > div,
+.rig-diff-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.rig-diff-head span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.rig-diff-summary button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  color: var(--muted);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.rig-diff-summary button.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.rig-diff-island .diff {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  --diff-background-color: var(--bg);
+  --diff-text-color: var(--fg);
+  --diff-gutter-insert-background-color: color-mix(in srgb, #2da44e 22%, var(--panel));
+  --diff-gutter-insert-text-color: var(--muted);
+  --diff-gutter-delete-background-color: color-mix(in srgb, #cf222e 22%, var(--panel));
+  --diff-gutter-delete-text-color: var(--muted);
+  --diff-code-insert-background-color: color-mix(in srgb, #2da44e 14%, var(--bg));
+  --diff-code-delete-background-color: color-mix(in srgb, #cf222e 14%, var(--bg));
+  --diff-code-insert-edit-background-color: color-mix(in srgb, #2da44e 30%, var(--bg));
+  --diff-code-delete-edit-background-color: color-mix(in srgb, #cf222e 30%, var(--bg));
+}
+
+.rig-diff-island .diff-code {
+  width: auto;
+}
+
+.rig-diff-island .token.comment,
+.rig-diff-island .token.prolog,
+.rig-diff-island .token.doctype,
+.rig-diff-island .token.cdata {
+  color: var(--sx-comment);
+}
+
+.rig-diff-island .token.keyword,
+.rig-diff-island .token.operator,
+.rig-diff-island .token.boolean {
+  color: var(--sx-keyword);
+}
+
+.rig-diff-island .token.class-name,
+.rig-diff-island .token.builtin,
+.rig-diff-island .token.function {
+  color: var(--sx-type);
+}
+
+.rig-diff-island .token.string,
+.rig-diff-island .token.char {
+  color: var(--sx-string);
+}
+
+.rig-diff-island .token.number,
+.rig-diff-island .token.constant {
+  color: var(--sx-number);
+}
+
+.rig-diff-island .token.annotation,
+.rig-diff-island .token.attr-name {
+  color: var(--sx-attr);
+}
+
+.rig-diff-island .diff-gutter {
+  width: 7.25rem;
+  min-width: 7.25rem;
+}
+
+.rig-diff-gutter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.rig-diff-mark-button {
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.rig-diff-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.12rem;
+}
+
+.rig-diff-mark {
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.rig-diff-mark.depth-0 {
+  color: var(--danger);
+}
+
+.rig-diff-mark.depth-2,
+.rig-diff-mark.depth-3 {
+  opacity: 0.66;
+}
+
+.rig-diff-widget {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  color: var(--fg);
+  background: var(--panel);
+  border-block: 1px solid var(--border);
+}
+
+.rig-diff-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.32rem 0.55rem;
+  color: var(--fg);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.rig-diff-path:hover {
+  border-color: var(--accent);
+}
+
+.rig-diff-effect {
+  border-radius: 999px;
+  padding: 0.08rem 0.4rem;
+  color: var(--accent);
+  background: var(--chip);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.rig-diff-open {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.rig-diff-empty {
+  padding: 2rem;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .rig-diff-head,
+  .rig-diff-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rig-diff-island .diff-gutter {
+    width: 5.5rem;
+    min-width: 5.5rem;
+  }
+}

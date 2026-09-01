@@ -212,4 +212,11 @@ export const api = {
   // Source may come from the working tree and therefore stays deliberately outside the client cache.
   fileSource: (explicitStore, file, start, count) =>
     getJson("/api/file-source" + qs({ store: explicitStore, file, start, count })),
+  // Two immutable stores + a validated indexed file produce an exact Git patch and store-native old/new
+  // annotations. The derivation version covers the semantic payload; commit-scoped stores cover source.
+  fileDiff: (base, head, file) =>
+    cached(
+      `file-diff|${base}|${head}|${file}`,
+      "/api/file-diff" + qs({ base, head, file }),
+    ),
 };

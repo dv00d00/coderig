@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>rig — explorer</title>
+    <link rel="stylesheet" href="./assets/file-diff.css" />
     <style>
       /* Semantic design tokens — the ONLY place colors are defined. data-theme on <html> selects the palette
          (set by the switcher); falls back to the OS preference. Components reference var(--x), never raw hex. */
@@ -1147,6 +1148,16 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+      .file-review-link {
+        flex: 0 0 auto;
+        margin-left: 10px;
+        border: 0;
+        padding: 0;
+        color: var(--accent);
+        background: transparent;
+        cursor: pointer;
+        font: inherit;
       }
       .file-summary {
         flex: 0 0 auto;

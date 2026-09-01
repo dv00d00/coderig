@@ -58,6 +58,7 @@ internal static class RigWebHost
         app.MapRefs(workingDirectory); //    /api/refs    — unused / usage assembly-reference analysis
         app.MapSource(workingDirectory); //  /api/source  — one symbol's declaration source (by symbol id ONLY)
         app.MapFileEffects(workingDirectory); // /api/files + /api/file-* — indexed-file semantic lens
+        app.MapFileDiff(workingDirectory); // /api/file-diff — exact Git patch + base/head file-effect annotations
         // SPA fallback: any non-/api, non-file route serves index.html so client-side routing works.
         app.MapFallbackToFile("index.html");
         return app;
