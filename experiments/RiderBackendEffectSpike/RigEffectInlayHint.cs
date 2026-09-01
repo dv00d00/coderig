@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using JetBrains.Application.Parts;
@@ -10,6 +10,7 @@ using JetBrains.ProjectModel;
 using JetBrains.ReSharper.Feature.Services.Daemon;
 using JetBrains.ReSharper.Feature.Services.InlayHints;
 using JetBrains.ReSharper.Psi.CSharp.Tree;
+using JetBrains.ReSharper.Psi.Tree;
 using JetBrains.TextControl.DocumentMarkup;
 using JetBrains.TextControl.DocumentMarkup.Adornments;
 using JetBrains.UI.RichText;
@@ -32,21 +33,44 @@ namespace CodeRig.Rider;
 )]
 internal sealed class RigEffectInlayHighlighting : IInlayHintWithDescriptionHighlighting
 {
-    private readonly IInvocationExpression _invocation;
+    private readonly ITreeNode _anchor;
     private readonly DocumentRange _range;
 
-    public RigEffectInlayHighlighting(IInvocationExpression invocation, DocumentRange range, IReadOnlyList<FileEffectCallSiteRow> rows)
+    public RigEffectInlayHighlighting(ITreeNode anchor, DocumentRange range, IReadOnlyList<FileEffectCallSiteRow> rows)
     {
-        _invocation = invocation;
+        _anchor = anchor;
         _range = range;
-        var orderedRows = rows.OrderBy(row => string.Equals(row.Family, "sql", StringComparison.Ordinal) ? 0 : 1).ToArray();
-        HintText = " " + string.Join(" ", orderedRows.Select(row => $"{row.Family}·{row.NearestDepth}")) + " ";
+        var orderedRows = rows.OrderBy(row => RigEffectFamilyStyle.Rank(row.Family)).ToArray();
+        HintText = " " + string.Join(" ", orderedRows.Select(row => RigEffectFamilyStyle.Label(row.Family, row.NearestDepth))) + " ";
+
+        // The adornment renders RICH text, so each family carries its own colour. HintText above stays the
+        // plain equivalent: it is what the IInlayHintHighlighting contract exposes and what the tooltip and
+        // any log line read.
+        RichHint = new RichText(" ", TextStyle.Default);
+        foreach (var row in orderedRows)
+        {
+            var style = RigEffectFamilyStyle.Style(row.Family, row.NearestDepth);
+            RichHint.Append(RigEffectFamilyStyle.Label(row.Family, row.NearestDepth), style);
+            RichHint.Append(" ", style);
+        }
+
         ToolTip =
-            "rig: " + string.Join("; ", orderedRows.Select(row => $"this call reaches {row.Family} · remaining depth {row.NearestDepth}"));
+            "rig: "
+            + string.Join(
+                "; ",
+                orderedRows.Select(row =>
+                    row.NearestDepth == 0
+                        ? $"this call performs a {row.Family} effect"
+                        : $"this call reaches {row.Family} · remaining depth {row.NearestDepth}"
+                )
+            );
         ErrorStripeToolTip = ToolTip;
     }
 
     public string HintText { get; }
+
+    // The coloured form of HintText, which is what actually reaches the editor.
+    public RichText RichHint { get; }
 
     public RichText Description => new RichText(ToolTip);
 
@@ -54,7 +78,7 @@ internal sealed class RigEffectInlayHighlighting : IInlayHintWithDescriptionHigh
 
     public string ErrorStripeToolTip { get; }
 
-    public bool IsValid() => _invocation.IsValid();
+    public bool IsValid() => _anchor.IsValid();
 
     public DocumentRange CalculateRange() => _range;
 }
@@ -73,7 +97,7 @@ internal sealed class RigEffectInlayDataModel : IAdornmentDataModel
     public RigEffectInlayDataModel(RigEffectInlayHighlighting hint)
     {
         Data = new AdornmentData(
-            new RichText(hint.HintText),
+            hint.RichHint,
             icon: null,
             AdornmentFlags.None,
             new AdornmentPlacement { Position = AdornmentPosition.INLINE, Priority = 0 },

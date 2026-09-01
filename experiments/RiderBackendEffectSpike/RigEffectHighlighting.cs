@@ -1,7 +1,8 @@
-using System.Drawing;
+﻿using System.Drawing;
 using JetBrains.DocumentModel;
 using JetBrains.ReSharper.Feature.Services.Daemon;
 using JetBrains.ReSharper.Psi.CSharp.Tree;
+using JetBrains.ReSharper.Psi.Tree;
 using JetBrains.TextControl.DocumentMarkup;
 
 namespace CodeRig.Rider;
@@ -32,8 +33,8 @@ internal sealed class RigSqlEffectHighlighting : RigEffectHighlighting
 {
     public const string SeverityId = "RigReachableSqlEffect";
 
-    public RigSqlEffectHighlighting(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row)
-        : base(invocation, range, row) { }
+    public RigSqlEffectHighlighting(ITreeNode anchor, DocumentRange range, FileEffectCallSiteRow row)
+        : base(anchor, range, row) { }
 }
 
 [RegisterHighlighter(
@@ -57,18 +58,18 @@ internal sealed class RigFileEffectHighlighting : RigEffectHighlighting
 {
     public const string SeverityId = "RigReachableFileEffect";
 
-    public RigFileEffectHighlighting(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row)
-        : base(invocation, range, row) { }
+    public RigFileEffectHighlighting(ITreeNode anchor, DocumentRange range, FileEffectCallSiteRow row)
+        : base(anchor, range, row) { }
 }
 
 internal abstract class RigEffectHighlighting : IHighlighting
 {
-    private readonly IInvocationExpression _invocation;
+    private readonly ITreeNode _anchor;
     private readonly DocumentRange _range;
 
-    protected RigEffectHighlighting(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row)
+    protected RigEffectHighlighting(ITreeNode anchor, DocumentRange range, FileEffectCallSiteRow row)
     {
-        _invocation = invocation;
+        _anchor = anchor;
         _range = range;
         ToolTip = $"rig: this call reaches {row.Family} · remaining depth {row.NearestDepth}";
         ErrorStripeToolTip = ToolTip;
@@ -78,12 +79,12 @@ internal abstract class RigEffectHighlighting : IHighlighting
 
     public string ErrorStripeToolTip { get; }
 
-    public bool IsValid() => _invocation.IsValid();
+    public bool IsValid() => _anchor.IsValid();
 
     public DocumentRange CalculateRange() => _range;
 
-    public static RigEffectHighlighting Create(IInvocationExpression invocation, DocumentRange range, FileEffectCallSiteRow row) =>
+    public static RigEffectHighlighting Create(ITreeNode anchor, DocumentRange range, FileEffectCallSiteRow row) =>
         string.Equals(row.Family, "file", System.StringComparison.Ordinal)
-            ? new RigFileEffectHighlighting(invocation, range, row)
-            : new RigSqlEffectHighlighting(invocation, range, row);
+            ? new RigFileEffectHighlighting(anchor, range, row)
+            : new RigSqlEffectHighlighting(anchor, range, row);
 }
