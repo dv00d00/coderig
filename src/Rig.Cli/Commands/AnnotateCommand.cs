@@ -36,7 +36,9 @@ internal static class AnnotateCommand
             Description = "Indexed C# file: a full path, or any substring that matches exactly one indexed file.",
         };
         var from = new Option<int>("--from") { Description = "First source line to render (default 1).", DefaultValueFactory = _ => 1 };
-        var to = new Option<int>("--to") { Description = "Last source line to render (default: to the end, subject to --limit)." };
+        // Nullable is intentional: an omitted bound means EOF, while 0 is a real parser value and must not
+        // silently collapse the requested window to one line.
+        var to = new Option<int?>("--to") { Description = "Last source line to render (default: to the end, subject to --limit)." };
         var method = new Option<string?>("--method")
         {
             Description = "Render only the declaration spans of methods whose name or DocID contains this (repeatable windows).",
@@ -95,6 +97,14 @@ internal static class AnnotateCommand
         var output = io.TextOutput.Output;
         using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
 
+        // Reject a contradictory range before opening the store or resolving the requested file. Apart from
+        // producing the useful error, this keeps a typo from paying the whole solution-wide effects warm-up.
+        if (opts.To is { } to && to < opts.From)
+        {
+            io.TextOutput.Error.WriteLine($"Invalid source range: --from {opts.From} is greater than --to {opts.To}.");
+            return 1;
+        }
+
         var resolveWatch = Stopwatch.StartNew();
         var resolved = await ResolveFileAsync(io.WorkspaceLocation, opts.File);
         resolveWatch.Stop();
@@ -129,6 +139,12 @@ internal static class AnnotateCommand
         // Ordering, per-line merging and the direct/distant distinction all come from the shared lens, so
         // this command cannot drift from the browser view or, later, the editor.
         var lens = FileEffectLens.Project(artifact);
+        var windowSelection = SelectWindows(opts, artifact, lens);
+        if (windowSelection.Error is not null)
+        {
+            io.TextOutput.Error.WriteLine(windowSelection.Error);
+            return 1;
+        }
 
         if (opts.Summary)
         {
@@ -143,7 +159,6 @@ internal static class AnnotateCommand
         var run = runs.FirstOrDefault(candidate => candidate.SourceCommit is not null) ?? runs.FirstOrDefault();
         var renderer = new SourceRenderer(storeCommit: run?.SourceCommit, storeDirty: run?.SourceDirty ?? false);
 
-        var windows = Windows(opts, lens.Methods);
         var renderWatch = Stopwatch.StartNew();
         if (!tsv)
         {
@@ -151,7 +166,7 @@ internal static class AnnotateCommand
         }
 
         var first = true;
-        foreach (var window in windows)
+        foreach (var window in windowSelection.Windows)
         {
             var snippet = renderer.Resolve(filePath, startLine: window.From, endLine: window.To, maxLines: opts.Limit);
             if (tsv)
@@ -184,24 +199,63 @@ internal static class AnnotateCommand
         return 0;
     }
 
+    private sealed record WindowSelection(IReadOnlyList<(int From, int To)> Windows, string? Error = null);
+
     // The line windows to render: --method spans when asked for, otherwise the single --from/--to range.
-    private static IReadOnlyList<(int From, int To)> Windows(Options opts, IReadOnlyList<FileEffectLens.LensMethod> methods)
+    // Diagnosis deliberately joins both halves of the shared artifact: Artifact.Methods is every declared
+    // canonical method, while lens.Methods is the effectful subset rendered by web/editor/CLI alike.
+    private static WindowSelection SelectWindows(
+        Options opts,
+        FileEffectsQueryService.Artifact artifact,
+        FileEffectLens.LensModel lens
+    )
     {
         if (string.IsNullOrWhiteSpace(opts.Method))
         {
-            return [(Math.Max(1, opts.From), opts.To ?? int.MaxValue)];
+            return new WindowSelection([(Math.Max(1, opts.From), opts.To ?? int.MaxValue)]);
         }
 
-        var matched = methods
+        var pattern = opts.Method.Trim();
+        var declared = artifact
+            .Methods.Values.Where(row =>
+                row.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase)
+                || row.Id.Contains(pattern, StringComparison.OrdinalIgnoreCase)
+            )
+            .OrderBy(row => row.Line)
+            .ThenBy(row => row.Id, StringComparer.Ordinal)
+            .ToArray();
+        if (declared.Length == 0)
+        {
+            var candidates = artifact
+                .Methods.Values.Select(row => row.Name)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            var candidateText = candidates.Length == 0 ? "(none)" : string.Join(", ", candidates);
+            return new WindowSelection([], $"No declared method matches --method '{pattern}'. Declared candidates: {candidateText}.");
+        }
+
+        var declaredIds = declared.Select(row => row.Id).ToHashSet(StringComparer.Ordinal);
+        var matched = lens
+            .Methods.Where(row => declaredIds.Contains(row.SymbolId))
             .Where(row =>
-                row.Name.Contains(opts.Method, StringComparison.OrdinalIgnoreCase)
-                || row.SymbolId.Contains(opts.Method, StringComparison.OrdinalIgnoreCase)
+                row.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase)
+                || row.SymbolId.Contains(pattern, StringComparison.OrdinalIgnoreCase)
             )
             .Where(row => row.Line > 0)
             .OrderBy(row => row.Line)
             .Select(row => (From: row.Line, To: row.EndLine > row.Line ? row.EndLine : row.Line))
             .ToArray();
-        return matched.Length == 0 ? [(Math.Max(1, opts.From), opts.To ?? int.MaxValue)] : matched;
+        if (matched.Length == 0)
+        {
+            var names = string.Join(", ", declared.Select(row => row.Name).Distinct(StringComparer.Ordinal));
+            return new WindowSelection(
+                [],
+                $"Declared method(s) matching --method '{pattern}' ({names}) have no effects in this store; use --from/--to to render them anyway."
+            );
+        }
+
+        return new WindowSelection(matched);
     }
 
     private static void RenderHeader(TextWriter output, FileEffectLens.LensModel lens)

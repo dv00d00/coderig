@@ -1,6 +1,6 @@
 # `rig annotate <file>` renders ONE line unless `--to` is passed explicitly
 
-**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent auditing `rig annotate`
+**Status:** done · **Completed:** 2026-09-01 · **Found:** 2026-09-01 by a probe agent auditing `rig annotate`
 over 30 MedDBase files; cause confirmed by reading the option declaration · **Family:** CLI · **Severity:** the
 command's primary documented use is broken
 
@@ -52,3 +52,9 @@ start, which is why the two symptoms looked like one bug to the auditor.
 The audit that found it ran 30 files and mostly used explicit windows, so the defect survived a full parity
 review of the renderer. Any new option whose absence must mean "unbounded" needs the nullable type, not a
 sentinel — worth a glance at the other commands' numeric options while here.
+
+## Outcome
+
+`--to` is now nullable, so omission means EOF and `--limit` remains the only safety cap. Contradictory
+ranges fail before store lookup and name both bounds. A synthetic immutable-store contract covers bare EOF
+rendering and the early range refusal through the public CLI entry point.

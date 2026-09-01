@@ -1,6 +1,6 @@
 # `rig annotate --method` silently renders the whole file when nothing matches
 
-**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent auditing `rig annotate`
+**Status:** done · **Completed:** 2026-09-01 · **Found:** 2026-09-01 by a probe agent auditing `rig annotate`
 · **Family:** CLI UX
 
 ## What happens
@@ -45,3 +45,10 @@ Related, same command, lower severity: `--to` less than `--from` is silently cla
 ## Out of scope
 
 `--method` matching semantics (substring today, consistent with the rest of the CLI's pattern rules).
+
+## Outcome
+
+Window selection now joins the shared artifact's complete declared-method map with the shared lens's
+effectful-method projection. A missing pattern fails with declared candidates; a declared but effectless
+method gets a distinct diagnostic and the explicit-range escape hatch. Synthetic end-to-end contracts cover
+both refusals and prove that an effectful method renders only its declaration window.
