@@ -1,4 +1,4 @@
-# rig — reference
+﻿# rig — reference
 
 ## Command reference
 
@@ -22,6 +22,7 @@
 | `rig refs <pat> [--first-party] [--kind <refkind>] [--limit n]` | Reference facts to a symbol (invocation/methodGroup/ctor/typeUse/throw/attributeUse). |
 | `rig symbols <pat> [--kind <k>] [--limit n] [--no-lambdas]` | Declared symbols (method/type/property/field/event). `--no-lambdas` drops compiler `~λ`/`<>c` noise; when truncated prints "showing N of TOTAL". |
 | `rig show <pat> [--context n] [--limit n]` | Source text of a matched declaration (`Line`..`EndLine`), with a line-number gutter. **Attribution is enforced:** the working tree is read only when the store is clean, `SourceCommit` == HEAD, and that file is unmodified; otherwise the indexed revision is read from git and marked `(from git <sha>)`. If neither is possible it prints `file:line` plus a one-line reason rather than lines it cannot attribute. Declarations over 400 lines are truncated with an explicit marker. |
+| `rig annotate <file> [--summary] [--method pat] [--from n] [--to n] [--limit n] [--format tsv] [--store ref]` | The **file lens**: one indexed file's source with the effect families each METHOD and each CALL LINE reaches. Badges are `family!` at depth 0 (the effect is in that body) and `family:N` for the nearest one N calls away; a method's badge is the shallowest distance over everything it reaches. `--summary` prints only the per-method table; `--method` renders each matching declaration span as a window; `--from/--to` render an arbitrary window. **Line precision only** — extraction mined no column, so several calls on one line share that line's badges (stated in the footer). A site with an empty target is an effect at a call into external code (no in-solution callee to name). `families:` in the header is every family ASKED about, not those found. Source attribution is `rig show`'s contract (working tree only when attributable, else the indexed revision `(from git <sha>)`). An ambiguous `<file>` substring REFUSES and lists candidates. Under `--format tsv`: `method`/`site` rows (always file-wide) then `src` rows (windowed, text last). Rendering goes through `FileEffectLens`, the same projection the web `/api/file-effects` view uses, so CLI and browser cannot disagree. **Shares the lambda blind spot** of the file read model: an effect inside a lambda is keyed to the lambda and filtered out (~24% of MedDBase effects) — absence of a badge is not proof of no I/O. |
 | `rig di` | DI registrations (code + XML service descriptors + static rule mappings), run-agnostic. |
 | `rig files --skipped` | Source files skipped during indexing + why (diagnostic). |
 | `rig profile validate` | Validate the rules config for the working solution. |

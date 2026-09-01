@@ -1,4 +1,4 @@
----
+﻿---
 name: rig
 description: Drive the `rig` fact-based .NET code-intelligence CLI to trace entry-point→effect call graphs, do reverse reachability ("which entry points reach X"), inventory effects (DB/cache/object-store/throw/messaging/HTTP/EF Core/parallel), surface operational HAZARDS and amplification candidates, query a resident live index after source edits, diff a branch's blast radius + behavioral/hazard delta against another commit (`rig impact`, per-entry-point), and ground-truth-validate findings across multi-project solutions. Use when analysing a .NET/C# codebase's call graph or side effects, answering "what does this reach / who reaches this", hunting concurrency/consistency hazards, auditing a PR/migration's blast radius or per-EP effect/hazard changes, or when the user mentions rig, coderig, the `.rig` index, `rig watch/derive/reaches/tree/callers/impact/entrypoints`, hazards/race_window/dual_write/amplification, commit-scoped stores (`--store`/`--commit`), or effect/entry-point/hazard detectors.
 ---
@@ -38,6 +38,7 @@ rig entrypoints                              # rule-detected EPs by kind (--form
 rig amplify [--min-degree n] [--top n] [--format tsv]   # NON-LINEAR discovery: effects ranked by AMPLIFICATION DEGREE (stacked loop contexts). deg>=2 = super-linear, plus a recursion section; grouping/ranking is rules data (observations.amplificationCategories)
 rig refs "IFoo"  |  rig symbols "Foo" --kind method [--limit n] [--no-lambdas]
 rig show "Type.Method" [--context n] [--limit n]   # the SOURCE of a declaration — use this instead of Read when you have a rig location; it renders the INDEXED revision (marked "(from git <sha>)" when the working tree has moved) and refuses rather than render unattributable lines
+rig annotate <file> [--summary] [--method Name] [--from n --to n] [--format tsv]   # a FILE's source with the effects each method + call line reaches (the file lens: `db!` = here, `db:3` = 3 calls away)
 rig impact --base <ref> --head <ref> [--structural] [--format tsv]   # blast radius + behavioral delta (both refs REQUIRED; per-EP diff is the default)
 rig reaches "X" --store <id|sha>             # query a SPECIFIC commit's store
 rig watch Sln.slnx                           # resident working-tree index; live reaches/path/callers/tree
@@ -72,6 +73,38 @@ Per-repo glyphs via `rig.effect-emoji.json`.
 - **`rig amplify` is the FOURTH tier — DEGREE, the only one that composes.** Tiers 2/3 are per-loop: `looped_effect` says "this effect is in a loop", `cross_method_amplification` correlates exactly ONE loop anchor with an effect beneath it. Neither can say ×N vs ×N². `amplify` chains the (already FP-calibrated) `FactIterationFanoutDeriver` anchors into loop CHAINS over the dispatch-aware traversal, so caller-loop × callee-loop composes across call edges, virtual dispatch and lambdas. **degree ≥2 = super-linear**; `-1`/`recursion` = the chain enters a call cycle (unbounded — no finite number is honest). Confidence **✔** = all contributing loops are cross-method (independent by construction); **~** = includes intra-method line-span-containment nesting, which is a HEURISTIC (the facts carry no loop-nesting depth, only the innermost loop per call site). **Grouping/ranking/exclusion is RULES DATA — core names no effect.** `observations.amplificationCategories` (ordered, first match wins; per category `weight` = rank, `separate`+`label` = own section, `excluded` = hide) decides which effects rank first, which get their own section (e.g. fire-and-forget queueing, where ×N is throughput not blocking round trips), and which are hidden as historically-noisy (contention, assembly-load). **Core ships NO categories**, so with none configured the output is NEUTRAL — one group, ordered by degree then site, nothing hidden. Layer a project's categories with a second `--rules` file. `--top` is PER SECTION, so a capped run is not a recall measurement (use `--min-degree 1 --top 5000` for that). **Sibling loops over one collection are additive and correctly stay degree 1** — disjoint spans never compose (only 240 of 1,290 MedDBase multi-loop methods actually nest; a per-method loop count overstates 81% of them). **Degree is an UPPER BOUND over composable contexts, not proof one execution stacks them all — reach is path-insensitive; confirm a specific chain with `rig path` before quoting it.** MedDBase: 1m06s over all 10,109 EPs — 663 super-linear + 186 recursion.
 - **Iteration context is NOT just loop statements** (fixed 2026-08-03; RE-INDEX to pick it up). `🔁`/`looped_effect`/`n_plus_1` now also cover **LINQ query expressions** (kind `query` — body clauses run per element; the primary `from` SOURCE is correctly excluded, it evaluates once), **enumerating lambdas** (kind `lambda` — `ids.Select(id => …)`, rule-gated via `observations.enumeratingMethods` on the resolved DECLARING type), and `do`. On MedDBase the query surface (109,825 sites) is 3.5× the `foreach` one (31,740), so on a PRE-FIX store a query-syntax N+1 reads as no iteration at all — that is how a real 11,461-query / 35s-of-SQL defect (`Admin/Profile/Home2.cs:294`) went unreported. `loopDetail` now carries a comma-joined identifier SET (`p, profile in profiles.ToList()…`) because a query rebinds every variable it binds. `for`/`while`/`do` bind no identifier and stay `looped_effect`-only BY DESIGN — a keyless `n_plus_1` would be a guess. Single-shot lambda takers are deliberately not iteration: `LanguageExt.Option<A>.Map` has 5,167 sites vs 1,181 for `Seq<A>.Map`, so the declaring-type gate carries the whole precision budget. `LanguageExt.Prelude` is excluded ON PURPOSE (its `map` is overloaded across single-shot AND sequence types; its `Map` is a dictionary ctor) — don't add it.
 - **Control-dependence guards** (`tree --guards`): a call edge that runs only under a branch is marked `⎇ [condition]` (the analog of `🔁[loop]`); an unconditional (must-run) edge carries none — so the glyph-free frames are the SPINE that fires on every invocation, and `⎇` frames are the guarded shell. The condition is the full source predicate — a short-circuit `a || b` shows whole (not split into operands), an else-arm is negated `!(…)`; the `foreach` MoveNext guard is filtered as redundant with `🔁`. **INTRA-METHOD only**: it says the call is gated WITHIN its direct caller, NOT whether that caller always runs from the EP (the cross-method "always-runs-from-EP" composition is a derive-side follow-up). **The guard is on the EDGE, not the effect** — an effect inside a lambda body is unconditional within that body while the condition gating the lambda sits on the edge into it, so an empty guard set is not "always fires" (needs a re-index on any store older than 2026-07-27; see the gotchas). `--guards` also appends a trailing `guards` column to `--format tsv|llm|llm-ids` (a dedicated column, since a condition can contain `||`).
+
+## Reading `rig annotate` (the FILE lens)
+
+`rig annotate <file>` inverts the usual query: instead of "what does this entry point reach", it answers
+"what does this FILE touch, line by line". Use it when you are about to edit a file and want the I/O map
+first; `--summary` is the cheap per-method table.
+
+```
+      21  Save  cache:5 db! echo:9 io:12 rpc:11     # --summary row: method line, name, badges
+  db!         44              LinqMethods.WithDb(db =>     # gutter badge, then line number, then source
+  db:1        55          Query(transaction, [...]);
+          @ FindCourse  db:2                        # method header, printed above its declaration line
+```
+
+- **`db!` = DEPTH 0 — the effect is in THIS body.** `db:3` = the nearest one is 3 calls away. A method's
+  badge is the shallowest distance over everything it reaches, so a `db:9` method is 9 hops from any DB call.
+- **Badges anchor to a LINE, never a column.** Extraction never mined a column, so two calls on one line
+  share one badge row, and the badge marks the line, not the expression. The footer says so; don't read a
+  badge as pointing at a specific sub-expression.
+- **A call-site row with no named target** (empty `targets` in tsv) is an effect at a call into EXTERNAL
+  library code — there is no in-solution callee to name. It is still a real effect on that line.
+- **`families:` in the header lists every family ASKED about**, not the ones found — "no cache badge here"
+  is only meaningful because cache was in that list.
+- **Source provenance is the same contract as `rig show`**: the working tree is read only when it is
+  attributable, else the indexed revision comes from git and is marked `(from git <sha>)`.
+- **Ambiguous `<file>` REFUSES** and lists the candidates rather than guessing. Narrow with a longer
+  substring (`MedDBase.DataAccessTier.Repositories\PersonCoursesRepository.cs`).
+- **`--format tsv`** emits `method` / `site` / `src` rows (source text last — a line can contain tabs).
+  `method`/`site` rows are always FILE-WIDE; only `src` honours the window.
+- Known blind spot: effects inside **lambdas** are keyed to the lambda, not its owning method, and the
+  file read model filters to declared methods — so a `db` call inside a `.Select(x => …)` may be missing
+  from both the method table and the line badges. ~24% of MedDBase effects sit in lambdas.
 
 ## Async handoffs — SYNC-CUT by default
 A delegate handed to a dispatcher to run later/elsewhere is a `handoff` edge, NOT a call. Default CUT: a
