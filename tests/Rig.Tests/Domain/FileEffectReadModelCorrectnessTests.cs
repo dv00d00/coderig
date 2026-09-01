@@ -56,6 +56,26 @@ public sealed class FileEffectReadModelCorrectnessTests
     }
 
     [Test]
+    public void Editor_depth_counts_visible_calls_but_not_the_method_group_hop_into_a_lambda()
+    {
+        const string entry = "M:Fixture.Entry()";
+        const string owner = "M:Fixture.Owner()";
+        const string lambda = "M:Fixture.Owner()~λ0";
+        var graph = Graph([
+            new CallEdge(entry, owner, EdgeKinds.Invocation, File, 15),
+            new CallEdge(owner, lambda, EdgeKinds.MethodGroup, OwnersFile, 40),
+        ]);
+        var symbols = new[] { Method(entry, File, 5), Method(owner, OwnersFile, 30), Lambda(lambda, owner, OwnersFile, 40) };
+
+        var model = Build(graph, symbols, [Effect("ado", lambda, OwnersFile, 41)], SqlSelector).Find(File).ShouldNotBeNull();
+
+        // A forward graph walk reaches the physical lambda seed in two edges (invocation + methodGroup).
+        // The file lens folds that seed to Owner, so its editor-facing answer is one visible source call.
+        model.Methods.Select(Row).ShouldBe([(entry, "sql", 1)]);
+        model.CallSites.Select(Site).ShouldBe([(entry, owner, 15, "sql", 0)]);
+    }
+
+    [Test]
     public void Property_lambda_folds_through_its_method_group_edge_to_the_getter_not_the_property_id()
     {
         const string getter = "M:Fixture.get_Value";

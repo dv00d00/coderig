@@ -1,6 +1,6 @@
 # A method's file-lens depth disagrees with `rig reaches` for the same family
 
-**Status:** todo · **Triage:** needs-info ·
+**Status:** done · **Completed:** 2026-09-01 ·
 **Found:** 2026-09-01 by a probe agent auditing `rig annotate` · **Family:** file lens / reachability
 
 **Blocked by:** [folding lambda-owned effects onto their owner](../done/file-lens-omits-effects-owned-by-lambdas.md).
@@ -89,3 +89,15 @@ Whichever way it lands, the answer belongs in documentation as well as code: an 
 `reaches` needs one sentence saying whether the two depths are the same quantity. The probe agent spent real
 time reconciling them and asked for exactly that (see
 [annotate output legibility](./annotate-output-legibility-for-agent-consumers.md), item 1).
+
+## Outcome
+
+The two depths intentionally answer different questions. `reaches` counts every traversed graph edge,
+including a `methodGroup` hop into a physical lambda node. The file lens is an editor-facing projection: it
+folds lambda-owned effects onto their declared method/accessor and counts visible invocation hops from there.
+That makes its number one smaller per folded lambda hop; it is not a routing defect or a global off-by-one.
+
+The synthetic contract `Editor_depth_counts_visible_calls_but_not_the_method_group_hop_into_a_lambda` pins a
+two-edge forward shape (invocation + methodGroup) as depth 1 in the file lens. The read-model implementation
+also states this convention at the fold site. MedDBase re-measurement is useful calibration, not required to
+define the semantics.
