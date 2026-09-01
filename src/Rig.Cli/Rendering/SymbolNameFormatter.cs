@@ -21,7 +21,14 @@ internal static class SymbolNameFormatter
     // so it can never appear as a predecessor in a reverse walk.
     internal const string ExternalTag = " \u00abexternal\u00bb";
 
-    internal static string ShortName(string? symbolId)
+    // Human-facing short name. Keep the exact CLR/XML-doc-id spelling in facts and query keys, but render
+    // generic arity as source-shaped placeholders everywhere a short label reaches a reader.
+    internal static string ShortName(string? symbolId) => PrettyGenericName(RawShortName(symbolId));
+
+    // INTERNAL identity-shaped short name: namespace/parameters removed, CLR generic arity preserved.
+    // TreeRenderer needs this intermediate form because it substitutes path-specific concrete generic
+    // arguments before rendering; expanding to <T, U> here would discard the arity slots it binds.
+    internal static string RawShortName(string? symbolId)
     {
         if (string.IsNullOrEmpty(symbolId))
         {
@@ -54,9 +61,15 @@ internal static class SymbolNameFormatter
     // Tree-facing short identity. Synthetic lambda ids append `~λN` AFTER the enclosing method's parameter
     // list, while ShortName deliberately truncates at that list. Restore the suffix once, so every human/LLM
     // tree renderer distinguishes sibling lambdas without changing the exact DocID used by TSV output.
-    internal static string ShortNamePreservingLambda(string? symbolId)
+    internal static string ShortNamePreservingLambda(string? symbolId) => PreserveLambdaSuffix(ShortName(symbolId), symbolId);
+
+    // Tree/LLM-only companion to RawShortName. Pretty trees consume the preserved arity for concrete
+    // substitution; compact LLM rows intentionally strip it rather than expanding placeholders.
+    internal static string RawShortNamePreservingLambda(string? symbolId) =>
+        PreserveLambdaSuffix(RawShortName(symbolId), symbolId);
+
+    private static string PreserveLambdaSuffix(string label, string? symbolId)
     {
-        var label = ShortName(symbolId);
         if (string.IsNullOrEmpty(symbolId))
         {
             return label;

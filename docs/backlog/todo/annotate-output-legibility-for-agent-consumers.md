@@ -30,11 +30,11 @@ decision (item 3) and the separately scoped `--verify` feature (item 5) before i
 5. **No cheap way to cross-check a badge from inside `annotate`.** Both audits reconciled badges against
    `rig reaches` by hand. A `--verify` flag (re-derive the badge families for the rendered methods through the
    forward walk and mark any disagreement) would make that a single command — and would have settled
-   [the depth disagreement](./file-lens-method-depth-disagrees-with-reaches.md) without manual work. Worth
+   [the depth disagreement](../done/file-lens-method-depth-disagrees-with-reaches.md) without manual work. Worth
    scoping as its own card if it survives contact with the depth-convention question.
 
 6. **Target names print CLR backtick arity** (`` Fill``1 ``) — split out into
-   [its own card](./short-names-leak-clr-backtick-arity.md).
+   [its own completed card](../done/short-names-leak-clr-backtick-arity.md).
 
 7. **The cold-latency floor makes it unusable interactively** (~35–50 s per call) — tracked separately in
    [annotate pays a full cold derivation per invocation](./annotate-pays-a-full-cold-derivation-per-invocation.md).

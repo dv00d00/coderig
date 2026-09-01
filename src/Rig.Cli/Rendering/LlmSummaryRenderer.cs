@@ -437,9 +437,10 @@ internal static class LlmSummaryRenderer
     }
 
     // The LLM-format short name: TypeName.MethodName — no namespace, no parameter types, no arity markers.
-    // Uses the shared tree identity formatter so a parameterful method's trailing ~λN survives ShortName,
-    // then strips Roslyn generic arity markers (e.g. `N / ``N) from the result.
-    internal static string LlmName(string symbolId) => StripArityMarkers(ShortNamePreservingLambda(symbolId));
+    // Uses the raw shared tree identity so a parameterful method's trailing ~λN survives shortening, then
+    // strips Roslyn generic arity markers (e.g. `N / ``N). Do not route through human ShortName here: the LLM
+    // contract intentionally omits generic placeholders while normal human surfaces render them.
+    internal static string LlmName(string symbolId) => StripArityMarkers(RawShortNamePreservingLambda(symbolId));
 
     // The spine prune is TreeRenderer.SubtreeHasEffect — ONE implementation, not a copy. It used to be
     // duplicated here "to keep the renderer self-contained"; the copy then had to be fixed twice when the

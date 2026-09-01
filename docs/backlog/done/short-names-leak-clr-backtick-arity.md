@@ -1,6 +1,6 @@
 # Rendered target names leak CLR backtick arity instead of source generic syntax
 
-**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent auditing `rig annotate`
+**Status:** done · **Completed:** 2026-09-01 · **Found:** 2026-09-01 by a probe agent auditing `rig annotate`
 · **Family:** rendering
 
 ## What happens
@@ -49,3 +49,14 @@ query vocabulary disagree in opposite directions.
 ## Out of scope
 
 DocID formatting and pattern-matching semantics — the mangled name stays the identity everywhere except display.
+
+## Outcome
+
+`ShortName` is now the single human-readable seam and delegates generic grammar to the existing
+`PrettyGenericName`: open arities become `<T, U>` and constructed generics retain their concrete short names.
+Exact DocIDs remain separate identity fields on every web/search/read-model row.
+
+Tree rendering keeps a deliberately raw intermediate short name until path-specific concrete generic
+arguments are substituted; its folded `via` marker uses the same binding. The compact LLM format likewise
+keeps its intentional no-placeholder contract. Unit coverage includes both generic shapes and a synthetic
+`FileEffectLens` site target, proving the label is shared by web, `annotate`, and Rider transport.

@@ -184,7 +184,9 @@ internal static class TreeRenderer
         var paren = methodSymbolId.IndexOf('(');
         var head = paren >= 0 ? methodSymbolId.Substring(startIndex: 0, length: paren) : methodSymbolId;
         var lastDot = head.LastIndexOf('.');
-        return ShortName(lastDot >= 0 ? head.Substring(startIndex: 0, length: lastDot) : head);
+        // Keep arity until render time: the promoted implementation inherits this interface node's
+        // concrete binding, so the marker can say IFoo<Account> instead of losing context to IFoo<T>.
+        return RawShortName(lastDot >= 0 ? head.Substring(startIndex: 0, length: lastDot) : head);
     }
 
     // --guards: render a frozen control-dependence guard set (FactStructuralContext-encoded on the reaching
@@ -359,6 +361,22 @@ internal static class TreeRenderer
         var hazardsByMethod = context.HazardsByMethod;
         var guards = context.Guards;
 
+        // This node's concrete instantiation (declaring-type args + own-method args), resolved from its
+        // monomorphization bindings against the PARENT's resolved instantiation — path-contextual
+        // monomorphization. This must be available before every node label, including folded «via IFoo».
+        var hasOwnBinding = node.DeclaringTypeArgBinding is not null || node.MethodTypeArgBinding is not null;
+        var inheritsParentScope =
+            !hasOwnBinding
+            && (node.SymbolId.Contains("~λ", StringComparison.Ordinal) || node.EdgeKind is "impl-dispatch" or "override-dispatch");
+        var (declaringConcrete, methodConcrete) = inheritsParentScope
+            ? (parentDeclaringConcrete, parentMethodConcrete)
+            : ResolveNodeInstantiation(
+                declaringBinding: node.DeclaringTypeArgBinding,
+                methodBinding: node.MethodTypeArgBinding,
+                parentDeclaring: parentDeclaringConcrete,
+                parentMethod: parentMethodConcrete
+            );
+
         // Compute visible children first — the fan-out label must reflect how many branches are
         // actually rendered (pruning may drop effectless children, making ×2 fan-out misleading
         // when only 1 child survives).
@@ -381,7 +399,8 @@ internal static class TreeRenderer
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
         // A folded single-impl hop shows «via IFoo» (the collapsed interface) in place of the dispatch tag.
         var dispatch =
-            node.FoldedVia is not null ? $" «via {node.FoldedVia}»"
+            node.FoldedVia is not null
+                ? $" «via {PrettyGenericName(node.FoldedVia, declaringArgs: declaringConcrete, methodArgs: null)}»"
             : node.EdgeKind is "impl-dispatch" or "override-dispatch"
                 ? (children.Count > 1 ? $" «{dispatchTag} ×{children.Count} fan-out»" : $" «{dispatchTag}»")
             // Delegate-field join: a real sync call, so it gets the dispatch marker not the ⤳ handoff glyph.
@@ -455,21 +474,10 @@ internal static class TreeRenderer
         //     a reordered base-list mapping (`Impl<U,T> : IFoo<T,U>`) would mislabel — rare, accepted limit.
         // A node with its OWN binding always resolves that (a folded interface hop transfers its binding to
         // the promoted impl — see FoldSingleImplHops). Only a binding-less lambda/dispatch node inherits.
-        var hasOwnBinding = node.DeclaringTypeArgBinding is not null || node.MethodTypeArgBinding is not null;
-        var inheritsParentScope =
-            !hasOwnBinding
-            && (node.SymbolId.Contains("~λ", StringComparison.Ordinal) || node.EdgeKind is "impl-dispatch" or "override-dispatch");
-        var (declaringConcrete, methodConcrete) = inheritsParentScope
-            ? (parentDeclaringConcrete, parentMethodConcrete)
-            : ResolveNodeInstantiation(
-                declaringBinding: node.DeclaringTypeArgBinding,
-                methodBinding: node.MethodTypeArgBinding,
-                parentDeclaring: parentDeclaringConcrete,
-                parentMethod: parentMethodConcrete
-            );
-        // TreeNode short identity restores the terminal ~λN suffix that ordinary ShortName loses after a
-        // parameter list. The same helper feeds llm/llm-ids, so every tree format labels lambdas alike.
-        var shortName = ShortNamePreservingLambda(node.SymbolId);
+        // Keep CLR arity in this intermediate short identity: PrettyGenericName needs those slots for the
+        // path-specific concrete substitutions above. The helper also restores the terminal ~λN suffix
+        // lost after a parameter list; llm/llm-ids consume the same raw identity and intentionally strip arity.
+        var shortName = RawShortNamePreservingLambda(node.SymbolId);
         var name =
             PrettyGenericName(shortName, declaringArgs: declaringConcrete, methodArgs: methodConcrete)
             + (signatures ? ShortSignature(node.SymbolId) : "");
