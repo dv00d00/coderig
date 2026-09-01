@@ -1,5 +1,6 @@
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Services;
 using static Rig.Cli.Graph.TraversalGraphLoader;
 
 namespace Rig.Cli.Caching;
@@ -119,7 +120,10 @@ internal static class WarmStoreWatcher
 
             var started = Environment.TickCount64;
             await WarmStore.PrewarmAsync(context: context, rules: rules, storeDir: storeDirectory, rulesHash: rulesHash);
-            errorWriter.WriteLine($"  warm: graph + invocations ready in {(Environment.TickCount64 - started) / 1000.0:F1}s");
+            await FileEffectsQueryService.PrewarmResidentAsync(context, rules, storeDirectory, rulesHash);
+            errorWriter.WriteLine(
+                $"  warm: graph + invocations + file effects ready in {(Environment.TickCount64 - started) / 1000.0:F1}s"
+            );
         }
         catch (Exception ex)
         {

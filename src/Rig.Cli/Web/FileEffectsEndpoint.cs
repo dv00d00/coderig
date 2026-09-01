@@ -76,7 +76,7 @@ internal static class FileEffectsEndpoint
 
                 try
                 {
-                    var artifact = await FileEffectsQueryService.BuildAsync(workingDirectory, file, NullIfBlank(store));
+                    var artifact = await FileEffectsQueryService.BuildResidentAsync(workingDirectory, file, NullIfBlank(store));
                     return Results.Json(ToResponse(artifact));
                 }
                 catch (Exception ex)
@@ -167,13 +167,19 @@ internal static class FileEffectsEndpoint
             .OrderBy(site => site.Line)
             .ThenBy(site => site.TargetMethodId, StringComparer.Ordinal)
             .ToArray();
+        var declarations = artifact
+            .Methods.Values.OrderBy(method => method.Line)
+            .ThenBy(method => method.Id, StringComparer.Ordinal)
+            .Select(method => new FileEffectDeclarationDto(method.Id, method.Name, method.Signature, method.Line, method.EndLine))
+            .ToArray();
         return new FileEffectsResponseDto(
             model.FilePath,
             model.EffectSelectors,
             methods,
             sites,
             ColumnsAvailable: false,
-            WitnessPathsIncluded: false
+            WitnessPathsIncluded: false,
+            declarations
         );
     }
 

@@ -17,8 +17,8 @@ namespace Rig.Cli.Commands;
 // use a browser, and `rig show` prints one declaration with no effect information at all, so reading a file
 // meant either losing the annotations or losing the code.
 //
-// Same substrate as the browser lens (FileEffectsQueryService), so the two cannot disagree: one store-backed
-// projection, no resident `rig watch` host required.
+// Same substrate as the browser lens (FileEffectsQueryService), so the two cannot disagree. A local `rig
+// serve` can return its warm artifact over HTTP; otherwise the command builds the identical artifact cold.
 //
 // Two honest limits are printed rather than hidden: extraction mines LINES, not columns, so several calls on
 // one line collapse into that line's badge list; and a badge says how far away the nearest effect is, not how
@@ -48,6 +48,8 @@ internal static class AnnotateCommand
         var format = CommonOptions.Format();
         var time = CommonOptions.Time();
         var store = CommonOptions.Store();
+        var host = new Option<string?>("--host") { Description = "Use a local rig serve URL for resident file-effects queries." };
+        var cold = new Option<bool>("--cold") { Description = "Force the existing in-process store query; do not contact rig serve." };
         var cmd = new Command(
             name: "annotate",
             description: "Print an indexed file's source annotated with the effects each method and call site reaches."
@@ -62,6 +64,8 @@ internal static class AnnotateCommand
             format,
             time,
             store,
+            host,
+            cold,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -77,7 +81,9 @@ internal static class AnnotateCommand
                             Summary: pr.GetValue(summary),
                             Limit: pr.GetValue(limit),
                             Format: pr.GetValue(format),
-                            Time: pr.GetValue(time)
+                            Time: pr.GetValue(time),
+                            Host: pr.GetValue(host),
+                            Cold: pr.GetValue(cold)
                         ),
                         new CommandIo(
                             new TextOutput(Output: output, Error: error),
@@ -89,7 +95,18 @@ internal static class AnnotateCommand
         return cmd;
     }
 
-    private sealed record Options(string File, int From, int? To, string? Method, bool Summary, int Limit, string? Format, bool Time);
+    private sealed record Options(
+        string File,
+        int From,
+        int? To,
+        string? Method,
+        bool Summary,
+        int Limit,
+        string? Format,
+        bool Time,
+        string? Host,
+        bool Cold
+    );
 
     private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
@@ -127,14 +144,36 @@ internal static class AnnotateCommand
         }
 
         var filePath = resolved.FilePath;
-        var effectWatch = Stopwatch.StartNew();
-        var artifact = await FileEffectsQueryService.BuildAsync(
-            io.WorkspaceLocation.WorkingDirectory,
-            filePath,
-            io.WorkspaceLocation.StoreRef
-        );
-        effectWatch.Stop();
-        timing.Record("file effects", effectWatch.Elapsed);
+        FileEffectsQueryService.Artifact? artifact = null;
+        var transportWatch = Stopwatch.StartNew();
+        if (!opts.Cold)
+        {
+            var resident = await AnnotateResidentTransport.TryGetAsync(io.WorkspaceLocation, filePath, opts.Host);
+            artifact = resident.Artifact;
+            if (artifact is not null)
+            {
+                io.TextOutput.Error.WriteLine($"transport: rig serve {resident.Url}");
+            }
+            else if (resident.Failure is not null)
+            {
+                io.TextOutput.Error.WriteLine($"(resident annotate unavailable: {resident.Failure}; falling back to cold.)");
+            }
+        }
+
+        transportWatch.Stop();
+        timing.Record("transport", transportWatch.Elapsed);
+        if (artifact is null)
+        {
+            io.TextOutput.Error.WriteLine(opts.Cold ? "transport: cold (--cold)" : "transport: cold (start `rig serve` for warm calls)");
+            var effectWatch = Stopwatch.StartNew();
+            artifact = await FileEffectsQueryService.BuildAsync(
+                io.WorkspaceLocation.WorkingDirectory,
+                filePath,
+                io.WorkspaceLocation.StoreRef
+            );
+            effectWatch.Stop();
+            timing.Record("file effects", effectWatch.Elapsed);
+        }
 
         // Ordering, per-line merging and the direct/distant distinction all come from the shared lens, so
         // this command cannot drift from the browser view or, later, the editor.

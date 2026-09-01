@@ -6,10 +6,10 @@ using Rig.Storage.Storage;
 
 namespace Rig.Cli.Caching;
 
-// PROOF OF CONCEPT — process-lifetime warm cache for the two most expensive WHOLE-STORE loads:
+// PROOF OF CONCEPT — process-lifetime warm cache for expensive WHOLE-STORE loads:
 // the shaped call graph (Reads.LoadShapedGraphAsync, ~4.5s on the MedDBase store) and the invocation-ref
-// table (Reads.LoadInvocationRefsAsync, ~2.4M rows). Both are pure functions of (store, rules), so a
-// resident process can hold them and every query after the first skips the load entirely.
+// table (Reads.LoadInvocationRefsAsync, ~2.4M rows), plus a separately bounded solution-wide file-effect
+// projection. They are pure functions of store/rules, so a resident process pays each factory once.
 //
 // WHY THIS EXISTS: rig's three existing cache layers (cache.db, the web client's IndexedDB, the disk
 // artifact cache) are all DISK caches — they cache the ANSWER. Nothing caches the intermediate state a
@@ -26,7 +26,8 @@ namespace Rig.Cli.Caching;
 // Deliberately NOT keyed on anything per-compile (no MVID, no build stamp) — same discipline as
 // QueryCacheKeys, and for the same reason.
 //
-// BOUNDED: an LRU of `Capacity` entries (default 1). FactGraphData on the MedDBase store costs ~1.5 GB of
+// BOUNDED: heavyweight graph/invocation entries use `Capacity`; solution file-effect indexes use their own
+// two-entry LRU. FactGraphData on the MedDBase store costs ~1.5 GB of
 // disk reads to build, so retained footprint is the real constraint and a resident process must not hold
 // an unbounded number. `impact` wants two graphs at once (base + head) and would thrash at capacity 1 —
 // its call sites are deliberately NOT routed through here yet; raise the cap first and measure.
@@ -45,17 +46,18 @@ internal static class WarmStore
     // One gate for the whole cache: loads are multi-second and memory-heavy, so serializing them is the
     // POINT — two concurrent /api requests against a cold store must not both materialize the graph.
     private static readonly SemaphoreSlim Gate = new(initialCount: 1, maxCount: 1);
-    private static readonly SemaphoreSlim FileEffectGate = new(initialCount: 1, maxCount: 1);
+    private static readonly SemaphoreSlim ResidentFileEffectGate = new(initialCount: 1, maxCount: 1);
 
     // Insertion-ordered; last element = most recently used. Tiny (Capacity is 1-3), so a List scan is
     // cheaper than a dictionary + intrusive list.
     private static readonly List<(string Key, object Value)> Entries = [];
 
-    // File projections are tiny compared with FactGraphData/invocation rows. Keeping them in the four-slot
-    // heavyweight LRU would make the fifth visited file evict the graph and turn navigation into repeated
-    // multi-second reloads, so they have their own bounded resident tier.
-    private const int FileEffectCapacity = 32;
-    private static readonly List<(string Key, object Value)> FileEffectEntries = [];
+    // A resident file-effect artifact holds the solution-wide reverse projection: one entry serves every
+    // physical file in that store. Keep it separate from graph/invocations because its factory calls both;
+    // sharing Gate would deadlock. Two entries allow a brief old/new-store overlap during reindex without
+    // retaining an unbounded set of 442k-symbol indexes.
+    private const int ResidentFileEffectCapacity = 2;
+    private static readonly List<(string Key, object Value)> ResidentFileEffectEntries = [];
 
     // The shaped whole-store graph. Pattern-INDEPENDENT (unlike the bounded per-traversal loads in
     // TraversalGraphLoader), which is exactly why it is cacheable by (store, rules) alone.
@@ -85,14 +87,14 @@ internal static class WarmStore
             load: () => Reads.LoadInvocationRefsAsync(context, ct)
         );
 
-    // One compact semantic projection per physical file. The expensive graph inputs are already independently
-    // warm-cached above; this entry prevents repeating the reverse family walk while a reader moves around the
-    // same file. FilePath is part of the key because the artifact contains only that file's declarations.
-    internal static Task<T> FileEffectsAsync<T>(string storeDir, string rulesHash, string filePath, Func<Task<T>> load)
+    // ONE semantic projection for every indexed physical file in a solution. The key deliberately has no
+    // file path: after the first load, choosing another file is only a dictionary lookup in the retained index.
+    // FileEffectsSchema remains the derivation/payload hedge even though this is a process-only cache.
+    internal static Task<T> ResidentFileEffectsAsync<T>(string storeDir, string rulesHash, Func<Task<T>> load)
         where T : class =>
-        GetOrLoadFileEffectAsync(
-            key: QueryCacheKeys.FileEffectsCacheKey(StoreIdentity(storeDir), rulesHash, filePath),
-            label: $"file effects ({Path.GetFileName(filePath)})",
+        GetOrLoadResidentFileEffectAsync(
+            key: $"filefx-solution|v{QueryCacheKeys.FileEffectsSchema}|{StoreIdentity(storeDir)}|{rulesHash}",
+            label: "file effects (solution)",
             load: load
         );
 
@@ -175,7 +177,7 @@ internal static class WarmStore
         }
     }
 
-    private static async Task<T> GetOrLoadFileEffectAsync<T>(string key, string label, Func<Task<T>> load)
+    private static async Task<T> GetOrLoadResidentFileEffectAsync<T>(string key, string label, Func<Task<T>> load)
         where T : class
     {
         if (Capacity <= 0)
@@ -183,31 +185,42 @@ internal static class WarmStore
             return await load();
         }
 
-        if (TryGet(FileEffectEntries, key) is T warm)
+        if (TryGet(ResidentFileEffectEntries, key) is T warm)
         {
+            if (Log)
+            {
+                Console.Error.WriteLine($"[warm] HIT  {label}");
+            }
+
             return warm;
         }
 
-        await FileEffectGate.WaitAsync();
+        await ResidentFileEffectGate.WaitAsync();
         try
         {
-            if (TryGet(FileEffectEntries, key) is T raced)
+            if (TryGet(ResidentFileEffectEntries, key) is T raced)
             {
+                if (Log)
+                {
+                    Console.Error.WriteLine($"[warm] HIT  {label} (after gate)");
+                }
+
                 return raced;
             }
 
+            var started = Environment.TickCount64;
             var loaded = await load();
-            Insert(FileEffectEntries, FileEffectCapacity, key, loaded);
+            Insert(ResidentFileEffectEntries, ResidentFileEffectCapacity, key, loaded);
             if (Log)
             {
-                Console.Error.WriteLine($"[warm] MISS {label}");
+                Console.Error.WriteLine($"[warm] MISS {label} — loaded in {Environment.TickCount64 - started} ms");
             }
 
             return loaded;
         }
         finally
         {
-            FileEffectGate.Release();
+            ResidentFileEffectGate.Release();
         }
     }
 

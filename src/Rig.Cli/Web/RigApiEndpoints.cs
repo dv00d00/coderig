@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Rig.Analysis.Rules;
 using Rig.Cli.Caching;
+using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
 using Rig.Cli.Services;
 
@@ -39,11 +40,20 @@ internal static class RigApiEndpoints
         // store id alone is not enough). See QueryCacheKeys.DerivationSchemaToken.
         app.MapGet(
             "/api/meta",
-            () =>
+            (string? store) =>
             {
                 try
                 {
-                    return Results.Json(new { derivationVersion = DerivationVersion(workingDirectory) });
+                    var location = new WorkspaceLocation(workingDirectory, NullIfBlank(store));
+                    var storeDirectory = StoreLayout.ResolveReadStoreDir(location);
+                    return Results.Json(
+                        new RigMetaResponseDto(
+                            DerivationVersion(workingDirectory),
+                            Path.GetFullPath(workingDirectory),
+                            Path.GetFullPath(storeDirectory),
+                            Path.GetFileName(storeDirectory) ?? ""
+                        )
+                    );
                 }
                 catch (Exception ex)
                 {

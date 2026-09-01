@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Hosting;
+using Rig.Cli.Services;
 using Rig.Cli.Web;
 
 namespace Rig.Cli.Commands;
@@ -43,18 +44,35 @@ internal static class ServeCommand
         output.WriteLine($"  store dir: {workingDirectory}");
         output.WriteLine("  press Ctrl+C to stop.");
 
-        // PoC: this is the ONLY resident host, so it is the only place the process-lifetime warm cache can
-        // pay off. Pre-warm the whole-store graph + invocation refs off the request path, and keep them warm
-        // across reindexes (see WarmStoreWatcher). Fire-and-forget — a query issued before the warm finishes
-        // just loads it itself, exactly as before.
-        Caching.WarmStoreWatcher.Start(workingDirectory, output);
-        if (!noOpen)
+        ServeMarkerLease? marker = null;
+        try
         {
-            TryOpenBrowser(url, error);
+            marker = ServeMarkerLease.Publish(workingDirectory, port, url);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            error.WriteLine($"(could not publish .rig/serve.json: {ex.Message})");
         }
 
-        await app.WaitForShutdownAsync();
-        return 0;
+        try
+        {
+            // PoC: this is the ONLY resident host, so it is the only place the process-lifetime warm cache can
+            // pay off. Pre-warm the whole-store graph + invocation refs off the request path, and keep them warm
+            // across reindexes (see WarmStoreWatcher). Fire-and-forget — a query issued before the warm finishes
+            // just loads it itself, exactly as before.
+            Caching.WarmStoreWatcher.Start(workingDirectory, output);
+            if (!noOpen)
+            {
+                TryOpenBrowser(url, error);
+            }
+
+            await app.WaitForShutdownAsync();
+            return 0;
+        }
+        finally
+        {
+            marker?.Dispose();
+        }
     }
 
     // Best-effort browser launch; a failure is non-fatal (the URL is already printed for manual open).

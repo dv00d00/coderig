@@ -15,6 +15,8 @@ internal sealed record FileEffectMethodDto(
     IReadOnlyList<FileEffectAggregateDto> Effects
 );
 
+internal sealed record FileEffectDeclarationDto(string Id, string Name, string Signature, int Line, int EndLine);
+
 internal sealed record FileEffectCallSiteDto(
     string EnclosingMethodId,
     string TargetMethodId,
@@ -28,8 +30,11 @@ internal sealed record FileEffectsResponseDto(
     IReadOnlyList<FileEffectMethodDto> Methods,
     IReadOnlyList<FileEffectCallSiteDto> Sites,
     bool ColumnsAvailable,
-    bool WitnessPathsIncluded
+    bool WitnessPathsIncluded,
+    IReadOnlyList<FileEffectDeclarationDto>? Declarations = null
 );
+
+internal sealed record RigMetaResponseDto(string DerivationVersion, string WorkingDirectory, string StoreDirectory, string StoreId);
 
 internal sealed record FileSourceResponseDto(
     string File,

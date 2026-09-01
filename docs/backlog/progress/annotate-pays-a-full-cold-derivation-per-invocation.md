@@ -1,6 +1,6 @@
 # `rig annotate` pays a full cold derivation per invocation — route it to a resident host
 
-**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-09-01, probe agent measured 30 files ·
+**Status:** progress · **Triage:** ready-for-agent · **Found:** 2026-09-01, probe agent measured 30 files ·
 **Family:** performance / CLI transport · **Decision:** route to a resident host, "what the web does"
 
 ## Measured problem
@@ -88,3 +88,18 @@ the transport. File-path resolution also stays local (a `SourceFiles` substring 
 - [Warm graph across queries](./warm-graph-across-queries.md) is the same underlying problem for
   `callers`/`reaches`; this card deliberately reuses the resident host it already concluded with instead of
   introducing a daemon.
+
+## Implementation note — 2026-09-01
+
+The first production slice now routes `annotate` through an explicitly selected or `.rig/serve.json`-
+discovered `rig serve`, with `--cold`, store/checkout identity checks, lossless declaration transport and a
+fail-closed cold fallback. The resident host builds one solution-wide `FileEffectReadModelIndex` per
+store/rules identity during prewarm; changing files is a dictionary lookup rather than another whole-store
+effect derivation/reverse closure. The live-pipe arm remains a follow-on.
+
+Self-store A/B across three **different** files (alternating Release runs, each cold/resident pair had
+identical stdout): **2.44→1.40 s**, **2.49→1.34 s**, **2.31→1.26 s** end-to-end. The solution index took
+**743 ms** to build once; direct HTTP for the three files was **173 ms** for the first Kestrel/JIT request,
+then **9 ms** and **5 ms**. RSS was ~**308 MiB** after prewarm and ~**316 MiB** after all three files, versus
+the previous per-file cache growing from ~202 MiB to ~334 MiB over the same sweep. The remaining local floor
+is file lookup/process startup. The MedDBase 30-file sweep remains the real-scale acceptance check.
