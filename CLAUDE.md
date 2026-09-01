@@ -1,4 +1,4 @@
-# CLAUDE.md — working notes for `rig`
+﻿# CLAUDE.md — working notes for `rig`
 
 `rig` is a fact-based .NET code-intelligence CLI. Product overview, the full command table,
 effect observations, and deployment attribution live in [README.md](README.md). Vocabulary:
@@ -116,6 +116,12 @@ The rules that make this produce mergeable code, not plausible diffs:
   **No need to format first / inline** — mini-ci formats the whole repo on publish as its first step (the
   repo is kept clean, so it only rewrites the files that drifted). `scripts/format.ps1 -Check` still gives a
   verify-only pass if you want one.
+- **`rig serve` serves `wwwroot/` from the INSTALLED TOOL, not from the repo** — `RigWebHost` sets
+  `ContentRootPath = AppContext.BaseDirectory`, so editing `src/Rig.Cli/wwwroot/*.js` and hard-refreshing the
+  browser shows you nothing: you are looking at the last packed copy. Either run the locally-built
+  `Rig.Cli.dll serve` (its BaseDirectory is `bin/`, which has the fresh files via `CopyToOutputDirectory`) or
+  re-run `mini-ci`. Related: `PackAsTool` packs the PUBLISH OUTPUT, so ANY `wwwroot\**` file ships in the
+  installed tool and `Pack="false"` cannot stop it — don't leave fixtures there.
 - **Tests are TUnit on Microsoft.Testing.Platform, not vstest.** `dotnet test --filter` does NOT work
   (prints help, "Zero tests ran"). Run a subset with:
   `dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"`

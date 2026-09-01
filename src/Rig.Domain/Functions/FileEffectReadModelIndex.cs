@@ -32,7 +32,15 @@ public sealed record FileEffectSelector
 // discloses that everywhere else (`reaches`' fan-out bucket says "NOT a real call"), so the file model carries
 // it too rather than presenting an over-approximation as a plain fact. A depth-0 aggregate is always real — a
 // seed performs the effect itself.
-public sealed record FileEffectAggregate(string Family, int NearestDepth, bool ViaDispatchOnly = false);
+//
+// Looped = the AMPLIFICATION tier (HazardKinds.Amplification / the `looped_effect` observation): this effect
+// runs once per iteration of an enclosing loop, so the honest reading of the row is "N times per invocation",
+// not "once". It is carried ONLY on depth-0 aggregates, and that is a deliberate limit rather than an
+// oversight: `looped_effect` is a LEXICAL fact about the effect's own body, so it is knowable exactly where
+// the effect is. Propagating it up the reverse closure would answer a different and much weaker question
+// ("something looped exists somewhere below") which the tier-3 cross-method anchor answers properly, with a
+// witness and a confidence. A distant aggregate therefore never claims repetition.
+public sealed record FileEffectAggregate(string Family, int NearestDepth, bool ViaDispatchOnly = false, bool Looped = false);
 
 public sealed record FileEffectMethod(string SymbolId, IReadOnlyList<FileEffectAggregate> Effects);
 
@@ -200,6 +208,19 @@ public sealed class FileEffectReadModelIndex
                 var real = realPerFamily[family];
                 var currentFamily = families[family];
 
+                // The AMPLIFICATION tier, keyed exactly where it is knowable. Two grains because two rows ask
+                // different questions: a LINE asks "is the effect on this line looped" (owner + line), a
+                // METHOD asks "does this body perform a looped effect anywhere" (owner alone).
+                var fileFamilyEffects = selectedByFilePerFamily[family].GetValueOrDefault(filePath) ?? [];
+                var loopedSites = fileFamilyEffects
+                    .Where(effect => IsLooped(effect) && effect.EnclosingSymbolId is not null)
+                    .Select(effect => new SourceSite(effect.EnclosingSymbolId!, effect.Line))
+                    .ToHashSet();
+                var loopedOwners = fileFamilyEffects
+                    .Where(effect => IsLooped(effect) && effect.EnclosingSymbolId is not null)
+                    .Select(effect => effect.EnclosingSymbolId!)
+                    .ToHashSet(StringComparer.Ordinal);
+
                 // The REAL depth wins whenever a real path exists, even when the dispatch closure found a
                 // shorter one: a number that claims to be real must come from the real walk. Only a node the
                 // real walk never reached is rendered as dispatch-derived.
@@ -219,11 +240,22 @@ public sealed class FileEffectReadModelIndex
                 {
                     if (Aggregate(symbol.SymbolId) is { } methodEffect)
                     {
-                        methodRows.Add((symbol.SymbolId, methodEffect));
+                        // A method row is looped when the method's OWN body performs a looped effect of this
+                        // family — i.e. only at depth 0. At any distance the loop (if there is one) belongs to
+                        // another body, which is tier 3's question, not this row's.
+                        methodRows.Add(
+                            (
+                                symbol.SymbolId,
+                                methodEffect with
+                                {
+                                    Looped = methodEffect.NearestDepth == 0 && loopedOwners.Contains(symbol.SymbolId),
+                                }
+                            )
+                        );
                     }
                 }
 
-                var fileEffects = selectedByFilePerFamily[family].GetValueOrDefault(filePath) ?? [];
+                var fileEffects = fileFamilyEffects;
                 var sites = BuildCallSiteKeys(fileEdges, fileEffects, reached, reachedByAnyFamily, fileMethodIds, declaredOwnerByLambda);
                 foreach (var site in sites)
                 {
@@ -243,6 +275,15 @@ public sealed class FileEffectReadModelIndex
                         siteEffect = siteEffect with { ViaDispatchOnly = true };
                     }
 
+                    // Repetition is a fact about THIS line: the effect sits at this site and this site is
+                    // inside a loop. Deliberately keyed on (enclosing method, line) rather than on the callee
+                    // — a callee that happens to loop internally does not make the caller's line repeat, and
+                    // saying it did would put the mark on the wrong body.
+                    if (siteEffect.NearestDepth == 0 && loopedSites.Contains(new SourceSite(site.EnclosingSymbolId, site.Line)))
+                    {
+                        siteEffect = siteEffect with { Looped = true };
+                    }
+
                     callSiteRows.Add((site, siteEffect));
 
                     // A marked line without a matching method summary is an internally contradictory model.
@@ -250,7 +291,15 @@ public sealed class FileEffectReadModelIndex
                     // for isolated direct owners and for graph-id rewrites that leave the call-site join intact.
                     var methodDepth = site.TargetSymbolId.Length == 0 ? 0 : siteEffect.NearestDepth + 1;
                     methodRows.Add(
-                        (site.EnclosingSymbolId, new FileEffectAggregate(currentFamily, methodDepth, siteEffect.ViaDispatchOnly))
+                        (
+                            site.EnclosingSymbolId,
+                            new FileEffectAggregate(
+                                currentFamily,
+                                methodDepth,
+                                siteEffect.ViaDispatchOnly,
+                                Looped: methodDepth == 0 && loopedOwners.Contains(site.EnclosingSymbolId)
+                            )
+                        )
                     );
                 }
 
@@ -265,7 +314,7 @@ public sealed class FileEffectReadModelIndex
                         .Distinct(StringComparer.Ordinal)
                 )
                 {
-                    methodRows.Add((owner!, new FileEffectAggregate(currentFamily, 0)));
+                    methodRows.Add((owner!, new FileEffectAggregate(currentFamily, 0, Looped: loopedOwners.Contains(owner!))));
                 }
             }
 
@@ -443,8 +492,20 @@ public sealed class FileEffectReadModelIndex
     {
         var real = candidates.Where(effect => !effect.ViaDispatchOnly).ToArray();
         var basis = real.Length > 0 ? real : candidates.ToArray();
-        return new FileEffectAggregate(candidates.Key, basis.Min(effect => effect.NearestDepth), real.Length == 0);
+        var nearest = basis.Min(effect => effect.NearestDepth);
+
+        // Repetition is OR-ed only across the rows that actually WON — the ones at the rendered distance.
+        // A looped row further away must not lend its mark to a nearer row that does not repeat, because the
+        // badge then claims the thing the reader can see on that line runs N times when it runs once.
+        var looped = basis.Any(effect => effect.NearestDepth == nearest && effect.Looped);
+        return new FileEffectAggregate(candidates.Key, nearest, real.Length == 0, looped);
     }
+
+    // The AMPLIFICATION tier's membership test, asked of the effect's own observations. Routed through
+    // HazardKinds so this file cannot drift from the catalog (and so `parallel_fanout`, the obvious next
+    // member of that set, starts marking lines the day it joins it without a change here).
+    private static bool IsLooped(DerivedEffect effect) =>
+        effect.Observations?.Any(observation => HazardKinds.IsAmplification(observation.Type)) == true;
 
     public FileEffectReadModel? Find(string filePath)
     {

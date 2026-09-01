@@ -200,7 +200,12 @@ internal static class AnnotateResidentTransport
                 .Methods.Select(method => new FileEffectMethod(
                     method.Id,
                     method
-                        .Effects.Select(effect => new FileEffectAggregate(effect.Family, effect.NearestDepth, effect.ViaDispatchOnly))
+                        .Effects.Select(effect => new FileEffectAggregate(
+                            effect.Family,
+                            effect.NearestDepth,
+                            effect.ViaDispatchOnly,
+                            effect.Looped
+                        ))
                         .ToArray()
                 ))
                 .ToArray(),
@@ -209,7 +214,12 @@ internal static class AnnotateResidentTransport
                     site.EnclosingMethodId,
                     site.TargetMethodId,
                     site.Line,
-                    site.Effects.Select(effect => new FileEffectAggregate(effect.Family, effect.NearestDepth, effect.ViaDispatchOnly))
+                    site.Effects.Select(effect => new FileEffectAggregate(
+                            effect.Family,
+                            effect.NearestDepth,
+                            effect.ViaDispatchOnly,
+                            effect.Looped
+                        ))
                         .ToArray()
                 ))
                 .ToArray()

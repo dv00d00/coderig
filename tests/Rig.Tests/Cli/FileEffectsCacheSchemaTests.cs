@@ -9,10 +9,10 @@ public sealed class FileEffectsCacheSchemaTests
     public void File_effect_cache_and_browser_derivation_are_gated_by_the_same_schema()
     {
         // Pinned on purpose: a schema bump must be a deliberate edit here, not a silent side effect.
-        QueryCacheKeys.FileEffectsSchema.ShouldBe(3);
+        QueryCacheKeys.FileEffectsSchema.ShouldBe(4);
         QueryCacheKeys
             .FileEffectsCacheKey("store", "rules", "/repo/A.cs")
-            .ShouldBe("B61862FF47AB83281DEE04BB6E6F3FF49697E180AD336AB57A37C2A6068A5428");
+            .ShouldBe("2F3C6DCFC470D443BDD13651BE64780A72712C882C6933DD3A8FC29FB01B5295");
         QueryCacheKeys.DerivationSchemaToken().Split('.').Last().ShouldBe(QueryCacheKeys.FileEffectsSchema.ToString());
     }
 }

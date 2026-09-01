@@ -106,7 +106,8 @@ internal static class QueryCacheKeys
     // browser derivation token and the resident process LRU, so same-store projection fixes cannot leave
     // either surface serving the pre-fix read model.
     // v1->v2: fold lambda-owned effects to declarations, preserve co-located direct rows, and enforce method/site consistency.
-    internal const int FileEffectsSchema = 3; // v2->v3: badges disclose dispatch-only reach (ViaDispatchOnly)
+    // v2->v3: badges disclose dispatch-only reach (ViaDispatchOnly).
+    internal const int FileEffectsSchema = 4; // v3->v4: badges carry the amplification tier (Looped)
 
     // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)
