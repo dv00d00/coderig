@@ -91,7 +91,7 @@ internal static class WarmStore
     internal static Task<T> FileEffectsAsync<T>(string storeDir, string rulesHash, string filePath, Func<Task<T>> load)
         where T : class =>
         GetOrLoadFileEffectAsync(
-            key: $"file-effects|{StoreIdentity(storeDir)}|{rulesHash}|{filePath}",
+            key: QueryCacheKeys.FileEffectsCacheKey(StoreIdentity(storeDir), rulesHash, filePath),
             label: $"file effects ({Path.GetFileName(filePath)})",
             load: load
         );

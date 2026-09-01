@@ -1,7 +1,13 @@
 # The file-effects artifact has no `*Schema` constant, so a logic change never invalidates warm clients
 
-**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-09-01 reviewing the web file-lens branch ·
+**Status:** done · **Triage:** ready-for-agent · **Found:** 2026-09-01 reviewing the web file-lens branch ·
 **Family:** caching
+
+## Outcome
+
+`FileEffectsSchema` now gates both `DerivationSchemaToken()` and the shared file-effects cache-key function
+used by `WarmStore`. A synthetic key-contract test pins the schema material and its inclusion in the browser
+token, so web, CLI and Rider-hosted projections invalidate together.
 
 ## What happens
 

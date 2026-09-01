@@ -102,6 +102,11 @@ internal static class QueryCacheKeys
     // columns. Same store, same rules, a different ranking.
     internal const int HotspotSchema = 3;
 
+    // v1: the per-file semantic effect projection shared by web, annotate and Rider. This gates both the
+    // browser derivation token and the resident process LRU, so same-store projection fixes cannot leave
+    // either surface serving the pre-fix read model.
+    internal const int FileEffectsSchema = 1;
+
     // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)
     // added to the payload — a warm v4 blob decodes with empty amplification lists and would silently render a
@@ -130,7 +135,13 @@ internal static class QueryCacheKeys
     // version — the client can never keep serving an artifact whose server-side schema advanced. This is the
     // desync guard that a single hand-bumped client constant would lack, and it needs no MVID.
     internal static string DerivationSchemaToken() =>
-        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}.{EffectViewSchema}.{EffectsDiffSchema}.{HotspotSchema}";
+        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}.{EffectViewSchema}.{EffectsDiffSchema}.{HotspotSchema}.{FileEffectsSchema}";
+
+    internal static string FileEffectsCacheKey(string storeKey, string rulesHash, string filePath)
+    {
+        var material = $"filefx|v{FileEffectsSchema}|{storeKey}|{rulesHash}|{filePath}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
 
     // Identity of the current store for cache keying + invalidation: rig.db size + last-write time.
     // `rig index` publishes a fresh db (atomic rename → new mtime/size) and `rig graph` rewrites the
