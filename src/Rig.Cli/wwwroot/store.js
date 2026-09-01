@@ -3,6 +3,7 @@
 // (theme, rail width) live in localStorage (see main.js).
 
 import { createStore } from "./lib.js";
+import { lensFilterDefaults, LENS_FILTER_DEFAULTS } from "./filelens.js";
 
 export const store = createStore({
   // query — mirrored to the URL
@@ -29,7 +30,8 @@ export const store = createStore({
   // impact mode (store-vs-store diff)
   appMode: "tree", // tree | file | review | impact | refs | hotspots  (top-level view)
   filePath: "", // exact path from /api/files
-  fileStart: 1, // first source line in the current file page
+  // The lens loads the WHOLE file, so this is a SCROLL TARGET (mirrored to ?line=), not a page start.
+  fileStart: 1,
   fileEffects: null, // immutable semantic read model for filePath
   fileSource: null, // provenance-aware source page
   fileError: "",
@@ -39,6 +41,14 @@ export const store = createStore({
   reviewFile: "",
   reviewData: null,
   reviewError: "",
+  // The lens overlay's own filter — URL-addressable so a tuned view is shareable (see lensToUrl/lensFromUrl).
+  // Everything but `intrinsic`/`async` is applied CLIENT-SIDE, which is the point: the underlying query costs
+  // ~50s cold, so depth/basis/grain tuning must never refetch.
+  lensFilter: lensFilterDefaults(),
+  // Legend starts OPEN and remembers being dismissed (main.js owns the localStorage side, as with theme):
+  // the grammar is four axes, and a reader meeting it for the first time should not have to hunt for the key.
+  lensLegend: true,
+  fileFocusLine: 0, // the line `n`/`p`/minimap/outline navigation last landed on (highlight only)
   impactBase: "", // base store id
   impactHead: "", // head store id
   impactAsync: false, // --async for the diff: walk async/scheduled handoffs (changes the diff → refetch)
@@ -91,6 +101,62 @@ export function pushCrumb(s, crumb) {
   return { history: trail, historyCursor: trail.length - 1 };
 }
 
+// ---- lens filter <-> URL -------------------------------------------------------------------------------
+// Terse, prefixed keys, and only what differs from the default gets written — a shared link stays readable
+// and a default view produces no lens params at all. Round-trips through `lensFromUrl` exactly.
+const LENS_URL_KEYS = {
+  mode: "lmode",
+  minDepth: "lmin",
+  maxDepth: "lmax",
+  directOnly: "lhere",
+  loopedOnly: "lloop",
+  dispatch: "ldisp",
+  tier3Min: "lt3",
+  grain: "lgrain",
+  distant: "lbelow",
+  outlineSort: "lsort",
+  intrinsic: "lintrinsic",
+  async: "lasync",
+};
+function lensToUrl(p, f) {
+  for (const [key, param] of Object.entries(LENS_URL_KEYS)) {
+    const value = f[key];
+    if (value === LENS_FILTER_DEFAULTS[key] || value === "" || value === false) continue;
+    p.set(param, value === true ? "1" : String(value));
+  }
+  if (f.tokens.length) p.set("ltok", f.tokens.join(","));
+  const tiers = [...f.tiers].sort().join(",");
+  if (tiers !== [...LENS_FILTER_DEFAULTS.tiers].sort().join(",")) p.set("ltiers", f.tiers.join(",") || "none");
+}
+export function lensFromUrl(p) {
+  const f = lensFilterDefaults();
+  const oneOf = (param, key, values) => {
+    const v = p.get(param);
+    if (v !== null && values.includes(v)) f[key] = v;
+  };
+  const int = (param, key) => {
+    const v = p.get(param);
+    if (v !== null && v !== "" && Number.isFinite(Number.parseInt(v, 10))) f[key] = Math.max(0, Number.parseInt(v, 10));
+  };
+  oneOf("lmode", "mode", ["none", "only", "exclude"]);
+  oneOf("ldisp", "dispatch", ["show", "hide", "only"]);
+  oneOf("lt3", "tier3Min", ["low", "medium", "high"]);
+  oneOf("lgrain", "grain", ["family", "provider"]);
+  oneOf("lbelow", "distant", ["fold", "expand", "hide"]);
+  oneOf("lsort", "outlineSort", ["line", "severity"]);
+  int("lmin", "minDepth");
+  int("lmax", "maxDepth");
+  f.directOnly = p.get("lhere") === "1";
+  f.loopedOnly = p.get("lloop") === "1";
+  f.intrinsic = p.get("lintrinsic") === "1";
+  f.async = p.get("lasync") === "1";
+  f.tokens = (p.get("ltok") || "").split(",").map((t) => t.trim()).filter(Boolean);
+  const tiers = p.get("ltiers");
+  if (tiers !== null)
+    f.tiers = tiers === "none" ? [] : tiers.split(",").map((t) => t.trim()).filter((t) => ["haz", "amp", "xm"].includes(t));
+  return f;
+}
+
 // The query slice, for a watch() that re-serializes the URL only when the query changes.
 export const querySlice = (s) => [
   s.from,
@@ -110,6 +176,7 @@ export const querySlice = (s) => [
   s.reviewBase,
   s.reviewHead,
   s.reviewFile,
+  s.lensFilter,
   s.impactBase,
   s.impactHead,
   s.impactAsync,
@@ -141,6 +208,7 @@ export function serializeUrl(s = get()) {
     p.set("app", "file");
     if (s.filePath) p.set("file", s.filePath);
     if (s.fileStart > 1) p.set("line", String(s.fileStart));
+    lensToUrl(p, s.lensFilter);
   } else if (s.appMode === "review") {
     p.set("app", "review");
     if (s.reviewBase) p.set("base", s.reviewBase);
@@ -215,6 +283,7 @@ export function readUrl(runs, search = location.search) {
     reviewBase: runs.some((r) => r.storeId === p.get("base")) ? p.get("base") : "",
     reviewHead: runs.some((r) => r.storeId === p.get("head")) ? p.get("head") : "",
     reviewFile: p.get("file") || "",
+    lensFilter: lensFromUrl(p),
     impactBase: runs.some((r) => r.storeId === p.get("ibase"))
       ? p.get("ibase")
       : "",

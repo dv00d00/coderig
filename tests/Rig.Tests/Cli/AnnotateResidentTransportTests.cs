@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -17,6 +17,11 @@ using Shouldly;
 
 namespace Rig.Tests.Cli;
 
+// SERIAL: each test stands up a real in-process rig serve host AND runs cold store queries over the same
+// SQLite store, so several of these running at once contend on that store and a host can answer 400 —
+// the CLI then falls back to cold, which is correct behaviour but not what these tests are asserting.
+// Verified 2026-09-01: the class is green serially and flaky in parallel (see the contention card).
+[NotInParallel]
 public sealed class AnnotateResidentTransportTests
 {
     [Test]

@@ -39,6 +39,7 @@ rig amplify [--min-degree n] [--top n] [--format tsv]   # NON-LINEAR discovery: 
 rig refs "IFoo"  |  rig symbols "Foo" --kind method [--limit n] [--no-lambdas]
 rig show "Type.Method" [--context n] [--limit n]   # the SOURCE of a declaration — use this instead of Read when you have a rig location; it renders the INDEXED revision (marked "(from git <sha>)" when the working tree has moved) and refuses rather than render unattributable lines
 rig annotate <file> [--summary] [--method Name] [--from n --to n] [--format tsv]   # a FILE's source with the effects each method + call line reaches (the file lens: `db!` = here, `db:3` = 3 calls away)
+rig annotate <file> --only llblgen --no-dispatch --looped --direct --min-depth 1   # filters: all PROJECTION-side, so any combination is free and none of them moves a badge's number
 rig impact --base <ref> --head <ref> [--structural] [--format tsv]   # blast radius + behavioral delta (both refs REQUIRED; per-EP diff is the default)
 rig reaches "X" --store <id|sha>             # query a SPECIFIC commit's store
 rig watch Sln.slnx                           # resident working-tree index; live reaches/path/callers/tree
@@ -102,9 +103,30 @@ first; `--summary` is the cheap per-method table.
   substring (`MedDBase.DataAccessTier.Repositories\PersonCoursesRepository.cs`).
 - **`--format tsv`** emits `method` / `site` / `src` rows (source text last — a line can contain tabs).
   `method`/`site` rows are always FILE-WIDE; only `src` honours the window.
-- Known blind spot: effects inside **lambdas** are keyed to the lambda, not its owning method, and the
-  file read model filters to declared methods — so a `db` call inside a `.Select(x => …)` may be missing
-  from both the method table and the line badges. ~24% of MedDBase effects sit in lambdas.
+- **The filters are PROJECTION-side, and that is a guarantee, not an implementation note.** `--only` /
+  `--exclude` (provider or family token) / `--min-depth` / `--max-depth` / `--direct` / `--looped` /
+  `--no-dispatch` all filter the already-computed badges, so combining them costs nothing and a surviving
+  badge's number is identical to what it reads unfiltered. Two consequences worth knowing: `--only llblgen`
+  WIDENS to family `db` today (the lens is family-grain — it says so on stderr, naming the siblings it also
+  matched), and `--only <unknown token>` matches NOTHING rather than everything. Any active filter prints a
+  `FILTERED: n badge(s) hidden …` header line, so a narrowed view is never mistakable for a quiet file.
+  `--intrinsic` and `--async` are deliberately NOT available here: both would change the closure, not the
+  view.
+- **A trailing `*` (`db!*`) means that effect is INSIDE A LOOP here** — it runs once per iteration, not once
+  per call (rig's AMPLIFICATION tier, `looped_effect`). It appears only on `!` badges: repetition is a lexical
+  fact about the effect's own body, so a distant badge never claims it. This is the mark to look for when you
+  are hunting an n+1: on `CompanyToChamber.CopyRoles` it lands on `destRole.Save()` and `memberProfiles.Fill(…)`
+  inside a `foreach (var srcRole in roles)`, while the sibling `Copy*` methods next to it read plain `db!`.
+- **A trailing `?` (`cache:18?`) means the reach exists only through virtual/interface dispatch** — CHA says
+  the call CAN land on an effectful override, but no real call path proves it does (the same thing `reaches`
+  puts in its "NOT a real call" fan-out bucket). Unflagged = a real call path. On MedDBase this matters a lot:
+  a page method can show `cache:5? echo:9? rpc:11?` next to a plain `db!` — the db work is proven, the rest is
+  devirtualization. A `?` badge is a lead to check with `rig reaches`, not a fact to act on.
+- Effects inside **lambdas** now fold onto the declaring method (`WithDb(db => …)` bodies included), so a `db`
+  call inside a `.Select(x => …)` appears on its own line and in the method's badge. Two consequences: the
+  method's depth does NOT count the invisible hop into the lambda (so it can read one lower than `rig reaches`
+  for the same effect — different quantities, both correct), and ownership is resolved through method-group
+  edges, so a lambda whose owner is ambiguous is left out rather than guessed.
 
 ## Async handoffs — SYNC-CUT by default
 A delegate handed to a dispatcher to run later/elsewhere is a `handoff` edge, NOT a call. Default CUT: a

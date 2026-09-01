@@ -1,4 +1,4 @@
-# The file lens deletes a line's depth-0 effect when that line also has a targeted call
+﻿# The file lens deletes a line's depth-0 effect when that line also has a targeted call
 
 **Status:** done · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent auditing `rig annotate`
 over 30 MedDBase files; root-caused in code afterwards · **Family:** file lens (read model) / Rider + web + CLI
@@ -87,5 +87,5 @@ Rejected alternatives (revisit only if the editor proves O1 wrong):
 ## Out of scope
 
 - Mining columns so two calls on one line can be told apart — separate card
-  ([call-site facts carry no column](./call-site-facts-no-column-same-line-calls-collapse.md)).
+  ([call-site facts carry no column](../todo/call-site-facts-no-column-same-line-calls-collapse.md)).
 - The lambda-owner gap (effects inside lambdas absent from the file model) — separate card.

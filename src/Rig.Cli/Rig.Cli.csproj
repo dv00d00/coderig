@@ -30,13 +30,19 @@
     <ProjectReference Include="..\Rig.Storage\Rig.Storage.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="builtin-rules.json" Pack="true" PackagePath="tools/net10.0/any/builtin-rules.json">
+    <!-- Same as wwwroot below: the publish output carries it into the tool package, so the explicit
+         Pack/PackagePath only added a duplicate and an NU5118 warning. -->
+    <None Include="builtin-rules.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="wwwroot\**\*" Pack="true" PackagePath="tools/net10.0/any/wwwroot/">
+    <!-- `PackAsTool` packs the PUBLISH OUTPUT, so `CopyToOutputDirectory` is what puts wwwroot in the package;
+         the explicit `Pack`/`PackagePath` that used to be here added every file a SECOND time and produced ten
+         NU5118 "already contains file" warnings on every pack. Two consequences worth knowing before adding a
+         file here: it ships in the installed tool, and `Pack="false"` cannot stop it — so no fixtures. -->
+    <None Include="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

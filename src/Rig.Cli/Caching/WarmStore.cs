@@ -123,9 +123,15 @@ internal static class WarmStore
         }
     }
 
-    // Store identity = rig.db size + mtime. Reused verbatim from the disk-cache key derivation so the two
-    // layers can never disagree about which store they are describing.
-    private static string StoreIdentity(string storeDir) => QueryCacheKeys.StoreKey(Path.Combine(storeDir, StoreLayout.DbFileName));
+    // Store identity = the store DIRECTORY plus rig.db's size + mtime. The size+mtime pair is reused verbatim
+    // from the disk-cache key derivation so the two layers can never disagree about which store they are
+    // describing; the directory is what makes the identity unique. Without it, two DIFFERENT stores whose
+    // rig.db happens to share a length and a last-write tick key the same entry, and one answers for the
+    // other — a whole file model belonging to another checkout. That is not hypothetical: it is how
+    // freshly-created stores of identical content behave, and it surfaced as cross-fixture contamination in
+    // the annotate tests (badges from one store's paths served against another's).
+    private static string StoreIdentity(string storeDir) =>
+        $"{Path.GetFullPath(storeDir).TrimEnd(Path.DirectorySeparatorChar)}|{QueryCacheKeys.StoreKey(Path.Combine(storeDir, StoreLayout.DbFileName))}";
 
     private static async Task<T> GetOrLoadAsync<T>(string key, string label, Func<Task<T>> load)
         where T : class

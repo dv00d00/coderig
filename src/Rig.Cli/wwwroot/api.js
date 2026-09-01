@@ -1,4 +1,4 @@
-// The IO layer: all HTTP access + a two-tier client cache (in-memory + IndexedDB), and NOTHING else (no DOM,
+﻿// The IO layer: all HTTP access + a two-tier client cache (in-memory + IndexedDB), and NOTHING else (no DOM,
 // no URL). In a React port each function becomes a TanStack `useQuery`.
 //
 // Caching correctness: a commit-scoped store's FACTS are immutable, but derived output (tree/effects/hazards)
@@ -208,6 +208,13 @@ export const api = {
     cached(
       `file-effects|${storeId}|${file}`,
       "/api/file-effects" + qs({ store: explicitStore, file }),
+    ),
+  // Tiers 1-3 for one file. Its own request, and its own cache entry, because it is its own derivation: the
+  // badges must not wait on it, and it must not be re-fetched when only the badge filters change.
+  fileFindings: (storeId, explicitStore, file) =>
+    cached(
+      `file-findings|${storeId}|${file}`,
+      "/api/file-findings" + qs({ store: explicitStore, file }),
     ),
   // Source may come from the working tree and therefore stays deliberately outside the client cache.
   fileSource: (explicitStore, file, start, count) =>

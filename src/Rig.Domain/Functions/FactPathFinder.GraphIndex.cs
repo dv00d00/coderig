@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Rig.Domain.Data;
 
@@ -228,7 +228,16 @@ public static partial class FactPathFinder
         return rev;
     }
 
-    private static IEnumerable<(string Pred, bool ViaReverseDispatch)> Predecessors(string current, GraphIndex index, ReverseMaps rev)
+    // includeDispatch:false yields ONLY real callers — the reverse of Successors' direct-call arm. It exists
+    // because a consumer may need to know whether a reach survives WITHOUT whole-program devirtualization: rig
+    // discloses dispatch fan-out everywhere else (reaches' "NOT a real call" bucket, tree's edge markers), and a
+    // consumer that cannot separate the two silently launders an over-approximation into a fact.
+    private static IEnumerable<(string Pred, bool ViaReverseDispatch)> Predecessors(
+        string current,
+        GraphIndex index,
+        ReverseMaps rev,
+        bool includeDispatch = true
+    )
     {
         // Cut symmetry: a cut node yields NO successors forward (Successors `yield break`s on it), so it
         // can never be the runtime caller/dispatcher of `current` — it must not surface as a predecessor
@@ -246,6 +255,11 @@ public static partial class FactPathFinder
                     yield return (c, false);
                 }
             }
+        }
+
+        if (!includeDispatch)
+        {
+            yield break;
         }
 
         // Reverse dispatch.

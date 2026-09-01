@@ -1,4 +1,4 @@
-# `n_plus_1` is INTRA-METHOD: cross-method amplification (loop in caller, read in callee) is invisible
+﻿# `n_plus_1` is INTRA-METHOD: cross-method amplification (loop in caller, read in callee) is invisible
 
 **Status:** ✅ SHIPPED / CLOSED 2026-08-04 — all three steps of the plan of record landed: step 1 (the
 (anchor × witness) dataset instrument, 2026-08-03), step 2 (two stratified hand audits + the schema-v5 FP
@@ -9,7 +9,7 @@ Residual follow-ups: [amplification-context-propagation](../progress/amplificati
 [cross-method-hazards-cache](../todo/cross-method-hazards-cache.md).
 The *key propagation* half described below was NOT built — depth-tiered confidence replaced it, and
 calibration says that was enough · **Found:** 2026-08-03, measuring FR-3 recall against preprod runtime data after shipping
-[n-plus-1-iteration-contexts-beyond-loop-statements](../done/n-plus-1-iteration-contexts-beyond-loop-statements.md)
+[n-plus-1-iteration-contexts-beyond-loop-statements](./n-plus-1-iteration-contexts-beyond-loop-statements.md)
 · **Family:** hazard-recall / FR-3 · **Tier:** graph (not effect-local)
 
 ## Evidence

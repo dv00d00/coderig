@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Rig.Cli.CommandLine;
@@ -199,7 +199,14 @@ internal static class AnnotateResidentTransport
             response
                 .Methods.Select(method => new FileEffectMethod(
                     method.Id,
-                    method.Effects.Select(effect => new FileEffectAggregate(effect.Family, effect.NearestDepth)).ToArray()
+                    method
+                        .Effects.Select(effect => new FileEffectAggregate(
+                            effect.Family,
+                            effect.NearestDepth,
+                            effect.ViaDispatchOnly,
+                            effect.Looped
+                        ))
+                        .ToArray()
                 ))
                 .ToArray(),
             response
@@ -207,7 +214,13 @@ internal static class AnnotateResidentTransport
                     site.EnclosingMethodId,
                     site.TargetMethodId,
                     site.Line,
-                    site.Effects.Select(effect => new FileEffectAggregate(effect.Family, effect.NearestDepth)).ToArray()
+                    site.Effects.Select(effect => new FileEffectAggregate(
+                            effect.Family,
+                            effect.NearestDepth,
+                            effect.ViaDispatchOnly,
+                            effect.Looped
+                        ))
+                        .ToArray()
                 ))
                 .ToArray()
         );
@@ -256,7 +269,9 @@ internal static class AnnotateResidentTransport
             using var effectsResponse = await Client.GetAsync(new Uri(baseUri, "/api/file-effects" + query), cancellationToken);
             if (!effectsResponse.IsSuccessStatusCode)
             {
-                return new Result(null, null, $"rig serve file-effects failed ({(int)effectsResponse.StatusCode})");
+                var body = await effectsResponse.Content.ReadAsStringAsync(cancellationToken);
+                var detail = body.Length > 200 ? body[..200] : body;
+                return new Result(null, null, $"rig serve file-effects failed ({(int)effectsResponse.StatusCode}): {detail}");
             }
 
             var response = await effectsResponse.Content.ReadFromJsonAsync<FileEffectsResponseDto>(Json, cancellationToken);

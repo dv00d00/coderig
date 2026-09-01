@@ -1,4 +1,4 @@
-// Controller / wiring: builds the Shell, mounts it, defines the actions (which call api + set state), and
+﻿// Controller / wiring: builds the Shell, mounts it, defines the actions (which call api + set state), and
 // subscribes region re-renders to state slices. Preferences (theme, rail) and the transient search dropdown /
 // status / busy live here as direct DOM (not app state). This is the only file that glues view↔state↔io.
 
@@ -24,13 +24,19 @@ import {
   ImpactProgress,
   RefsView,
   HotspotsView,
-  FileEffectsView,
   Chips,
   treeStatus,
   baseName,
   BreadcrumbTrail,
   shortLabel,
 } from "./components.js";
+import {
+  FileEffectsView,
+  setFileFindings,
+  lensFilterDefaults,
+  serverFilterChanged,
+  navTargets,
+} from "./filelens.js";
 
 const explicit = () => get().storeId; // the id to put on URLs (null => LATEST)
 const resolved = () => activeStoreId(); // the resolved id (for cache keys)
@@ -116,26 +122,80 @@ async function loadEntrypoints() {
   }
 }
 
-const FILE_PAGE_SIZE = 240;
+// THE LENS SHOWS THE WHOLE FILE. `/api/file-source` caps one response at 400 lines
+// (SourceRenderer.DefaultMaxLines), so the client stitches the pages back together instead of making the
+// reader page: a 2,400-line controller arrives as six requests and renders as one continuous document.
+// Paging was never a reader's idea of a unit — it split methods in half, scoped the outline to whichever
+// 400 lines happened to be loaded, and made "is there anything worse further down?" a navigation problem.
+const SOURCE_CHUNK = 400;
+const SOURCE_BATCH = 6; // chunks requested in parallel per round-trip wave
+const SOURCE_MAX_LINES = 40000; // a hard stop, disclosed in the UI if it ever bites
+
+async function loadWholeSource(file) {
+  const first = await api.fileSource(explicit(), file, 1, SOURCE_CHUNK);
+  if (!first || first.origin === "unavailable" || !first.lines.length) return first;
+  const lines = [...first.lines];
+  let more = first.hasMore;
+  while (more && lines.length < SOURCE_MAX_LINES) {
+    const before = lines.length;
+    const next = lines[lines.length - 1].number + 1;
+    // Speculative parallel wave: the total length is unknown up front, so ask for several chunks at once and
+    // stop at the first short one. Six waves cover a 14k-line file in two round trips.
+    const wave = await Promise.all(
+      Array.from({ length: SOURCE_BATCH }, (_, i) => api.fileSource(explicit(), file, next + i * SOURCE_CHUNK, SOURCE_CHUNK)),
+    );
+    more = false;
+    for (const page of wave) {
+      if (!page || !page.lines.length) break;
+      const fresh = page.lines.filter((l) => l.number > lines[lines.length - 1].number);
+      if (!fresh.length) break;
+      lines.push(...fresh);
+      more = page.hasMore;
+      if (!more) break;
+    }
+    // Past EOF the endpoint answers origin="unavailable" with no lines, so a wave that adds nothing is the
+    // real end of the file whatever `hasMore` last claimed. Without this the loop could spin to the cap.
+    if (lines.length === before) {
+      more = false;
+      break;
+    }
+  }
+  return {
+    ...first,
+    startLine: lines[0].number,
+    endLine: lines[lines.length - 1].number,
+    lines,
+    hasPrevious: false,
+    hasMore: more,
+    truncatedAt: more ? SOURCE_MAX_LINES : 0,
+  };
+}
+// `line` is now a SCROLL TARGET, not a page start — the whole file is loaded either way.
 async function openFile(file, line = 1) {
   if (!file) {
     status("choose an indexed file", true);
     return;
   }
-  const start = Math.max(1, Number.parseInt(line, 10) - 30 || 1);
-  set({ appMode: "file", filePath: file, fileStart: start, fileSource: null, fileError: "" });
+  const focus = Math.max(1, Number.parseInt(line, 10) || 1);
+  set({ appMode: "file", filePath: file, fileStart: focus, fileSource: null, fileError: "", fileFocusLine: focus > 1 ? focus : 0 });
   if (refs.fileQuery) refs.fileQuery.value = file;
   setBusy(true);
   status("building file effect lens…");
   try {
-    const [fileEffects, fileSource] = await Promise.all([
+    // Tiers 1-3 come from their own endpoint and their own derivation, fetched in PARALLEL: the badges and the
+    // source must not wait on the hazard/amplification pass, and a findings failure must not cost the reader
+    // the lens. Hence `.catch(null)` — no findings marks is a degraded view; no view is a broken one.
+    const [fileEffects, fileSource, findings] = await Promise.all([
       api.fileEffects(resolved(), explicit(), file),
-      api.fileSource(explicit(), file, start, FILE_PAGE_SIZE),
+      loadWholeSource(file),
+      api.fileFindings(resolved(), explicit(), file).catch(() => null),
     ]);
-    set({ fileEffects, fileSource, fileStart: start, fileError: "" });
+    setFileFindings(findings);
+    set({ fileEffects, fileSource, fileStart: focus, fileError: "" });
     status(
-      `${baseName(file)} · ${fileEffects.methods.length} effectful methods · ${fileEffects.sites.length} marked calls`,
+      `${baseName(file)} · ${fileSource.lines.length} lines · ${fileEffects.methods.length} effectful methods · ${fileEffects.sites.length} marked calls`,
     );
+    if (focus > 1) scrollToLine(focus);
   } catch (e) {
     set({ fileEffects: null, fileSource: null, fileError: e.message });
     status("file: " + e.message, true);
@@ -170,14 +230,63 @@ async function openFileQuery(value) {
   }
 }
 
-async function pageFile(direction) {
-  const source = get().fileSource;
-  if (!source) return;
-  const start =
+// Centre a source line in the editor and flash it. The row carries data-line, so this needs no index.
+function scrollToLine(line) {
+  requestAnimationFrame(() => {
+    const row = refs.file.querySelector(`.file-code-row[data-line="${line}"]`);
+    if (row) row.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
+}
+
+// Keyboard navigation over the marks. `n`/`p` step between lines that DO I/O (or carry a finding) and
+// `N`/`P` between findings only — the two questions a reader actually has on a 133-marked-line file, where
+// scrolling past 96 dispatch-only guesses to find the six real writes is the failure mode. Both respect the
+// active filter, so a key never lands on something the page is not showing.
+function lensJump(kind, direction) {
+  const s = get();
+  if (s.appMode !== "file" || !s.fileEffects) return;
+  const targets = navTargets(s.fileEffects, s.lensFilter, kind);
+  if (!targets.length) {
+    status(kind === "finding" ? "no findings in this file match the filter" : "no I/O lines match the filter", true);
+    return;
+  }
+  const from = s.fileFocusLine || (s.fileSource ? s.fileSource.startLine : 1);
+  const next =
     direction > 0
-      ? source.endLine + 1
-      : Math.max(1, source.startLine - FILE_PAGE_SIZE);
-  await openFile(get().filePath, start + 30);
+      ? targets.find((l) => l > from) ?? targets[0]
+      : [...targets].reverse().find((l) => l < from) ?? targets[targets.length - 1];
+  actions.gotoFileLine(next);
+  status(`${kind === "finding" ? "finding" : "I/O"} line ${next} · ${targets.indexOf(next) + 1}/${targets.length}`);
+}
+
+// The minimap's viewport rectangle, driven from ONE delegated scroll handler registered at boot — the view
+// re-renders on every filter change, so a per-render listener would either leak or be lost.
+function syncMinimap() {
+  const scroller = refs.file;
+  const map = scroller.querySelector(".mm");
+  const view = scroller.querySelector(".mm-view");
+  const editor = scroller.querySelector(".file-editor");
+  if (!map || !view || !editor) return;
+  const total = editor.scrollHeight || 1;
+  view.style.top = `${(scroller.scrollTop / total) * 100}%`;
+  view.style.height = `${Math.max(1.5, (scroller.clientHeight / total) * 100)}%`;
+}
+
+function setupLensKeys() {
+  refs.file.addEventListener("scroll", () => requestAnimationFrame(syncMinimap), { passive: true });
+  window.addEventListener("resize", () => requestAnimationFrame(syncMinimap));
+  document.addEventListener("keydown", (event) => {
+    if (get().appMode !== "file") return;
+    const tag = (event.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select" || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "n") lensJump("io", 1);
+    else if (event.key === "p") lensJump("io", -1);
+    else if (event.key === "N") lensJump("finding", 1);
+    else if (event.key === "P") lensJump("finding", -1);
+    else if (event.key === "l") actions.toggleLensLegend();
+    else return;
+    event.preventDefault();
+  });
 }
 
 let fileDiffModule;
@@ -296,7 +405,7 @@ function selectStore(id) {
   // app mode is visible, so returning to Hotspots cannot briefly show the previous store's report.
   set({ hotspotData: null, effectsDiffData: null });
   if (get().appMode === "hotspots") loadHotspots();
-  if (get().appMode === "file" && get().filePath) openFile(get().filePath, get().fileStart + 30);
+  if (get().appMode === "file" && get().filePath) openFile(get().filePath, get().fileStart);
 }
 function loadImpact() {
   const { impactBase, impactHead, impactAsync } = get();
@@ -531,9 +640,35 @@ const actions = {
   loadSource: (id) => api.source(explicit(), id),
   openFile,
   openFileQuery,
-  pageFile,
   openReviewFile,
   openReviewQuery,
+  // ---- file lens overlay controls ----
+  // Filter changes are CLIENT-SIDE and instant; only `intrinsic`/`async` change what the server computed, so
+  // only those refetch. That asymmetry is the whole reason the overlay is usable on a store whose cold
+  // file-effects query costs ~50s: a reader tunes depth, basis and grain without ever waiting.
+  setLensFilter(patch) {
+    const before = get().lensFilter;
+    const lensFilter = { ...before, ...patch };
+    set({ lensFilter });
+    if (serverFilterChanged(before, lensFilter) && get().filePath) {
+      status("lens: server-side flag changed — refetching…");
+      openFile(get().filePath, get().fileStart);
+    }
+  },
+  resetLensFilter() {
+    set({ lensFilter: { ...lensFilterDefaults(), outlineSort: get().lensFilter.outlineSort } });
+  },
+  toggleLensLegend() {
+    const open = !get().lensLegend;
+    set({ lensLegend: open });
+    localStorage.setItem("rig-lens-legend", open ? "1" : "0");
+  },
+  // Every line is in the DOM, so a jump is always a scroll — the minimap, the outline and `n`/`p` all land
+  // without a refetch.
+  gotoFileLine(line) {
+    set({ fileFocusLine: line });
+    scrollToLine(line);
+  },
   openFileTree(id) {
     set({ appMode: "tree", from: id });
     refs.from.value = id;
@@ -628,7 +763,7 @@ const actions = {
       loadHotspots();
     } else if (get().appMode === "file" && get().filePath) {
       set({ fileEffects: null, fileSource: null, fileError: "" });
-      openFile(get().filePath, get().fileStart + 30);
+      openFile(get().filePath, get().fileStart);
     } else if (get().appMode === "review" && get().reviewFile) {
       set({ reviewData: null, reviewError: "" });
       loadFileDiff();
@@ -642,7 +777,7 @@ const actions = {
     if (m === "refs" && !get().refsUnused && !get().refsUsage) loadRefs();
     if (m === "hotspots" && !get().hotspotData) loadHotspots();
     if (m === "file" && get().filePath && (!get().fileEffects || !get().fileSource))
-      openFile(get().filePath, get().fileStart + 30);
+      openFile(get().filePath, get().fileStart);
     if (m === "review") {
       const patch = reviewDefaults();
       set(patch);
@@ -1108,9 +1243,12 @@ function setupWatches() {
   );
   watch(
     store,
-    (s) => [s.fileEffects, s.fileSource, s.filePath, s.fileError, s.appMode],
+    (s) => [s.fileEffects, s.fileSource, s.filePath, s.fileError, s.appMode, s.lensFilter, s.lensLegend, s.fileFocusLine],
     (s) => {
-      if (s.appMode === "file") mount(refs.file, FileEffectsView(s, actions));
+      if (s.appMode === "file") {
+        mount(refs.file, FileEffectsView(s, actions));
+        requestAnimationFrame(syncMinimap);
+      }
     },
   );
   watch(
@@ -1228,9 +1366,11 @@ function setupWatches() {
   refs = shell.refs;
   mount(document.getElementById("app"), shell.root);
   applyTheme(localStorage.getItem("rig-theme") || "system");
+  if (localStorage.getItem("rig-lens-legend") === "0") set({ lensLegend: false });
   initSplitter();
   setupSearch();
   setupFileSearch();
+  setupLensKeys();
   setupWatches();
   // Derivation version first — it keys the cache and purges a stale persisted store before any cached fetch.
   try {
@@ -1250,7 +1390,7 @@ function setupWatches() {
     set(patch);
     syncControls(get());
     if (patch.appMode === "file") {
-      if (patch.filePath) openFile(patch.filePath, patch.fileStart + 30);
+      if (patch.filePath) openFile(patch.filePath, patch.fileStart);
     } else if (patch.appMode === "review") {
       if (patch.reviewBase && patch.reviewHead && patch.reviewFile)
         loadFileDiff(patch.reviewFile);

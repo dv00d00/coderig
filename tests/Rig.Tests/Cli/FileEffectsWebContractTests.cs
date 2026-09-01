@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
@@ -68,8 +68,8 @@ public sealed class FileEffectsWebContractTests
         var response = new FileEffectsResponseDto(
             File,
             ["sql"],
-            [new FileEffectMethodDto(LoadId, "Load", "", 10, 24, [new FileEffectAggregateDto("sql", 2)])],
-            [new FileEffectCallSiteDto(LoadId, QueryId, 17, [new FileEffectAggregateDto("sql", 1)])],
+            [new FileEffectMethodDto(LoadId, "Load", "", 10, 24, [new FileEffectAggregateDto("sql", 2, ViaDispatchOnly: false)])],
+            [new FileEffectCallSiteDto(LoadId, QueryId, 17, [new FileEffectAggregateDto("sql", 1, ViaDispatchOnly: false)])],
             ColumnsAvailable: false,
             WitnessPathsIncluded: false
         );

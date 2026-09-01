@@ -1,6 +1,7 @@
 ﻿using System.CommandLine;
 using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
+using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
 using Rig.Cli.Services;
@@ -50,6 +51,30 @@ internal static class AnnotateCommand
         var store = CommonOptions.Store();
         var host = new Option<string?>("--host") { Description = "Use a local rig serve URL for resident file-effects queries." };
         var cold = new Option<bool>("--cold") { Description = "Force the existing in-process store query; do not contact rig serve." };
+
+        // The filter set. Every one of these is a PREDICATE OVER THE PROJECTION, never a change to the
+        // derivation — the reverse closure stays keyed on (store, rules, schema) and is shared by every
+        // filtered view, warm or cold, so combinations cost nothing and none of them can move a badge's
+        // number. `--intrinsic` and `--async` are deliberately NOT here: both would change the closure.
+        var only = CommonOptions.Only();
+        var exclude = CommonOptions.Exclude();
+        var minDepth = new Option<int?>("--min-depth")
+        {
+            Description = "Keep only badges at least this many calls away (--min-depth 1 hides effects in the body itself).",
+        };
+        var maxDepth = new Option<int?>("--max-depth", "--maxdepth")
+        {
+            Description = "Keep only badges within this distance. Exact: nearest-depth is monotone, so this equals bounding the walk.",
+        };
+        var direct = new Option<bool>("--direct") { Description = "Keep only effects performed in the body itself (depth 0)." };
+        var looped = new Option<bool>("--looped")
+        {
+            Description = "Keep only effects that run once per loop iteration (the amplification tier, marked `*`).",
+        };
+        var noDispatch = new Option<bool>("--no-dispatch")
+        {
+            Description = "Drop badges whose reach exists only through virtual/interface dispatch (the ones marked `?`).",
+        };
         var cmd = new Command(
             name: "annotate",
             description: "Print an indexed file's source annotated with the effects each method and call site reaches."
@@ -66,6 +91,13 @@ internal static class AnnotateCommand
             store,
             host,
             cold,
+            only,
+            exclude,
+            minDepth,
+            maxDepth,
+            direct,
+            looped,
+            noDispatch,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -83,7 +115,14 @@ internal static class AnnotateCommand
                             Format: pr.GetValue(format),
                             Time: pr.GetValue(time),
                             Host: pr.GetValue(host),
-                            Cold: pr.GetValue(cold)
+                            Cold: pr.GetValue(cold),
+                            Only: pr.GetValue(only) ?? [],
+                            Exclude: pr.GetValue(exclude) ?? [],
+                            MinDepth: pr.GetValue(minDepth),
+                            MaxDepth: pr.GetValue(maxDepth),
+                            Direct: pr.GetValue(direct),
+                            Looped: pr.GetValue(looped),
+                            NoDispatch: pr.GetValue(noDispatch)
                         ),
                         new CommandIo(
                             new TextOutput(Output: output, Error: error),
@@ -105,7 +144,14 @@ internal static class AnnotateCommand
         string? Format,
         bool Time,
         string? Host,
-        bool Cold
+        bool Cold,
+        IReadOnlyList<string> Only,
+        IReadOnlyList<string> Exclude,
+        int? MinDepth,
+        int? MaxDepth,
+        bool Direct,
+        bool Looped,
+        bool NoDispatch
     );
 
     private static async Task<int> RunAsync(Options opts, CommandIo io)
@@ -175,9 +221,39 @@ internal static class AnnotateCommand
             timing.Record("file effects", effectWatch.Elapsed);
         }
 
+        // Token resolution needs the rule set (provider -> family), and nothing else here does, so it is
+        // loaded only when a token was actually typed. Both transports resolve identically: the filter is a
+        // predicate over the projection, so a warm and a cold call must produce the same filtered view.
+        var filterNotes = new List<string>();
+        var onlyFamilies = FileEffectFilterTokens.Resolution.Empty;
+        var excludeFamilies = FileEffectFilterTokens.Resolution.Empty;
+        if (opts.Only.Count > 0 || opts.Exclude.Count > 0)
+        {
+            var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, extraRules: [], loadedPaths: out _);
+            onlyFamilies = FileEffectFilterTokens.Resolve(rules, opts.Only, "--only");
+            excludeFamilies = FileEffectFilterTokens.Resolve(rules, opts.Exclude, "--exclude");
+            filterNotes.AddRange(onlyFamilies.Notes);
+            filterNotes.AddRange(excludeFamilies.Notes);
+        }
+
+        var filter = new FileEffectLens.LensFilter(
+            // Null when the flag was absent; the resolved set (possibly empty) when it was typed.
+            Only: opts.Only.Count > 0 ? onlyFamilies.Families : null,
+            Exclude: opts.Exclude.Count > 0 ? excludeFamilies.Families : null,
+            MinDepth: opts.MinDepth,
+            MaxDepth: opts.MaxDepth,
+            DirectOnly: opts.Direct,
+            LoopedOnly: opts.Looped,
+            HideDispatchOnly: opts.NoDispatch
+        );
+
         // Ordering, per-line merging and the direct/distant distinction all come from the shared lens, so
         // this command cannot drift from the browser view or, later, the editor.
-        var lens = FileEffectLens.Project(artifact);
+        var lens = FileEffectLens.Project(artifact, filter);
+        foreach (var note in filterNotes)
+        {
+            io.TextOutput.Error.WriteLine(note);
+        }
         var windowSelection = SelectWindows(opts, artifact, lens);
         if (windowSelection.Error is not null)
         {
@@ -234,6 +310,19 @@ internal static class AnnotateCommand
     }
 
     private sealed record WindowSelection(IReadOnlyList<(int From, int To)> Windows, string? Error = null);
+
+    // Whether any rendered badge is dispatch-derived. The legend line is printed only then, so a file whose
+    // every badge is a real call path carries no caveat a reader has to discount.
+    private static bool AnyDispatchOnly(FileEffectLens.LensModel lens) =>
+        lens
+            .Methods.SelectMany(method => method.Badges)
+            .Concat(lens.Lines.SelectMany(line => line.Badges))
+            .Any(badge => badge.ViaDispatchOnly);
+
+    // Same rule for the amplification mark: the legend line appears only in a file that has one, so the
+    // vocabulary a reader must hold grows with what is actually on screen.
+    private static bool AnyLooped(FileEffectLens.LensModel lens) =>
+        lens.Methods.SelectMany(method => method.Badges).Concat(lens.Lines.SelectMany(line => line.Badges)).Any(badge => badge.Looped);
 
     // The line windows to render: --method spans when asked for, otherwise the single --from/--to range.
     // Diagnosis deliberately joins both halves of the shared artifact: Artifact.Methods is every declared
@@ -306,6 +395,19 @@ internal static class AnnotateCommand
             output.WriteLine($"{Indent.L1}families present: {present}{absent}");
         }
 
+        // A filtered view and a quiet file render identically, so the count of what was removed is part of the
+        // output rather than something the reader has to remember typing. It goes in the HEADER, above the
+        // data: `--summary` renders no footer, and a caveat that arrives after the table has already been read
+        // is not a caveat.
+        if (lens.Disclosure is { Active: true } filtered)
+        {
+            output.WriteLine(
+                filtered.HidSomething
+                    ? $"{Indent.L1}FILTERED: {filtered.HiddenBadges} badge(s) hidden, {filtered.HiddenMethods} method row(s) and {filtered.HiddenLines} line(s) dropped — this is NOT the whole file"
+                    : $"{Indent.L1}FILTERED: the filter removed nothing — this is the whole file"
+            );
+        }
+
         output.WriteLine();
     }
 
@@ -319,6 +421,18 @@ internal static class AnnotateCommand
         if (!lens.ColumnsAvailable)
         {
             output.WriteLine($"{Indent.L1}no column facts — a badge marks the LINE, not the expression");
+        }
+
+        if (AnyDispatchOnly(lens))
+        {
+            output.WriteLine($"{Indent.L1}`?` = that reach exists only through virtual/interface dispatch — it MAY not be a real call");
+        }
+
+        if (AnyLooped(lens))
+        {
+            output.WriteLine(
+                $"{Indent.L1}`*` = that effect is inside a loop here — it runs once per ITERATION, not once per call (only ever on a `!` badge)"
+            );
         }
     }
 

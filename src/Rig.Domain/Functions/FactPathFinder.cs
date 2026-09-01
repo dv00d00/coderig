@@ -1161,7 +1161,8 @@ public static partial class FactPathFinder
         int maxDepth = 20,
         int maxNodes = 20000,
         bool narrowDispatch = true,
-        TraversalMode mode = TraversalMode.SyncCut
+        TraversalMode mode = TraversalMode.SyncCut,
+        bool includeDispatch = true
     )
     {
         ArgumentNullException.ThrowIfNull(graph);
@@ -1244,7 +1245,7 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (var (pred, _) in Predecessors(current, index, rev))
+            foreach (var (pred, _) in Predecessors(current, index, rev, includeDispatch))
             {
                 var predDepths = Slot(pred);
                 var improved = 0UL;

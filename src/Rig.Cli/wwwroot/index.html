@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -20,7 +20,9 @@
         --warn: #d29922;
         --btn-fg: #0e1116;
         --hover: #1c2230;
-        --danger: #f85149;
+        /* Lightened from #f85149 (2026-09-01): the hazard pill paints a 12% danger tint under danger-coloured
+           text, which composited to 4.44:1 on a dark row — just under AA. */
+        --danger: #ff7b72;
         --sel: #1f6feb33;
       }
       :root[data-theme="light"] {
@@ -28,13 +30,17 @@
         --panel: #f4f6f9;
         --border: #d8dee5;
         --fg: #1f2733;
-        --muted: #586573;
+        /* Darkened 2026-09-01 from #586573/#9a6700/#cf222e. The nominal ratios against pure white were
+           fine (5.96 / 4.87 / 5.36), but marks do not sit on white: a lens row carries a severity tint and
+           a hazard pill paints its own 12% danger background on top, which measured the composite at
+           3.52:1 (dispatch chip) and 3.91:1 (hazard pill) — both under AA. These clear 4.5 composited. */
+        --muted: #48545f;
         --accent: #0969da;
         --chip: #eaeef2;
-        --warn: #9a6700;
+        --warn: #7d5300;
         --btn-fg: #ffffff;
         --hover: #eef2f6;
-        --danger: #cf222e;
+        --danger: #b3121f;
         --sel: #0969da22;
       }
       @media (prefers-color-scheme: light) {
@@ -43,13 +49,14 @@
           --panel: #f4f6f9;
           --border: #d8dee5;
           --fg: #1f2733;
-          --muted: #586573;
+          /* Same values as :root[data-theme="light"] above — see the note there. */
+          --muted: #48545f;
           --accent: #0969da;
           --chip: #eaeef2;
-          --warn: #9a6700;
+          --warn: #7d5300;
           --btn-fg: #ffffff;
           --hover: #eef2f6;
-          --danger: #cf222e;
+          --danger: #b3121f;
           --sel: #0969da22;
         }
       }
@@ -1086,8 +1093,7 @@
           --add: #1a7f37;
         }
       }
-      /* File effect lens: source-first, with a fixed semantic gutter and a compact effect outline. Depth is
-         encoded by shape + tone (not colour alone): solid=direct, recursion=transitive, ellipsis=3+. */
+      /* Location chips (shared by the tree's `Loc` expander and the lens's file links). */
       .loc-wrap {
         display: inline-flex;
         align-items: center;
@@ -1119,15 +1125,30 @@
         color: var(--fg);
         font-size: 18px;
       }
+      /* ---- FILE EFFECT LENS -----------------------------------------------------------------------------
+         The three orthogonal axes each own a DIFFERENT visual channel, so no two of them can be confused and
+         none of them depends on hue:
+             WHERE  -> the ● / ○ fill glyph + font weight
+             BASIS  -> a trailing `?` + a dashed border (dispatch-only) vs solid (proven)
+             REPEAT -> a leading ⟳ glyph (tier 2 inside the badge, tier 3 as its own ⟳↓ pill)
+         Family is carried by its WORD, not by a colour: eight learnable hues is more than a reader will
+         retain, and the words (`db`, `cache`, `echo`) are already the terminal's vocabulary. Colour appears
+         only as a redundant severity accent on findings.
+         --------------------------------------------------------------------------------------------------- */
       .file-lens {
         min-height: 100%;
+      }
+      /* Provider grain prints `entity_cache:read` where family grain prints `cache`, so the marks column is
+         sized per grain rather than padded for the worst case in both. */
+      .file-lens.grain-provider {
+        --marks: 300px;
       }
       .file-lens-head {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 18px;
-        padding: 10px 18px;
+        padding: 8px 18px;
         border-bottom: 1px solid var(--border);
         background: var(--panel);
         font-size: 12px;
@@ -1163,92 +1184,395 @@
         flex: 0 0 auto;
         white-space: nowrap;
       }
+
+      /* ---- filter bar: the filter reads as a sentence, each segment showing its own current value ---- */
+      .lens-filter {
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        padding: 6px 18px 0;
+        font-size: 11px;
+      }
+      .lens-filter-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 5px;
+        padding-bottom: 6px;
+      }
+      .fseg {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 5px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--chip);
+        color: var(--fg);
+        cursor: pointer;
+        padding: 2px 7px;
+        font: inherit;
+        white-space: nowrap;
+      }
+      .fseg:hover {
+        border-color: var(--accent);
+      }
+      .fseg.on {
+        border-color: var(--accent);
+        background: var(--hover);
+      }
+      .fseg-k {
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .fseg.on .fseg-k {
+        color: var(--accent);
+      }
+      .fseg-v {
+        font-weight: 600;
+      }
+      .fseg-lbl {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .fsep {
+        color: var(--border);
+      }
+      .fnum {
+        cursor: default;
+      }
+      .fnum input {
+        width: 42px;
+        border: 0;
+        background: transparent;
+        color: var(--fg);
+        font: inherit;
+        padding: 0;
+      }
+      .ftokens {
+        flex: 1 1 170px;
+        min-width: 120px;
+        max-width: 280px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg);
+        color: var(--fg);
+        padding: 2px 7px;
+        font: inherit;
+      }
+      .fclear {
+        border: 1px solid var(--accent);
+        border-radius: 4px;
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+        padding: 2px 7px;
+        font: inherit;
+      }
+      .fclear.inline {
+        margin-left: 8px;
+        padding: 0 5px;
+      }
+
+      /* MANDATORY DISCLOSURE. A filtered lens that looks unfiltered is a lie, so this line is never hidden
+         and always names the quantity removed — the amber rule down the left edge is what tells a reader,
+         from across the room, that they are not looking at the whole file. */
+      .lens-disclosure {
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        padding: 5px 0 6px;
+        font-size: 11px;
+      }
+      .lens-disclosure.filtered {
+        border-left: 3px solid var(--warn);
+        color: var(--warn);
+        padding-left: 8px;
+      }
+      .lens-disclosure.clean {
+        color: var(--muted);
+        opacity: 0.75;
+      }
+      .lens-mock {
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in srgb, var(--warn) 12%, var(--bg));
+        color: var(--fg);
+        padding: 4px 18px;
+        font-size: 11px;
+      }
+      .lens-mock strong {
+        color: var(--warn);
+        letter-spacing: 0.08em;
+      }
+      /* A mock from another store is a stronger statement than "mocked": its marks would be mis-anchored, so
+         they are withheld. Danger, not warning, and a left rule so it reads as a refusal not a footnote. */
+      .lens-mock.stale {
+        background: color-mix(in srgb, var(--danger) 14%, var(--bg));
+        border-left: 3px solid var(--danger);
+      }
+      .lens-mock.stale strong {
+        color: var(--danger);
+      }
+
+      /* ---- the editor grid ---- */
       .file-lens-grid {
         display: grid;
-        grid-template-columns: minmax(600px, 1fr) 285px;
-        min-height: calc(100vh - 160px);
+        grid-template-columns: minmax(560px, 1fr) 320px;
+        min-height: calc(100vh - 210px);
+      }
+      .file-editor-wrap {
+        display: flex;
+        align-items: flex-start;
+        min-width: 0;
       }
       .file-editor {
+        flex: 1;
+        min-width: 0;
         margin: 0;
-        padding: 14px 0 60px;
+        padding: 10px 10px 60px 0;
         overflow: auto;
-        font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       }
+      /* The marks column is FIXED-WIDTH and clips nothing: the old 128px gutter silently amputated badges
+         (line 88 of Accounts/HomeComponents/Main.cs rendered a bare "e" — the tail of a clipped `cache`
+         chip — and on WriteDischargeDetail.cs the proven `cache!` was pushed out of frame by a CHA fan-out).
+         Anything that will not fit now folds into a rollup chip with a popover instead of overflowing. */
       .file-code-row {
         display: grid;
-        grid-template-columns: 128px auto minmax(max-content, 1fr);
+        grid-template-columns: var(--marks, 220px) 4px auto minmax(max-content, 1fr);
+        align-items: center;
         min-height: 20px;
-        padding-right: 18px;
-      }
-      .file-code-row.effect {
-        background: var(--sel);
       }
       .file-code-row code {
         white-space: pre;
+        padding-left: 8px;
+      }
+      /* Marked rows get a whisper of tint, tiered by what is on them — NOT one flat highlight for all 133
+         marked lines, which made a proven DB write look exactly like a 14-hop dispatch guess. */
+      .file-code-row.effect.sev-1,
+      .file-code-row.effect.sev-0 {
+        background: color-mix(in srgb, var(--fg) 3%, transparent);
+      }
+      .file-code-row.effect.sev-2 {
+        background: color-mix(in srgb, var(--accent) 8%, transparent);
+      }
+      .file-code-row.effect.sev-3 {
+        background: color-mix(in srgb, var(--warn) 10%, transparent);
+      }
+      .file-code-row.effect.sev-4 {
+        background: color-mix(in srgb, var(--danger) 10%, transparent);
+      }
+      .file-code-row.focus {
+        outline: 1px solid var(--accent);
+        outline-offset: -1px;
       }
       .file-gutter {
         display: flex;
         justify-content: flex-end;
         align-items: center;
         gap: 3px;
+        overflow: hidden;
         padding: 0 6px;
       }
-      .file-site-mark,
-      .file-fx,
-      .file-method-link,
-      .file-outline-method,
-      .file-page button {
-        font: inherit;
+
+      /* THE RAIL — the one mark a reader scans a 700-line file with. Height and fill answer "does anything
+         happen HERE?" before any word is read; colour is the redundant third cue. */
+      .rail {
+        align-self: stretch;
+        width: 4px;
+        margin: 1px 0;
+        border-radius: 1px;
       }
-      .file-site-mark {
+      .rail-here {
+        background: var(--accent);
+      }
+      .rail-guess {
+        background: repeating-linear-gradient(to bottom, var(--accent) 0 2px, transparent 2px 5px);
+      }
+      .rail-below {
+        background: color-mix(in srgb, var(--muted) 40%, transparent);
+        width: 2px;
+        margin-left: 1px;
+      }
+      .rail-amp {
+        background: var(--warn);
+      }
+      .rail-haz {
+        background: var(--danger);
+      }
+
+      /* ---- badges ---- */
+      .fx {
         display: inline-flex;
+        align-items: baseline;
         gap: 3px;
-        padding: 0;
-        border: 0;
-        background: transparent;
-        cursor: pointer;
-      }
-      .file-fx {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
         border: 1px solid var(--border);
-        border-radius: 999px;
+        border-radius: 3px;
         background: var(--chip);
         color: var(--fg);
-        padding: 1px 6px;
+        padding: 0 4px;
         white-space: nowrap;
-        font-size: 10px;
+        font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       }
-      button.file-fx {
+      button.fx {
         cursor: pointer;
       }
-      .file-fx.direct {
-        color: #c084fc;
-        border-color: #c084fc66;
+      button.fx:hover {
+        border-color: var(--accent);
+      }
+      /* WHERE: happens here = filled glyph, full contrast, bold. Happens below = hollow glyph, muted, light.
+         The two are legible apart in greyscale and at 10px. */
+      .fx-here {
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+        color: var(--fg);
         font-weight: 700;
       }
-      .file-fx.near {
-        color: #4fd1c5;
-        border-style: solid;
+      .fx-below {
+        background: transparent;
+        color: var(--muted);
+        font-weight: 400;
       }
-      .file-fx.second {
-        color: var(--warn);
+      /* BASIS: a dashed border plus the `?` glyph. Two cues, neither of them hue. */
+      .fx-guess {
         border-style: dashed;
       }
-      .file-fx.far {
-        color: var(--muted);
-        border-style: dotted;
+      .fx-fill {
+        font-size: 8px;
       }
-      .file-fx-depth {
-        opacity: 0.8;
+      .fx-depth {
+        opacity: 0.75;
         font-size: 9px;
       }
+      .fx-q {
+        color: var(--warn);
+        font-weight: 700;
+      }
+      .fx-unknown {
+        opacity: 0.6;
+        font-style: italic;
+      }
+      .fx-rollup {
+        border-style: dotted;
+      }
+      /* The overflow chip: proof that nothing was silently dropped. */
+      .fx-more {
+        border-style: dashed;
+        color: var(--muted);
+      }
+      .fx-pop-row.wrap {
+        flex-wrap: wrap;
+      }
+      /* REPEAT: the ⟳ prefix. Inside a badge it means "this effect runs once per iteration" (tier 2). */
+      .fx-amp {
+        color: var(--warn);
+        font-weight: 700;
+      }
+      .fx-loop {
+        border-color: var(--warn);
+      }
+      .fx-orphan {
+        color: var(--warn);
+      }
+      /* TIER 3 — deliberately NOT badge-shaped: no ●/○ fill, because nothing happens on this line. Confidence
+         is the border: solid = high, dashed = medium, dotted + the word `lead` = low. */
+      .fx-anchor {
+        border-color: var(--warn);
+        color: var(--warn);
+        background: color-mix(in srgb, var(--warn) 10%, transparent);
+        font-weight: 700;
+      }
+      .fx-anchor.conf-medium {
+        border-style: dashed;
+      }
+      .fx-anchor.conf-low {
+        border-style: dotted;
+        background: transparent;
+        color: var(--muted);
+        font-weight: 400;
+      }
+      .fx-anchor.conf-low .fx-amp {
+        color: var(--muted);
+      }
+      .fx-lead {
+        border: 1px solid currentColor;
+        border-radius: 2px;
+        padding: 0 2px;
+        font-size: 8px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      /* TIER 1 — the judgment. Own glyph, danger accent, confidence in the border style. */
+      .fx-haz {
+        border-color: var(--danger);
+        color: var(--danger);
+        background: color-mix(in srgb, var(--danger) 12%, transparent);
+        font-weight: 700;
+      }
+      .fx-haz.conf-medium {
+        border-style: dashed;
+      }
+      .fx-haz.conf-low {
+        border-style: dotted;
+        opacity: 0.8;
+      }
+
+      /* ---- popover: the evidence a tooltip cannot hold ---- */
+      .fx-pop {
+        position: fixed;
+        z-index: 60;
+        max-width: 460px;
+        max-height: 50vh;
+        overflow: auto;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        background: var(--panel);
+        box-shadow: 0 8px 28px #0007;
+        padding: 8px 10px;
+        font-size: 11px;
+      }
+      .fx-pop-title {
+        color: var(--muted);
+        margin-bottom: 6px;
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .fx-pop-rows {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .fx-pop-row {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+      }
+      .fx-pop-row.col {
+        flex-direction: column;
+        gap: 1px;
+        border-top: 1px solid var(--border);
+        padding-top: 5px;
+      }
+      .fx-pop-row.col:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+      .fx-pop-note {
+        color: var(--muted);
+        font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        word-break: break-word;
+      }
+      .fx-pop-lead {
+        color: var(--warn);
+        font-size: 10px;
+      }
+
+      /* ---- method row (code vision) ---- */
       .file-vision {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        gap: 6px;
-        padding: 8px 18px 3px 146px;
+        gap: 5px;
+        padding: 9px 18px 3px calc(var(--marks, 220px) + 16px);
         color: var(--muted);
         border-top: 1px solid var(--border);
       }
@@ -1257,57 +1581,249 @@
         background: transparent;
         color: var(--accent);
         cursor: pointer;
-        padding: 0 6px 0 0;
-        font-weight: 700;
+        padding: 0 4px 0 0;
+        font: 700 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       }
+      /* Tier COUNTS at method grain, not individual marks: the marks are already on the lines, and what a
+         reviewer wants from a declaration is "this body has 5 looped call sites" — which is the grain
+         HazardKinds puts tier 3 at ("the CALLER method, where a human would fix the loop"). */
+      .tier {
+        border: 1px solid currentColor;
+        border-radius: 3px;
+        background: transparent;
+        cursor: pointer;
+        padding: 0 4px;
+        font: 700 10px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .tier-haz {
+        color: var(--danger);
+      }
+      .tier-amp {
+        color: var(--warn);
+      }
+      .tier-xm {
+        color: var(--warn);
+      }
+      .tier-xm.conf-low {
+        border-style: dotted;
+        color: var(--muted);
+      }
+      .tier-xm.conf-medium {
+        border-style: dashed;
+      }
+
+      /* ---- minimap: one tick per marked line, over the WHOLE file ---- */
+      /* The minimap is STICKY to the viewport and spans one screen, so the tick for a marked line 400 rows
+         down is reachable without scrolling to find it. It covers the WHOLE FILE (extent = max marked line),
+         not just the loaded page, and a click outside the page pages there first. */
+      .mm {
+        position: sticky;
+        top: 8px;
+        flex: 0 0 14px;
+        align-self: flex-start;
+        height: calc(100vh - 230px);
+        margin: 10px 4px 0 0;
+        border-left: 1px solid var(--border);
+      }
+      .mm-view {
+        position: absolute;
+        left: 0;
+        width: 100%;
+        background: color-mix(in srgb, var(--fg) 8%, transparent);
+      }
+      .mm-tick {
+        position: absolute;
+        left: 1px;
+        width: 8px;
+        height: 3px;
+        border: 0;
+        border-radius: 1px;
+        padding: 0;
+        cursor: pointer;
+        opacity: 0.5;
+      }
+      .mm-tick.in-page {
+        opacity: 1;
+      }
+      .mm-tick:hover {
+        outline: 1px solid var(--accent);
+        width: 10px;
+      }
+      .mm-tick.sev-0,
+      .mm-tick.sev-1 {
+        background: var(--muted);
+        width: 4px;
+      }
+      .mm-tick.sev-2 {
+        background: var(--accent);
+      }
+      .mm-tick.sev-3 {
+        background: var(--warn);
+      }
+      .mm-tick.sev-4 {
+        background: var(--danger);
+        height: 4px;
+      }
+
+      /* ---- outline: the whole-file index, sortable, every row jumps ---- */
       .file-outline {
         position: sticky;
         top: 0;
         align-self: start;
-        max-height: calc(100vh - 160px);
+        max-height: calc(100vh - 210px);
         overflow: auto;
         border-left: 1px solid var(--border);
         background: var(--panel);
-        padding: 14px;
+        padding: 12px;
+      }
+      .lens-legend {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        margin-bottom: 12px;
+        padding: 6px 8px;
+      }
+      .lg-head {
+        width: 100%;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        text-align: left;
+        padding: 0;
+        font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        letter-spacing: 0.08em;
+      }
+      .lens-legend.open .lg-head {
+        color: var(--fg);
+      }
+      .lg-body {
+        margin-top: 7px;
+        font-size: 11px;
+      }
+      .lg-body p {
+        color: var(--muted);
+        margin: 0 0 7px;
+        line-height: 1.45;
+      }
+      .lg-row {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        margin-bottom: 5px;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+      .lg-mark {
+        flex: 0 0 auto;
+      }
+      .lg-chip {
+        display: inline-block;
+        width: 4px;
+        height: 9px;
+        vertical-align: middle;
+      }
+      .lg-rail,
+      .lg-keys {
+        border-top: 1px solid var(--border);
+        padding-top: 6px;
+      }
+      .lg-keys kbd {
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        background: var(--chip);
+        padding: 0 3px;
+        font: 10px ui-monospace, monospace;
+      }
+      .lg-fams {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        border-top: 1px solid var(--border);
+        padding-top: 6px;
+      }
+      .lg-fam {
+        border-bottom: 1px dotted var(--muted);
+        color: var(--muted);
+        cursor: help;
+        font: 10px ui-monospace, monospace;
       }
       .file-outline-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
         color: var(--muted);
+        margin-bottom: 8px;
         font-size: 10px;
         letter-spacing: 0.08em;
-        margin-bottom: 10px;
+      }
+      .outline-sort {
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        background: var(--chip);
+        color: var(--fg);
+        cursor: pointer;
+        padding: 1px 5px;
+        font: 10px ui-monospace, monospace;
       }
       .file-outline-method {
-        display: flex;
-        flex-direction: column;
-        width: 100%;
-        text-align: left;
-        gap: 3px;
-        border: 1px solid transparent;
-        border-radius: 6px;
-        background: transparent;
-        color: var(--fg);
-        padding: 8px;
-        cursor: pointer;
+        border-left: 2px solid transparent;
+        border-radius: 0 5px 5px 0;
+        margin-bottom: 3px;
+        padding: 5px 6px;
       }
-      .file-outline-method:hover {
-        border-color: var(--accent);
+      .file-outline-method.in-page {
+        border-left-color: var(--accent);
         background: var(--hover);
       }
-      .file-outline-method > span:not(.file-outline-effects) {
+      .file-outline-method:hover {
+        background: var(--hover);
+      }
+      .om-head {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+      }
+      .om-jump {
+        display: block;
+        flex: 1;
+        min-width: 0;
+        border: 0;
+        background: transparent;
+        color: var(--fg);
+        cursor: pointer;
+        text-align: left;
+        padding: 0;
+        font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .om-line {
         color: var(--muted);
+        margin-left: 3px;
+        font-weight: 400;
         font-size: 10px;
       }
-      .file-outline-effects {
+      .om-marks {
         display: flex;
         flex-wrap: wrap;
         gap: 3px;
+        margin-top: 3px;
+      }
+      .om-tree {
+        flex: 0 0 auto;
+        border: 0;
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+        padding: 0 2px;
+        font: 11px ui-monospace, monospace;
       }
       .file-page {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 5px;
-        margin-top: 16px;
+        border-top: 1px solid var(--border);
+        margin-top: 14px;
+        padding-top: 10px;
         color: var(--muted);
         font-size: 10px;
       }
@@ -1318,6 +1834,7 @@
         color: var(--fg);
         cursor: pointer;
         padding: 3px 5px;
+        font: inherit;
       }
       .file-page button:disabled {
         opacity: 0.35;
@@ -1326,7 +1843,16 @@
       .file-limit {
         color: var(--muted);
         font-size: 10px;
-        margin-top: 14px;
+        margin-top: 12px;
+        line-height: 1.45;
+      }
+      @media (max-width: 1100px) {
+        .file-code-row {
+          grid-template-columns: var(--marks, 168px) 4px auto minmax(max-content, 1fr);
+        }
+        .file-vision {
+          padding-left: calc(var(--marks, 168px) + 16px);
+        }
       }
       @media (max-width: 900px) {
         .file-lens-grid {
