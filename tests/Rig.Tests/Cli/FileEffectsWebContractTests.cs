@@ -50,7 +50,10 @@ public sealed class FileEffectsWebContractTests
         method.Name.ShouldBe("Load");
         method.Line.ShouldBe(10);
         method.EndLine.ShouldBe(24);
-        method.Effects.Select(effect => (effect.Family, effect.NearestDepth)).ShouldBe([("sql", 2), ("filesystem", 0)]);
+        // Badges come back in FAMILY order, not store order: the endpoint projects through FileEffectLens,
+        // the same projection `rig annotate` renders, so the two surfaces cannot list one method's effects
+        // in different orders. (Pre-lens this asserted the store's own order, sql-then-filesystem.)
+        method.Effects.Select(effect => (effect.Family, effect.NearestDepth)).ShouldBe([("filesystem", 0), ("sql", 2)]);
 
         response.Sites.Count.ShouldBe(2);
         response.Sites[0].TargetMethodId.ShouldBe(QueryId);

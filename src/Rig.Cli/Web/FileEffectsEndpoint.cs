@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Builder;
+﻿using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Rig.Cli.CommandLine;
@@ -144,29 +144,18 @@ internal static class FileEffectsEndpoint
     internal static FileEffectsResponseDto ToResponse(FileEffectsQueryService.Artifact artifact)
     {
         var model = artifact.Model;
-        var methods = model
-            .Methods.Select(method =>
-            {
-                var location =
-                    artifact.Methods.GetValueOrDefault(method.SymbolId)
-                    ?? new FileEffectsQueryService.MethodLocation(
-                        method.SymbolId,
-                        SymbolNameFormatter.ShortName(method.SymbolId),
-                        "",
-                        0,
-                        0
-                    );
-                return new FileEffectMethodDto(
-                    method.SymbolId,
-                    location.Name,
-                    location.Signature,
-                    location.Line,
-                    location.EndLine,
-                    method.Effects.Select(Map).ToArray()
-                );
-            })
-            .OrderBy(method => method.Line)
-            .ThenBy(method => method.Id, StringComparer.Ordinal)
+        // Method naming, ordering and badge order come from the shared lens (FileEffectLens), which
+        // `rig annotate` renders too — the two surfaces cannot disagree about what a method reaches.
+        var lens = FileEffectLens.Project(artifact);
+        var methods = lens
+            .Methods.Select(method => new FileEffectMethodDto(
+                method.SymbolId,
+                method.Name,
+                method.Signature,
+                method.Line,
+                method.EndLine,
+                method.Badges.Select(badge => new FileEffectAggregateDto(badge.Family, badge.NearestDepth)).ToArray()
+            ))
             .ToArray();
         var sites = model
             .CallSites.Select(site => new FileEffectCallSiteDto(
