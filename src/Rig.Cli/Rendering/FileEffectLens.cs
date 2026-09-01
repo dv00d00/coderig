@@ -44,12 +44,19 @@ internal static class FileEffectLens
 
     internal sealed record LensModel(
         string FilePath,
-        IReadOnlyList<string> Families,
+        IReadOnlyList<string> RequestedFamilies,
+        IReadOnlyList<string> PresentFamilies,
+        IReadOnlyList<string> AbsentRequestedFamilies,
         IReadOnlyList<LensMethod> Methods,
         IReadOnlyList<LensLine> Lines,
         bool ColumnsAvailable,
         bool WitnessPathsIncluded
-    );
+    )
+    {
+        // Compatibility name for existing lens consumers: it retains the complete selector-set meaning while
+        // richer surfaces can distinguish what was requested from what this file actually contains.
+        internal IReadOnlyList<string> Families => RequestedFamilies;
+    }
 
     internal static LensModel Project(FileEffectsQueryService.Artifact artifact)
     {
@@ -88,10 +95,29 @@ internal static class FileEffectLens
             ))
             .ToArray();
 
+        // Family coverage belongs to the shared projection rather than each surface. Derive PRESENT from the
+        // projected badges (not from the request), so web, CLI and editor agree even if a store contains an
+        // observed family outside the current selector set. All three lists are stable regardless of store order.
+        var requestedFamilies = OrderedFamilies(model.EffectSelectors);
+        var presentFamilies = OrderedFamilies(
+            methods.SelectMany(method => method.Badges).Concat(lines.SelectMany(line => line.Badges)).Select(badge => badge.Family)
+        );
+        var presentSet = presentFamilies.ToHashSet(StringComparer.Ordinal);
+        var absentRequestedFamilies = requestedFamilies.Where(family => !presentSet.Contains(family)).ToArray();
+
         // Both flags are FALSE by construction today and are carried rather than hidden: extraction mines no
         // column, and no surface asks for witness paths yet. A surface that renders them as available would
         // be promising precision the facts do not have.
-        return new LensModel(model.FilePath, model.EffectSelectors, methods, lines, ColumnsAvailable: false, WitnessPathsIncluded: false);
+        return new LensModel(
+            model.FilePath,
+            requestedFamilies,
+            presentFamilies,
+            absentRequestedFamilies,
+            methods,
+            lines,
+            ColumnsAvailable: false,
+            WitnessPathsIncluded: false
+        );
     }
 
     internal static string LabelLine(IReadOnlyList<LensBadge> badges) => string.Join(" ", badges.Select(badge => badge.Label));
@@ -107,4 +133,7 @@ internal static class FileEffectLens
             .GroupBy(effect => effect.Family, StringComparer.Ordinal)
             .Select(group => new FileEffectAggregate(group.Key, group.Min(effect => effect.NearestDepth)))
             .ToArray();
+
+    private static IReadOnlyList<string> OrderedFamilies(IEnumerable<string> families) =>
+        families.Distinct(StringComparer.Ordinal).OrderBy(family => family, StringComparer.Ordinal).ToArray();
 }

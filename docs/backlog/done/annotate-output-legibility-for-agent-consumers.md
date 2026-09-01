@@ -1,10 +1,9 @@
 # `rig annotate` output legibility for agent consumers
 
-**Status:** todo · **Triage:** needs-info · **Found:** 2026-09-01, probe agent's "hard to read as an agent"
+**Status:** done · **Completed:** 2026-09-01 · **Found:** 2026-09-01, probe agent's "hard to read as an agent"
 notes after 30 files · **Family:** CLI UX / docs
 
-**Needs:** split the small rendering/legend work (items 1, 2, 4 and 7) from the `bus`/`echo` product
-decision (item 3) and the separately scoped `--verify` feature (item 5) before implementation.
+The bundled audit has been implemented where it was one rendering concern and split where it was not.
 
 ## Items
 
@@ -30,14 +29,14 @@ decision (item 3) and the separately scoped `--verify` feature (item 5) before i
 5. **No cheap way to cross-check a badge from inside `annotate`.** Both audits reconciled badges against
    `rig reaches` by hand. A `--verify` flag (re-derive the badge families for the rendered methods through the
    forward walk and mark any disagreement) would make that a single command — and would have settled
-   [the depth disagreement](../done/file-lens-method-depth-disagrees-with-reaches.md) without manual work. Worth
-   scoping as its own card if it survives contact with the depth-convention question.
+   [the depth disagreement](./file-lens-method-depth-disagrees-with-reaches.md) without manual work.
+   Follow-up: [`annotate --verify`](../todo/annotate-verify-badges.md).
 
 6. **Target names print CLR backtick arity** (`` Fill``1 ``) — split out into
-   [its own completed card](../done/short-names-leak-clr-backtick-arity.md).
+   [its own completed card](./short-names-leak-clr-backtick-arity.md).
 
 7. **The cold-latency floor makes it unusable interactively** (~35–50 s per call) — tracked separately in
-   [annotate pays a full cold derivation per invocation](./annotate-pays-a-full-cold-derivation-per-invocation.md).
+   [annotate pays a full cold derivation per invocation](../todo/annotate-pays-a-full-cold-derivation-per-invocation.md).
    Until that lands, the footer should say how to get a warm call.
 
 ## Testing expectations
@@ -49,4 +48,17 @@ statement that makes an absent badge meaningful.
 ## Out of scope
 
 The line-precision disclosure and the lambda blind spot, both already stated in output and in the rig skill;
-  the lambda gap itself is [its own card](../done/file-lens-omits-effects-owned-by-lambdas.md).
+  the lambda gap itself is [its own card](./file-lens-omits-effects-owned-by-lambdas.md).
+
+## Outcome
+
+The shared `FileEffectLens` projection now computes requested, present, and requested-but-absent family sets
+once for every surface. Human `annotate` output leads with families actually present, names its two counts as
+effectful declarations and distinct marked source lines, and explains the method-vs-line distance grains.
+TSV remains byte-for-byte the same shape. Synthetic projection and rendering contracts pin the result.
+
+The unrelated decisions were separated rather than hidden in this completed rendering card:
+
+- [`bus` versus `echo` family policy](../todo/effect-family-bus-echo-policy.md)
+- [`annotate --verify`](../todo/annotate-verify-badges.md)
+- [resident-host latency](../todo/annotate-pays-a-full-cold-derivation-per-invocation.md)

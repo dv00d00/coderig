@@ -188,12 +188,7 @@ internal static class AnnotateCommand
         timing.Record("render", renderWatch.Elapsed);
         if (!tsv)
         {
-            output.WriteLine();
-            output.WriteLine($"{Indent.L1}line precision only — several calls on one line share that line's badges");
-            if (!lens.ColumnsAvailable)
-            {
-                output.WriteLine($"{Indent.L1}no column facts — a badge marks the LINE, not the expression");
-            }
+            RenderFooter(output, lens);
         }
 
         return 0;
@@ -258,16 +253,38 @@ internal static class AnnotateCommand
         return new WindowSelection(matched);
     }
 
-    private static void RenderHeader(TextWriter output, FileEffectLens.LensModel lens)
+    // Pure text seams are internal so rendering-contract tests do not need a repository/store fixture. The
+    // command remains orchestration; semantic family coverage still comes exclusively from FileEffectLens.
+    internal static void RenderHeader(TextWriter output, FileEffectLens.LensModel lens)
     {
-        output.WriteLine($"{Path.GetFileName(lens.FilePath)}  {lens.Methods.Count} effectful method(s), {lens.Lines.Count} marked line(s)");
+        output.WriteLine(
+            $"{Path.GetFileName(lens.FilePath)}  {lens.Methods.Count} effectful method declaration(s), {lens.Lines.Count} distinct marked source line(s)"
+        );
         output.WriteLine($"{Indent.L1}{lens.FilePath}");
-        if (lens.Families.Count > 0)
+        if (lens.PresentFamilies.Count > 0 || lens.RequestedFamilies.Count > 0)
         {
-            output.WriteLine($"{Indent.L1}families: {string.Join(" ", lens.Families)}");
+            var present = lens.PresentFamilies.Count == 0 ? "(none)" : string.Join(" ", lens.PresentFamilies);
+            var absent =
+                lens.AbsentRequestedFamilies.Count == 0
+                    ? ""
+                    : $"  (requested but absent: {string.Join(" ", lens.AbsentRequestedFamilies)})";
+            output.WriteLine($"{Indent.L1}families present: {present}{absent}");
         }
 
         output.WriteLine();
+    }
+
+    internal static void RenderFooter(TextWriter output, FileEffectLens.LensModel lens)
+    {
+        output.WriteLine();
+        output.WriteLine($"{Indent.L1}line precision only — several calls on one line share that line's badges");
+        output.WriteLine(
+            $"{Indent.L1}distances: method badges start at the method; line badges start at the target/direct site — a visible in-solution call normally adds 1 at method grain"
+        );
+        if (!lens.ColumnsAvailable)
+        {
+            output.WriteLine($"{Indent.L1}no column facts — a badge marks the LINE, not the expression");
+        }
     }
 
     private static void RenderSummary(TextWriter output, FileEffectLens.LensModel lens, bool tsv)
@@ -352,7 +369,7 @@ internal static class AnnotateCommand
     }
 
     // The `method` / `site` rows both TSV paths share: the lens facts, without any source text.
-    private static void WriteFactRows(TextWriter output, FileEffectLens.LensModel lens)
+    internal static void WriteFactRows(TextWriter output, FileEffectLens.LensModel lens)
     {
         foreach (var method in lens.Methods)
         {
