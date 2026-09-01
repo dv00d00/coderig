@@ -200,4 +200,16 @@ export const api = {
   // resolves the file path from the store (never a client-supplied path).
   source: (explicitStore, id, context) =>
     getJson("/api/source" + qs({ id, store: explicitStore, context })),
+  // Indexed-file inventory. LATEST moves and the query is cheap, so keep it uncached like /api/runs.
+  files: (explicitStore, q, limit = 100) =>
+    getJson("/api/files" + qs({ store: explicitStore, q, limit })),
+  // The semantic projection is immutable for (store,rules,file), so it belongs in the derivation cache.
+  fileEffects: (storeId, explicitStore, file) =>
+    cached(
+      `file-effects|${storeId}|${file}`,
+      "/api/file-effects" + qs({ store: explicitStore, file }),
+    ),
+  // Source may come from the working tree and therefore stays deliberately outside the client cache.
+  fileSource: (explicitStore, file, start, count) =>
+    getJson("/api/file-source" + qs({ store: explicitStore, file, start, count })),
 };

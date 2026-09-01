@@ -161,7 +161,19 @@ function Loc(node, actions) {
       if (mine.isConnected) mount(mine, h("div", { class: "srcerr" }, "source: " + err.message));
     }
   });
-  return chip;
+  const openFile = h(
+    "button",
+    {
+      class: "loc-file",
+      title: "open the whole file effect lens",
+      onClick: (e) => {
+        e.stopPropagation();
+        actions.openFile(node.file, node.line, node.id);
+      },
+    },
+    "↗",
+  );
+  return h("span", { class: "loc-wrap" }, chip, openFile);
 }
 function InlineSource(node, actions) {
   if (!node.file) return null;
@@ -186,6 +198,176 @@ function InlineSource(node, actions) {
     }
   });
   return h("div", {}, button, panel);
+}
+
+// ---- file effect lens ----------------------------------------------------------------------------------
+const depthClass = (depth) =>
+  depth === 0 ? "direct" : depth === 1 ? "near" : depth === 2 ? "second" : "far";
+const depthGlyph = (depth) => (depth === 0 ? "▰" : depth <= 2 ? "⟳" : "⋯");
+const depthLabel = (depth) => (depth === 0 ? "direct" : `depth ${depth}`);
+const shortTarget = (id) => (id ? shortLabel(id) : "external boundary");
+
+function FileEffectChip(effect, onClick, titlePrefix = "") {
+  const title = `${titlePrefix}${effect.family} · ${depthLabel(effect.nearestDepth)}`;
+  return h(
+    onClick ? "button" : "span",
+    {
+      class: `file-fx ${depthClass(effect.nearestDepth)}`,
+      title,
+      onClick: onClick
+        ? (event) => {
+            event.stopPropagation();
+            onClick();
+          }
+        : null,
+    },
+    h("span", { class: "file-fx-glyph" }, depthGlyph(effect.nearestDepth)),
+    effect.family,
+    h("span", { class: "file-fx-depth" }, effect.nearestDepth === 0 ? "" : effect.nearestDepth),
+  );
+}
+
+function MethodVision(method, actions) {
+  return h(
+    "div",
+    { class: "file-vision" },
+    h(
+      "button",
+      {
+        class: "file-method-link",
+        title: `Open ${method.id} as a call tree`,
+        onClick: () => actions.openFileTree(method.id),
+      },
+      method.name || shortLabel(method.id),
+      " ↗",
+    ),
+    ...method.effects.map((effect) =>
+      FileEffectChip(
+        effect,
+        () => actions.openFileTree(method.id),
+        `${method.name || shortLabel(method.id)} reaches `,
+      ),
+    ),
+  );
+}
+
+function FileSiteMark(site, actions) {
+  const target = site.targetMethodId || site.enclosingMethodId;
+  const details = site.effects
+    .map((effect) => `${effect.family} · ${depthLabel(effect.nearestDepth)}`)
+    .join(", ");
+  const title = `${details}\nvia ${shortTarget(site.targetMethodId)}\n${site.targetMethodId ? "Click to open callee tree" : "Direct external effect; open enclosing method tree"}`;
+  return h(
+    "button",
+    {
+      class: "file-site-mark",
+      title,
+      onClick: () => actions.openFileTree(target),
+    },
+    ...site.effects.map((effect) => FileEffectChip(effect, null)),
+  );
+}
+
+export function FileEffectsView(s, actions) {
+  if (!s.filePath)
+    return h(
+      "div",
+      { class: "file-empty" },
+      h("h2", {}, "Open an indexed C# file"),
+      h("p", {}, "Type a filename or path above, or use ↗ next to a location in Tree."),
+    );
+  if (s.fileError)
+    return h("div", { class: "file-empty" }, h("h2", {}, "File lens unavailable"), h("p", {}, s.fileError));
+  if (!s.fileEffects || !s.fileSource)
+    return h("div", { class: "file-empty" }, "Loading file effects…");
+
+  const effects = s.fileEffects;
+  const source = s.fileSource;
+  if (source.origin === "unavailable" || !source.lines.length)
+    return h("div", { class: "file-empty" }, `Source unavailable: ${source.reason || "no text"}`);
+
+  const methodsAt = new Map();
+  for (const method of effects.methods) {
+    if (!methodsAt.has(method.line)) methodsAt.set(method.line, []);
+    methodsAt.get(method.line).push(method);
+  }
+  const sitesAt = new Map();
+  for (const site of effects.sites) {
+    if (!sitesAt.has(site.line)) sitesAt.set(site.line, []);
+    sitesAt.get(site.line).push(site);
+  }
+  const hl = highlightCSharp(source.lines.map((line) => line.text));
+  const width = String(source.lines[source.lines.length - 1].number).length;
+  const visibleMethods = effects.methods.filter(
+    (method) => method.endLine >= source.startLine && method.line <= source.endLine,
+  );
+  const provenance =
+    source.origin === "git"
+      ? source.storeDirty
+        ? `git ${source.commit} · dirty index may differ`
+        : `git ${source.commit}`
+      : "working tree · indexed revision verified";
+  const siteCount = effects.sites.length;
+
+  const rows = [];
+  source.lines.forEach((line, i) => {
+    for (const method of methodsAt.get(line.number) || []) rows.push(MethodVision(method, actions));
+    const sites = sitesAt.get(line.number) || [];
+    rows.push(
+      h(
+        "div",
+        { class: `file-code-row${sites.length ? " effect" : ""}` },
+        h("span", { class: "file-gutter" }, ...sites.map((site) => FileSiteMark(site, actions))),
+        h("span", { class: "srcnum", style: `min-width:${width}ch` }, String(line.number)),
+        h(
+          "code",
+          {},
+          ...hl[i].map((token) => (token.cls ? h("span", { class: token.cls }, token.text) : token.text)),
+        ),
+      ),
+    );
+  });
+
+  return h(
+    "div",
+    { class: "file-lens" },
+    h(
+      "div",
+      { class: "file-lens-head" },
+      h("div", {}, h("strong", {}, baseName(effects.file)), h("span", { title: effects.file }, effects.file)),
+      h("div", { class: "file-summary" }, `${effects.methods.length} effectful methods · ${siteCount} marked calls · ${provenance}`),
+    ),
+    h(
+      "div",
+      { class: "file-lens-grid" },
+      h("pre", { class: "file-editor" }, ...rows),
+      h(
+        "aside",
+        { class: "file-outline" },
+        h("div", { class: "file-outline-title" }, "EFFECTFUL METHODS"),
+        ...visibleMethods.map((method) =>
+          h(
+            "button",
+            { class: "file-outline-method", onClick: () => actions.openFileTree(method.id), title: method.id },
+            h("strong", {}, method.name || shortLabel(method.id)),
+            h("span", {}, `line ${method.line}`),
+            h("span", { class: "file-outline-effects" }, ...method.effects.map((effect) => FileEffectChip(effect, null))),
+          ),
+        ),
+        visibleMethods.length === 0 ? h("p", { class: "hint" }, "No effectful methods in this page.") : null,
+        h(
+          "div",
+          { class: "file-page" },
+          h("button", { disabled: !source.hasPrevious, onClick: () => actions.pageFile(-1) }, "← previous"),
+          h("span", {}, `${source.startLine}–${source.endLine}`),
+          h("button", { disabled: !source.hasMore, onClick: () => actions.pageFile(1) }, "next →"),
+        ),
+        !effects.columnsAvailable
+          ? h("p", { class: "file-limit" }, "Line precision only · multiple calls on one line may collapse.")
+          : null,
+      ),
+    ),
+  );
 }
 // Opaque/collapse seam badge: a folded node is a labelled leaf (its subtree hidden server-side). A collapse
 // badge shows the hidden node count; the union of effects it hides rides on node.effects (rendered as glyphs).
@@ -1410,6 +1592,7 @@ export function Shell(actions) {
     "div",
     { class: "appmode" },
     modeBtn("tree", "Tree"),
+    modeBtn("file", "File"),
     modeBtn("impact", "Impact"),
     modeBtn("hotspots", "Hotspots"),
     modeBtn("refs", "Refs"),
@@ -1473,7 +1656,7 @@ export function Shell(actions) {
     placeholder: "search a symbol, or type an entry-point / pattern…",
     autocomplete: "off",
   });
-  refs.results = h("div", { id: "results" });
+  refs.results = h("div", { id: "results", class: "search-results" });
   const fromwrap = h("div", { class: "fromwrap" }, refs.from, refs.results);
   refs.view = h(
     "select",
@@ -1555,6 +1738,17 @@ export function Shell(actions) {
   );
 
   refs.treeToolbar = toolbar;
+
+  // File lens toolbar. The input accepts either an exact inventory path or a filename/path fragment; the
+  // controller resolves fragments through /api/files and opens the first exact/best match.
+  refs.fileQuery = h("input", {
+    placeholder: "indexed file name or path…",
+    autocomplete: "off",
+  });
+  refs.fileResults = h("div", { class: "search-results file-results" });
+  const fileSearchWrap = h("div", { class: "fromwrap file-search-wrap" }, refs.fileQuery, refs.fileResults);
+  refs.fileGo = h("button", { class: "go", onClick: () => actions.openFileQuery(refs.fileQuery.value) }, "Open file");
+  refs.fileToolbar = h("div", { class: "controls impact-toolbar hidden" }, fileSearchWrap, refs.fileGo);
 
   // impact toolbar (base/head store pickers + Diff + filter) — hidden until appMode=impact
   refs.impactBase = h(
@@ -1664,6 +1858,7 @@ export function Shell(actions) {
   refs.impact = h("div", { class: "tree impact-wrap hidden" });
   refs.refs = h("div", { class: "tree impact-wrap hidden" }); // refs report content area (mirrors refs.impact)
   refs.hotspots = h("div", { class: "tree impact-wrap hidden" });
+  refs.file = h("div", { class: "file-view hidden" });
   refs.callers = h("div", { class: "callers-mount" }); // reverse-nav drawer mounts here (overlays the tree area)
   refs.crumbs = h("div", { class: "crumbs-mount" }); // pivot-history breadcrumb trail mounts here (see BreadcrumbTrail)
   const section = h(
@@ -1671,11 +1866,13 @@ export function Shell(actions) {
     {},
     refs.crumbs,
     refs.treeToolbar,
+    refs.fileToolbar,
     refs.impactToolbar,
     refs.refsToolbar,
     refs.hotspotToolbar,
     refs.statusbar,
     refs.tree,
+    refs.file,
     refs.impact,
     refs.refs,
     refs.hotspots,

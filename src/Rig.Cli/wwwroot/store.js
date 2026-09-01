@@ -27,7 +27,12 @@ export const store = createStore({
   eps: [], // entry points for the active store
   hazardMarks: null, // /api/hazards response (array of {methodId,type,confidence,sites}) for the current tree
   // impact mode (store-vs-store diff)
-  appMode: "tree", // tree | impact | refs | hotspots  (top-level view)
+  appMode: "tree", // tree | file | impact | refs | hotspots  (top-level view)
+  filePath: "", // exact path from /api/files
+  fileStart: 1, // first source line in the current file page
+  fileEffects: null, // immutable semantic read model for filePath
+  fileSource: null, // provenance-aware source page
+  fileError: "",
   impactBase: "", // base store id
   impactHead: "", // head store id
   impactAsync: false, // --async for the diff: walk async/scheduled handoffs (changes the diff → refetch)
@@ -94,6 +99,8 @@ export const querySlice = (s) => [
   s.predicates,
   s.hazards,
   s.appMode,
+  s.filePath,
+  s.fileStart,
   s.impactBase,
   s.impactHead,
   s.impactAsync,
@@ -121,7 +128,11 @@ export function serializeUrl(s = get()) {
   if (s.signatures) p.set("sig", "1");
   if (s.predicates) p.set("pred", "1");
   if (s.hazards) p.set("haz", "1");
-  if (s.appMode === "impact") {
+  if (s.appMode === "file") {
+    p.set("app", "file");
+    if (s.filePath) p.set("file", s.filePath);
+    if (s.fileStart > 1) p.set("line", String(s.fileStart));
+  } else if (s.appMode === "impact") {
     p.set("app", "impact");
     if (s.impactBase) p.set("ibase", s.impactBase);
     if (s.impactHead) p.set("ihead", s.impactHead);
@@ -174,13 +185,17 @@ export function readUrl(runs, search = location.search) {
     predicates: p.get("pred") === "1",
     hazards: p.get("haz") === "1",
     appMode:
-      p.get("app") === "impact"
-        ? "impact"
-        : p.get("app") === "refs"
+      p.get("app") === "file"
+        ? "file"
+        : p.get("app") === "impact"
+          ? "impact"
+          : p.get("app") === "refs"
           ? "refs"
           : p.get("app") === "hotspots"
             ? "hotspots"
             : "tree",
+    filePath: p.get("file") || "",
+    fileStart: Math.max(1, Number.parseInt(p.get("line") || "1", 10) || 1),
     impactBase: runs.some((r) => r.storeId === p.get("ibase"))
       ? p.get("ibase")
       : "",

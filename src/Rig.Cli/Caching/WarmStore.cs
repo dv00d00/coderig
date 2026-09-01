@@ -45,10 +45,17 @@ internal static class WarmStore
     // One gate for the whole cache: loads are multi-second and memory-heavy, so serializing them is the
     // POINT — two concurrent /api requests against a cold store must not both materialize the graph.
     private static readonly SemaphoreSlim Gate = new(initialCount: 1, maxCount: 1);
+    private static readonly SemaphoreSlim FileEffectGate = new(initialCount: 1, maxCount: 1);
 
     // Insertion-ordered; last element = most recently used. Tiny (Capacity is 1-3), so a List scan is
     // cheaper than a dictionary + intrusive list.
     private static readonly List<(string Key, object Value)> Entries = [];
+
+    // File projections are tiny compared with FactGraphData/invocation rows. Keeping them in the four-slot
+    // heavyweight LRU would make the fifth visited file evict the graph and turn navigation into repeated
+    // multi-second reloads, so they have their own bounded resident tier.
+    private const int FileEffectCapacity = 32;
+    private static readonly List<(string Key, object Value)> FileEffectEntries = [];
 
     // The shaped whole-store graph. Pattern-INDEPENDENT (unlike the bounded per-traversal loads in
     // TraversalGraphLoader), which is exactly why it is cacheable by (store, rules) alone.
@@ -76,6 +83,17 @@ internal static class WarmStore
             key: $"invocations|{StoreIdentity(storeDir)}",
             label: "invocation refs",
             load: () => Reads.LoadInvocationRefsAsync(context, ct)
+        );
+
+    // One compact semantic projection per physical file. The expensive graph inputs are already independently
+    // warm-cached above; this entry prevents repeating the reverse family walk while a reader moves around the
+    // same file. FilePath is part of the key because the artifact contains only that file's declarations.
+    internal static Task<T> FileEffectsAsync<T>(string storeDir, string rulesHash, string filePath, Func<Task<T>> load)
+        where T : class =>
+        GetOrLoadFileEffectAsync(
+            key: $"file-effects|{StoreIdentity(storeDir)}|{rulesHash}|{filePath}",
+            label: $"file effects ({Path.GetFileName(filePath)})",
+            load: load
         );
 
     // Pre-warm both artifacts off the request path — the `serve` startup + post-reindex re-warm hook. Errors
@@ -157,21 +175,59 @@ internal static class WarmStore
         }
     }
 
-    private static object? TryGet(string key)
+    private static async Task<T> GetOrLoadFileEffectAsync<T>(string key, string label, Func<Task<T>> load)
+        where T : class
     {
-        lock (Entries)
+        if (Capacity <= 0)
         {
-            for (var i = 0; i < Entries.Count; i++)
+            return await load();
+        }
+
+        if (TryGet(FileEffectEntries, key) is T warm)
+        {
+            return warm;
+        }
+
+        await FileEffectGate.WaitAsync();
+        try
+        {
+            if (TryGet(FileEffectEntries, key) is T raced)
             {
-                if (!string.Equals(Entries[i].Key, key, StringComparison.Ordinal))
+                return raced;
+            }
+
+            var loaded = await load();
+            Insert(FileEffectEntries, FileEffectCapacity, key, loaded);
+            if (Log)
+            {
+                Console.Error.WriteLine($"[warm] MISS {label}");
+            }
+
+            return loaded;
+        }
+        finally
+        {
+            FileEffectGate.Release();
+        }
+    }
+
+    private static object? TryGet(string key) => TryGet(Entries, key);
+
+    private static object? TryGet(List<(string Key, object Value)> entries, string key)
+    {
+        lock (entries)
+        {
+            for (var i = 0; i < entries.Count; i++)
+            {
+                if (!string.Equals(entries[i].Key, key, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
                 // Touch: move to the most-recently-used end.
-                var hit = Entries[i];
-                Entries.RemoveAt(i);
-                Entries.Add(hit);
+                var hit = entries[i];
+                entries.RemoveAt(i);
+                entries.Add(hit);
                 return hit.Value;
             }
         }
@@ -179,15 +235,17 @@ internal static class WarmStore
         return null;
     }
 
-    private static void Insert(string key, object value)
+    private static void Insert(string key, object value) => Insert(Entries, Capacity, key, value);
+
+    private static void Insert(List<(string Key, object Value)> entries, int capacity, string key, object value)
     {
-        lock (Entries)
+        lock (entries)
         {
-            Entries.RemoveAll(e => string.Equals(e.Key, key, StringComparison.Ordinal));
-            Entries.Add((key, value));
-            while (Entries.Count > Capacity)
+            entries.RemoveAll(e => string.Equals(e.Key, key, StringComparison.Ordinal));
+            entries.Add((key, value));
+            while (entries.Count > capacity)
             {
-                Entries.RemoveAt(0); // evict least-recently-used
+                entries.RemoveAt(0); // evict least-recently-used
             }
         }
     }

@@ -24,6 +24,7 @@ import {
   ImpactProgress,
   RefsView,
   HotspotsView,
+  FileEffectsView,
   Chips,
   treeStatus,
   baseName,
@@ -46,9 +47,11 @@ function setBusy(on) {
   refs.tree.classList.toggle("busy", on);
   refs.impact.classList.toggle("busy", on);
   refs.hotspots.classList.toggle("busy", on);
+  refs.file.classList.toggle("busy", on);
   refs.go.disabled = on;
   refs.impactGo.disabled = on;
   refs.hotspotGo.disabled = on;
+  refs.fileGo.disabled = on;
 }
 
 // ---- data actions ---------------------------------------------------------------------------------------
@@ -110,6 +113,70 @@ async function loadEntrypoints() {
     refs.eps.textContent = "error: " + e.message;
   }
 }
+
+const FILE_PAGE_SIZE = 240;
+async function openFile(file, line = 1) {
+  if (!file) {
+    status("choose an indexed file", true);
+    return;
+  }
+  const start = Math.max(1, Number.parseInt(line, 10) - 30 || 1);
+  set({ appMode: "file", filePath: file, fileStart: start, fileSource: null, fileError: "" });
+  if (refs.fileQuery) refs.fileQuery.value = file;
+  setBusy(true);
+  status("building file effect lens…");
+  try {
+    const [fileEffects, fileSource] = await Promise.all([
+      api.fileEffects(resolved(), explicit(), file),
+      api.fileSource(explicit(), file, start, FILE_PAGE_SIZE),
+    ]);
+    set({ fileEffects, fileSource, fileStart: start, fileError: "" });
+    status(
+      `${baseName(file)} · ${fileEffects.methods.length} effectful methods · ${fileEffects.sites.length} marked calls`,
+    );
+  } catch (e) {
+    set({ fileEffects: null, fileSource: null, fileError: e.message });
+    status("file: " + e.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function openFileQuery(value) {
+  const query = value.trim();
+  if (!query) {
+    status("enter a file name or path", true);
+    return;
+  }
+  setBusy(true);
+  status("finding indexed file…");
+  try {
+    const result = await api.files(explicit(), query, 50);
+    const exact = result.files.find(
+      (file) => file.path === query || file.name.toLowerCase() === query.toLowerCase(),
+    );
+    const selected = exact || result.files[0];
+    if (!selected) {
+      status(`no indexed file matches '${query}'`, true);
+      return;
+    }
+    await openFile(selected.path, 1);
+  } catch (e) {
+    status("files: " + e.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function pageFile(direction) {
+  const source = get().fileSource;
+  if (!source) return;
+  const start =
+    direction > 0
+      ? source.endLine + 1
+      : Math.max(1, source.startLine - FILE_PAGE_SIZE);
+  await openFile(get().filePath, start + 30);
+}
 async function loadHazards() {
   const s = get();
   if (!s.tree || !s.hazards) return;
@@ -126,7 +193,7 @@ function selectStore(id) {
     diffOverlay: null,
   }); // a manual store switch invalidates any diff overlay
   if (get().tab === "eps") loadEntrypoints();
-  if (get().treeFrom) openTree(get().treeFrom);
+  if (get().appMode === "tree" && get().treeFrom) openTree(get().treeFrom);
   // a store switch invalidates the refs report (it's per-store) — reload if that view is showing.
   if (get().appMode === "refs") {
     set({ refsUnused: null, refsUsage: null });
@@ -136,6 +203,7 @@ function selectStore(id) {
   // app mode is visible, so returning to Hotspots cannot briefly show the previous store's report.
   set({ hotspotData: null, effectsDiffData: null });
   if (get().appMode === "hotspots") loadHotspots();
+  if (get().appMode === "file" && get().filePath) openFile(get().filePath, get().fileStart + 30);
 }
 function loadImpact() {
   const { impactBase, impactHead, impactAsync } = get();
@@ -368,6 +436,14 @@ const actions = {
   // the raw DTO and stays OUT of app state: the panel is transient DOM owned by the node that opened it (same
   // treatment as the search dropdown), so expanding source never re-renders — or blanks — the tree.
   loadSource: (id) => api.source(explicit(), id),
+  openFile,
+  openFileQuery,
+  pageFile,
+  openFileTree(id) {
+    set({ appMode: "tree", from: id });
+    refs.from.value = id;
+    openTree(id);
+  },
   async openReaches(node, { recordHistory = true } = {}) {
     const from = node.id;
     set({ callers: { target: from, mode: "reaches", loading: true } });
@@ -455,6 +531,9 @@ const actions = {
     if (get().appMode === "hotspots") {
       set({ hotspotData: null, effectsDiffData: null });
       loadHotspots();
+    } else if (get().appMode === "file" && get().filePath) {
+      set({ fileEffects: null, fileSource: null, fileError: "" });
+      openFile(get().filePath, get().fileStart + 30);
     } else if (get().treeFrom) openTree(get().treeFrom);
     else status("cache purged");
   },
@@ -464,6 +543,8 @@ const actions = {
     // refs is a global report — load it on first entry (like the EP inventory loads on its tab).
     if (m === "refs" && !get().refsUnused && !get().refsUsage) loadRefs();
     if (m === "hotspots" && !get().hotspotData) loadHotspots();
+    if (m === "file" && get().filePath && (!get().fileEffects || !get().fileSource))
+      openFile(get().filePath, get().fileStart + 30);
   },
   loadHotspots,
   setHotspotSort(sort, reload) {
@@ -738,10 +819,102 @@ function setupSearch() {
   });
 }
 
+// ---- indexed-file autocomplete ------------------------------------------------------------------------
+let fileSearchTimer = null,
+  activeFileHit = -1,
+  fileSearchGeneration = 0;
+function hideFileResults() {
+  refs.fileResults.classList.remove("show");
+  refs.fileResults.replaceChildren();
+  activeFileHit = -1;
+}
+function chooseFileHit(hit) {
+  refs.fileQuery.value = hit.path;
+  hideFileResults();
+  openFile(hit.path, 1);
+}
+async function doFileSearch(query, generation) {
+  try {
+    const result = await api.files(explicit(), query, 20);
+    if (generation !== fileSearchGeneration) return;
+    if (!result.files.length) {
+      hideFileResults();
+      return;
+    }
+    activeFileHit = -1;
+    mount(
+      refs.fileResults,
+      result.files.map((file, index) =>
+        h(
+          "div",
+          {
+            class: "hit file-hit",
+            dataset: { path: file.path, i: index },
+            title: file.path,
+            onMousedown: () => chooseFileHit(file),
+          },
+          h("span", { class: "file-hit-name" }, file.name),
+          file.projects.length
+            ? h("span", { class: "file-hit-projects" }, file.projects.join(", "))
+            : null,
+          h("span", { class: "hfile" }, file.path),
+        ),
+      ),
+    );
+    refs.fileResults.classList.add("show");
+  } catch {
+    if (generation === fileSearchGeneration) hideFileResults();
+  }
+}
+function setupFileSearch() {
+  refs.fileQuery.addEventListener("input", () => {
+    clearTimeout(fileSearchTimer);
+    const query = refs.fileQuery.value.trim();
+    const generation = ++fileSearchGeneration;
+    if (!query) {
+      hideFileResults();
+      return;
+    }
+    fileSearchTimer = setTimeout(() => doFileSearch(query, generation), 180);
+  });
+  refs.fileQuery.addEventListener("keydown", (event) => {
+    const hits = [...refs.fileResults.querySelectorAll(".file-hit")];
+    if (refs.fileResults.classList.contains("show") && hits.length) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        activeFileHit =
+          (activeFileHit + (event.key === "ArrowDown" ? 1 : hits.length - 1)) %
+          hits.length;
+        hits.forEach((hit, index) => hit.classList.toggle("active", index === activeFileHit));
+        hits[activeFileHit].scrollIntoView({ block: "nearest" });
+        return;
+      }
+      if (event.key === "Enter" && activeFileHit >= 0) {
+        event.preventDefault();
+        chooseFileHit({ path: hits[activeFileHit].dataset.path });
+        return;
+      }
+      if (event.key === "Escape") {
+        hideFileResults();
+        return;
+      }
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      openFileQuery(refs.fileQuery.value);
+    }
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".file-search-wrap")) hideFileResults();
+  });
+}
+
 // ---- impact mode: toggle Tree/Impact UI + populate the base/head store pickers --------------------------
 function applyAppMode(m) {
   refs.treeToolbar.classList.toggle("hidden", m !== "tree");
   refs.tree.classList.toggle("hidden", m !== "tree");
+  refs.fileToolbar.classList.toggle("hidden", m !== "file");
+  refs.file.classList.toggle("hidden", m !== "file");
   refs.impactToolbar.classList.toggle("hidden", m !== "impact");
   refs.impact.classList.toggle("hidden", m !== "impact");
   refs.refsToolbar.classList.toggle("hidden", m !== "refs");
@@ -790,6 +963,7 @@ function syncControls(s) {
   refs.hotspotTop.value = String(s.hotspotTop);
   refs.hotspotNoLambdas.querySelector("input").checked = s.hotspotNoLambdas;
   refs.hotspotIntrinsic.querySelector("input").checked = s.hotspotIntrinsic;
+  refs.fileQuery.value = s.filePath;
   applyAppMode(s.appMode);
 }
 
@@ -812,6 +986,13 @@ function setupWatches() {
     (s) => [s.hotspotData, s.effectsDiffData, s.appMode],
     (s) => {
       if (s.appMode === "hotspots") mount(refs.hotspots, HotspotsView(s, actions));
+    },
+  );
+  watch(
+    store,
+    (s) => [s.fileEffects, s.fileSource, s.filePath, s.fileError, s.appMode],
+    (s) => {
+      if (s.appMode === "file") mount(refs.file, FileEffectsView(s, actions));
     },
   );
   watch(
@@ -912,6 +1093,7 @@ function setupWatches() {
   applyTheme(localStorage.getItem("rig-theme") || "system");
   initSplitter();
   setupSearch();
+  setupFileSearch();
   setupWatches();
   // Derivation version first — it keys the cache and purges a stale persisted store before any cached fetch.
   try {
@@ -930,7 +1112,9 @@ function setupWatches() {
     const patch = readUrl(runs, initialSearch); // validate ?store= against known runs
     set(patch);
     syncControls(get());
-    if (patch.appMode === "impact") {
+    if (patch.appMode === "file") {
+      if (patch.filePath) openFile(patch.filePath, patch.fileStart + 30);
+    } else if (patch.appMode === "impact") {
       if (patch.impactBase && patch.impactHead) loadImpact();
     } else if (patch.appMode === "refs") {
       loadRefs();

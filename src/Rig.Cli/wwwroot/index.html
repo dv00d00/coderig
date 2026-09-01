@@ -376,7 +376,7 @@
         width: 100px;
       }
       /* search dropdown */
-      #results {
+      .search-results {
         position: absolute;
         top: 100%;
         left: 0;
@@ -390,8 +390,23 @@
         display: none;
         box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
       }
-      #results.show {
+      .search-results.show {
         display: block;
+      }
+      .file-search-wrap {
+        flex: 1;
+      }
+      .file-search-wrap input {
+        width: 100%;
+      }
+      .file-hit-name {
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .file-hit-projects {
+        color: var(--accent);
+        font-size: 10px;
+        margin-left: 7px;
       }
       .hit {
         padding: 6px 10px;
@@ -1068,6 +1083,253 @@
       @media (prefers-color-scheme: light) {
         :root:not([data-theme]) {
           --add: #1a7f37;
+        }
+      }
+      /* File effect lens: source-first, with a fixed semantic gutter and a compact effect outline. Depth is
+         encoded by shape + tone (not colour alone): solid=direct, recursion=transitive, ellipsis=3+. */
+      .loc-wrap {
+        display: inline-flex;
+        align-items: center;
+      }
+      .loc-file {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        padding: 0 2px;
+        font-size: 11px;
+      }
+      .loc-file:hover {
+        color: var(--accent);
+      }
+      .file-view {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+      }
+      .file-view.busy {
+        opacity: 0.55;
+      }
+      .file-empty {
+        padding: 36px;
+        color: var(--muted);
+      }
+      .file-empty h2 {
+        color: var(--fg);
+        font-size: 18px;
+      }
+      .file-lens {
+        min-height: 100%;
+      }
+      .file-lens-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 18px;
+        padding: 10px 18px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        font-size: 12px;
+      }
+      .file-lens-head strong {
+        margin-right: 10px;
+      }
+      .file-lens-head > div:first-child {
+        display: flex;
+        min-width: 0;
+        align-items: baseline;
+      }
+      .file-lens-head span,
+      .file-summary {
+        color: var(--muted);
+      }
+      .file-lens-head > div:first-child span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .file-summary {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+      .file-lens-grid {
+        display: grid;
+        grid-template-columns: minmax(600px, 1fr) 285px;
+        min-height: calc(100vh - 160px);
+      }
+      .file-editor {
+        margin: 0;
+        padding: 14px 0 60px;
+        overflow: auto;
+        font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .file-code-row {
+        display: grid;
+        grid-template-columns: 128px auto minmax(max-content, 1fr);
+        min-height: 20px;
+        padding-right: 18px;
+      }
+      .file-code-row.effect {
+        background: var(--sel);
+      }
+      .file-code-row code {
+        white-space: pre;
+      }
+      .file-gutter {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 3px;
+        padding: 0 6px;
+      }
+      .file-site-mark,
+      .file-fx,
+      .file-method-link,
+      .file-outline-method,
+      .file-page button {
+        font: inherit;
+      }
+      .file-site-mark {
+        display: inline-flex;
+        gap: 3px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+      }
+      .file-fx {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--chip);
+        color: var(--fg);
+        padding: 1px 6px;
+        white-space: nowrap;
+        font-size: 10px;
+      }
+      button.file-fx {
+        cursor: pointer;
+      }
+      .file-fx.direct {
+        color: #c084fc;
+        border-color: #c084fc66;
+        font-weight: 700;
+      }
+      .file-fx.near {
+        color: #4fd1c5;
+        border-style: solid;
+      }
+      .file-fx.second {
+        color: var(--warn);
+        border-style: dashed;
+      }
+      .file-fx.far {
+        color: var(--muted);
+        border-style: dotted;
+      }
+      .file-fx-depth {
+        opacity: 0.8;
+        font-size: 9px;
+      }
+      .file-vision {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 18px 3px 146px;
+        color: var(--muted);
+        border-top: 1px solid var(--border);
+      }
+      .file-method-link {
+        border: 0;
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+        padding: 0 6px 0 0;
+        font-weight: 700;
+      }
+      .file-outline {
+        position: sticky;
+        top: 0;
+        align-self: start;
+        max-height: calc(100vh - 160px);
+        overflow: auto;
+        border-left: 1px solid var(--border);
+        background: var(--panel);
+        padding: 14px;
+      }
+      .file-outline-title {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        margin-bottom: 10px;
+      }
+      .file-outline-method {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        text-align: left;
+        gap: 3px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--fg);
+        padding: 8px;
+        cursor: pointer;
+      }
+      .file-outline-method:hover {
+        border-color: var(--accent);
+        background: var(--hover);
+      }
+      .file-outline-method > span:not(.file-outline-effects) {
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .file-outline-effects {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px;
+      }
+      .file-page {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 5px;
+        margin-top: 16px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .file-page button {
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--chip);
+        color: var(--fg);
+        cursor: pointer;
+        padding: 3px 5px;
+      }
+      .file-page button:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+      .file-limit {
+        color: var(--muted);
+        font-size: 10px;
+        margin-top: 14px;
+      }
+      @media (max-width: 900px) {
+        .file-lens-grid {
+          grid-template-columns: 1fr;
+        }
+        .file-outline {
+          position: static;
+          max-height: none;
+          border-left: 0;
+          border-top: 1px solid var(--border);
+        }
+        .file-lens-head {
+          align-items: flex-start;
+          flex-direction: column;
         }
       }
       .hidden {
