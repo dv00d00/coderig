@@ -102,9 +102,16 @@ first; `--summary` is the cheap per-method table.
   substring (`MedDBase.DataAccessTier.Repositories\PersonCoursesRepository.cs`).
 - **`--format tsv`** emits `method` / `site` / `src` rows (source text last — a line can contain tabs).
   `method`/`site` rows are always FILE-WIDE; only `src` honours the window.
-- Known blind spot: effects inside **lambdas** are keyed to the lambda, not its owning method, and the
-  file read model filters to declared methods — so a `db` call inside a `.Select(x => …)` may be missing
-  from both the method table and the line badges. ~24% of MedDBase effects sit in lambdas.
+- **A trailing `?` (`cache:18?`) means the reach exists only through virtual/interface dispatch** — CHA says
+  the call CAN land on an effectful override, but no real call path proves it does (the same thing `reaches`
+  puts in its "NOT a real call" fan-out bucket). Unflagged = a real call path. On MedDBase this matters a lot:
+  a page method can show `cache:5? echo:9? rpc:11?` next to a plain `db!` — the db work is proven, the rest is
+  devirtualization. A `?` badge is a lead to check with `rig reaches`, not a fact to act on.
+- Effects inside **lambdas** now fold onto the declaring method (`WithDb(db => …)` bodies included), so a `db`
+  call inside a `.Select(x => …)` appears on its own line and in the method's badge. Two consequences: the
+  method's depth does NOT count the invisible hop into the lambda (so it can read one lower than `rig reaches`
+  for the same effect — different quantities, both correct), and ownership is resolved through method-group
+  edges, so a lambda whose owner is ambiguous is left out rather than guessed.
 
 ## Async handoffs — SYNC-CUT by default
 A delegate handed to a dispatcher to run later/elsewhere is a `handoff` edge, NOT a call. Default CUT: a

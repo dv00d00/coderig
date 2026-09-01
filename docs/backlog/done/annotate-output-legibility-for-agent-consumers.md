@@ -1,4 +1,4 @@
-# `rig annotate` output legibility for agent consumers
+﻿# `rig annotate` output legibility for agent consumers
 
 **Status:** done · **Completed:** 2026-09-01 · **Found:** 2026-09-01, probe agent's "hard to read as an agent"
 notes after 30 files · **Family:** CLI UX / docs
@@ -36,7 +36,7 @@ The bundled audit has been implemented where it was one rendering concern and sp
    [its own completed card](./short-names-leak-clr-backtick-arity.md).
 
 7. **The cold-latency floor makes it unusable interactively** (~35–50 s per call) — tracked separately in
-   [annotate pays a full cold derivation per invocation](../todo/annotate-pays-a-full-cold-derivation-per-invocation.md).
+   [annotate pays a full cold derivation per invocation](./annotate-pays-a-full-cold-derivation-per-invocation.md).
    Until that lands, the footer should say how to get a warm call.
 
 ## Testing expectations
@@ -61,4 +61,4 @@ The unrelated decisions were separated rather than hidden in this completed rend
 
 - [`bus` versus `echo` family policy](../todo/effect-family-bus-echo-policy.md)
 - [`annotate --verify`](../todo/annotate-verify-badges.md)
-- [resident-host latency](../todo/annotate-pays-a-full-cold-derivation-per-invocation.md)
+- [resident-host latency](./annotate-pays-a-full-cold-derivation-per-invocation.md)

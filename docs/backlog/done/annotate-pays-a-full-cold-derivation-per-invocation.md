@@ -1,6 +1,6 @@
-# `rig annotate` pays a full cold derivation per invocation — route it to a resident host
+﻿# `rig annotate` pays a full cold derivation per invocation — route it to a resident host
 
-**Status:** progress · **Triage:** ready-for-agent · **Found:** 2026-09-01, probe agent measured 30 files ·
+**Status:** done · **Completed:** 2026-09-01 · **Found:** 2026-09-01, probe agent measured 30 files ·
 **Family:** performance / CLI transport · **Decision:** route to a resident host, "what the web does"
 
 ## Measured problem
@@ -44,7 +44,7 @@ transport, with a disclosed fallback chain:
    store identity via `/api/meta` before trusting the answer.
 3. The live pipe (`RiderFileEffectTransport`, verb `file-effects`) when a `rig watch` host serves THIS working
    directory. Note the cwd-keying trap in
-   [a running `rig watch` is undiscoverable](./live-host-endpoint-is-undiscoverable-from-the-checkout.md):
+   [a running `rig watch` is undiscoverable](../todo/live-host-endpoint-is-undiscoverable-from-the-checkout.md):
    a host launched from the solution directory will not be found from the analysis directory, which is where
    `annotate` is run. Fix that card first or expect this arm to miss in the common setup.
 4. Cold in-process path (today's behaviour).
@@ -78,6 +78,50 @@ the transport. File-path resolution also stays local (a `SourceFiles` substring 
 - Stale marker (host killed) → falls back to cold, marker removed, no error beyond the note.
 - A 30-file sweep A/B: report cold total vs warm total on the MedDBase store.
 
+
+## Delivered 2026-09-01 — measured against the acceptance criteria
+
+`rig serve` writes `.rig/serve.json` (`port`, `url`, `pid`, `workingDirectory`, `startedUtc`) and `rig annotate`
+discovers it; `--host <url>` and `--cold` both landed (`AnnotateResidentTransport`).
+
+| criterion | measured |
+|---|---|
+| warm latency | **0.7s** total, 0.1s transport (cold baseline 47.2s) — 67x |
+| a DIFFERENT file on the same host | also 0.7s, so the shared graph is reused rather than a per-file cache |
+| warm output == `--cold` output | identical, 75 tsv rows, `LocationsHandler.cs` |
+| transport disclosed | `transport: rig serve http://localhost:5061` in the header |
+| stale marker (host killed) | one note, `transport: cold (start \`rig serve\` for warm calls)`, marker deleted, correct answer |
+| no auto-start | respected — hint only |
+| first call after host boot | 37-50s, paid INSIDE the host (CLI peak RAM 84MB) |
+
+A 15-file re-audit then ran at a **929ms median** across ~35 probes, which is what made per-badge verification
+affordable at all — the transport's real payoff is auditability, not just speed.
+
+Remaining, deliberately not chased here: the warm call's cost is now dominated by the LOCAL file-path lookup
+(0.5-0.6s of the 0.7s, a `SourceFiles` substring query). Batch input and disk-caching the closures stay open as
+the complementary items below.
+
+## Delivered 2026-09-01 — measured against the acceptance criteria
+
+`rig serve` writes `.rig/serve.json` (`port`, `url`, `pid`, `workingDirectory`, `startedUtc`) and `rig annotate`
+discovers it; `--host <url>` and `--cold` both landed (`AnnotateResidentTransport`).
+
+| criterion | measured |
+|---|---|
+| warm latency | **0.7s** total, 0.1s transport (cold baseline 47.2s) — 67x |
+| a DIFFERENT file on the same host | also 0.7s, so the shared graph is reused rather than a per-file cache |
+| warm output == `--cold` output | identical, 75 tsv rows, `LocationsHandler.cs` |
+| transport disclosed | `transport: rig serve http://localhost:5061` in the header |
+| stale marker (host killed) | one note, `transport: cold (start \`rig serve\` for warm calls)`, marker deleted, correct answer |
+| no auto-start | respected — hint only |
+| first call after host boot | 37-50s, paid INSIDE the host (CLI peak RAM 84MB) |
+
+A 15-file re-audit then ran at a **929ms median** across ~35 probes, which is what made per-badge verification
+affordable at all — the transport's real payoff is auditability, not just speed.
+
+Remaining, deliberately not chased here: the warm call's cost is now dominated by the LOCAL file-path lookup
+(0.5-0.6s of the 0.7s, a `SourceFiles` substring query). Batch input and disk-caching the closures stay open as
+the complementary items below.
 ## Complementary, not chosen instead
 
 - **Batch input** (`rig annotate <file...>`) amortises the derivation inside ONE cold process — an
@@ -85,7 +129,7 @@ the transport. File-path resolution also stays local (a `SourceFiles` substring 
 - **Disk-caching the shared closures** in `.rig/cache.db` (keyed store + rules + `FileEffectsSchema`) would fix
   the cold floor itself rather than routing around it. Needs
   [the missing schema constant](./file-effects-artifact-has-no-cache-schema-constant.md) first.
-- [Warm graph across queries](./warm-graph-across-queries.md) is the same underlying problem for
+- [Warm graph across queries](../todo/warm-graph-across-queries.md) is the same underlying problem for
   `callers`/`reaches`; this card deliberately reuses the resident host it already concluded with instead of
   introducing a daemon.
 

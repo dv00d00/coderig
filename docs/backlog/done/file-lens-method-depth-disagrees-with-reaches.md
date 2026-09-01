@@ -1,9 +1,9 @@
-# A method's file-lens depth disagrees with `rig reaches` for the same family
+﻿# A method's file-lens depth disagrees with `rig reaches` for the same family
 
 **Status:** done · **Completed:** 2026-09-01 ·
 **Found:** 2026-09-01 by a probe agent auditing `rig annotate` · **Family:** file lens / reachability
 
-**Blocked by:** [folding lambda-owned effects onto their owner](../done/file-lens-omits-effects-owned-by-lambdas.md).
+**Blocked by:** [folding lambda-owned effects onto their owner](./file-lens-omits-effects-owned-by-lambdas.md).
 Re-measure after that change before deciding whether any depth behaviour remains defective.
 
 ## The two observations
@@ -79,7 +79,7 @@ Not "make the numbers equal" — pick which one is the honest answer to "how far
 A lambda hop is not a call a reader can see in the source, so NOT charging for it (the lens's answer) is
 arguably the better editor/CLI number, while `reaches` should keep charging it because it is walking a graph.
 Note this decision is entangled with
-[folding lambda-owned effects onto their owner](../done/file-lens-omits-effects-owned-by-lambdas.md): if lambdas fold,
+[folding lambda-owned effects onto their owner](./file-lens-omits-effects-owned-by-lambdas.md): if lambdas fold,
 the lambda hop disappears from the lens by construction and the two conventions converge on their own — so
 decide that card first and re-measure before touching depth arithmetic here.
 
