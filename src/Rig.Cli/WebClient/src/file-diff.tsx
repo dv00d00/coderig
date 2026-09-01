@@ -329,20 +329,42 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
                 ? "tiers 1–3 partially unavailable"
                 : `${model.base.findings.hazards.length + model.base.findings.amplifications.length + model.base.findings.anchors.length}/${model.head.findings.hazards.length + model.head.findings.amplifications.length + model.head.findings.anchors.length} findings`}
           </span>
-          <label className="rig-diff-whitespace" title="Hide changes that only alter whitespace">
-            <input
-              type="checkbox"
-              checked={callbacks.ignoreWhitespace || false}
-              onChange={(event) => callbacks.onIgnoreWhitespaceChange?.(event.target.checked)}
-            />
-            ignore whitespace
-          </label>
-          <button type="button" className={viewType === "unified" ? "on" : ""} onClick={() => setViewType("unified")}>
-            one column
-          </button>
-          <button type="button" className={viewType === "split" ? "on" : ""} onClick={() => setViewType("split")}>
-            two columns
-          </button>
+          <details className="rig-diff-settings">
+            <summary aria-label="Diff settings" title="Diff settings">⚙</summary>
+            <div className="rig-diff-settings-menu">
+              <fieldset>
+                <legend>Diff display</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="rig-diff-display"
+                    value="unified"
+                    checked={viewType === "unified"}
+                    onChange={() => setViewType("unified")}
+                  />
+                  Unified
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="rig-diff-display"
+                    value="split"
+                    checked={viewType === "split"}
+                    onChange={() => setViewType("split")}
+                  />
+                  Split
+                </label>
+              </fieldset>
+              <label className="rig-diff-settings-check">
+                <input
+                  type="checkbox"
+                  checked={callbacks.ignoreWhitespace || false}
+                  onChange={(event) => callbacks.onIgnoreWhitespaceChange?.(event.target.checked)}
+                />
+                Hide whitespace changes
+              </label>
+            </div>
+          </details>
         </div>
       </div>
       {!file ? (

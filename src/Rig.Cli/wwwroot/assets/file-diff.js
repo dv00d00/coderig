@@ -12428,26 +12428,39 @@ function Jo({ model: e, callbacks: t }) {
 						className: "rig-diff-tier-status",
 						children: e.base.findings === void 0 || e.head.findings === void 0 ? "tiers 1–3 loading…" : e.base.findings === null || e.head.findings === null ? "tiers 1–3 partially unavailable" : `${e.base.findings.hazards.length + e.base.findings.amplifications.length + e.base.findings.anchors.length}/${e.head.findings.hazards.length + e.head.findings.amplifications.length + e.head.findings.anchors.length} findings`
 					}),
-					/* @__PURE__ */ (0, m.jsxs)("label", {
-						className: "rig-diff-whitespace",
-						title: "Hide changes that only alter whitespace",
-						children: [/* @__PURE__ */ (0, m.jsx)("input", {
-							type: "checkbox",
-							checked: t.ignoreWhitespace || !1,
-							onChange: (e) => t.onIgnoreWhitespaceChange?.(e.target.checked)
-						}), "ignore whitespace"]
-					}),
-					/* @__PURE__ */ (0, m.jsx)("button", {
-						type: "button",
-						className: n === "unified" ? "on" : "",
-						onClick: () => r("unified"),
-						children: "one column"
-					}),
-					/* @__PURE__ */ (0, m.jsx)("button", {
-						type: "button",
-						className: n === "split" ? "on" : "",
-						onClick: () => r("split"),
-						children: "two columns"
+					/* @__PURE__ */ (0, m.jsxs)("details", {
+						className: "rig-diff-settings",
+						children: [/* @__PURE__ */ (0, m.jsx)("summary", {
+							"aria-label": "Diff settings",
+							title: "Diff settings",
+							children: "⚙"
+						}), /* @__PURE__ */ (0, m.jsxs)("div", {
+							className: "rig-diff-settings-menu",
+							children: [/* @__PURE__ */ (0, m.jsxs)("fieldset", { children: [
+								/* @__PURE__ */ (0, m.jsx)("legend", { children: "Diff display" }),
+								/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
+									type: "radio",
+									name: "rig-diff-display",
+									value: "unified",
+									checked: n === "unified",
+									onChange: () => r("unified")
+								}), "Unified"] }),
+								/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
+									type: "radio",
+									name: "rig-diff-display",
+									value: "split",
+									checked: n === "split",
+									onChange: () => r("split")
+								}), "Split"] })
+							] }), /* @__PURE__ */ (0, m.jsxs)("label", {
+								className: "rig-diff-settings-check",
+								children: [/* @__PURE__ */ (0, m.jsx)("input", {
+									type: "checkbox",
+									checked: t.ignoreWhitespace || !1,
+									onChange: (e) => t.onIgnoreWhitespaceChange?.(e.target.checked)
+								}), "Hide whitespace changes"]
+							})]
+						})]
 					})
 				]
 			})]
