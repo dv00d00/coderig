@@ -154,7 +154,7 @@ internal static class FileEffectsEndpoint
                 method.Signature,
                 method.Line,
                 method.EndLine,
-                method.Badges.Select(badge => new FileEffectAggregateDto(badge.Family, badge.NearestDepth)).ToArray()
+                method.Badges.Select(badge => new FileEffectAggregateDto(badge.Family, badge.NearestDepth, badge.ViaDispatchOnly)).ToArray()
             ))
             .ToArray();
         var sites = model
@@ -183,7 +183,8 @@ internal static class FileEffectsEndpoint
         );
     }
 
-    private static FileEffectAggregateDto Map(Rig.Domain.Functions.FileEffectAggregate effect) => new(effect.Family, effect.NearestDepth);
+    private static FileEffectAggregateDto Map(Rig.Domain.Functions.FileEffectAggregate effect) =>
+        new(effect.Family, effect.NearestDepth, effect.ViaDispatchOnly);
 
     private static string OriginName(SourceOrigin origin) =>
         origin switch

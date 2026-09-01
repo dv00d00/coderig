@@ -235,6 +235,14 @@ internal static class AnnotateCommand
 
     private sealed record WindowSelection(IReadOnlyList<(int From, int To)> Windows, string? Error = null);
 
+    // Whether any rendered badge is dispatch-derived. The legend line is printed only then, so a file whose
+    // every badge is a real call path carries no caveat a reader has to discount.
+    private static bool AnyDispatchOnly(FileEffectLens.LensModel lens) =>
+        lens
+            .Methods.SelectMany(method => method.Badges)
+            .Concat(lens.Lines.SelectMany(line => line.Badges))
+            .Any(badge => badge.ViaDispatchOnly);
+
     // The line windows to render: --method spans when asked for, otherwise the single --from/--to range.
     // Diagnosis deliberately joins both halves of the shared artifact: Artifact.Methods is every declared
     // canonical method, while lens.Methods is the effectful subset rendered by web/editor/CLI alike.
@@ -319,6 +327,11 @@ internal static class AnnotateCommand
         if (!lens.ColumnsAvailable)
         {
             output.WriteLine($"{Indent.L1}no column facts — a badge marks the LINE, not the expression");
+        }
+
+        if (AnyDispatchOnly(lens))
+        {
+            output.WriteLine($"{Indent.L1}`?` = that reach exists only through virtual/interface dispatch — it MAY not be a real call");
         }
     }
 

@@ -21,12 +21,15 @@ namespace Rig.Cli.Rendering;
 // to the surface that has glyphs, keyed on Family + IsDirect + Rank so the three cannot drift in ORDER.
 internal static class FileEffectLens
 {
-    internal sealed record LensBadge(string Family, int NearestDepth)
+    internal sealed record LensBadge(string Family, int NearestDepth, bool ViaDispatchOnly = false)
     {
         internal bool IsDirect => NearestDepth == 0;
 
-        // `db!` = the effect is in this body; `db:5` = the nearest one is five calls away.
-        internal string Label => IsDirect ? $"{Family}!" : $"{Family}:{NearestDepth}";
+        // `db!` = the effect is in this body; `db:5` = the nearest one is five calls away; a trailing `?`
+        // (`db:5?`) = that reach exists ONLY through virtual/interface dispatch, so it may not be a real call.
+        // The suffix is deliberately part of the shared label rather than each surface's own decoration: a
+        // reader who learns it once reads it the same way in the terminal, the browser and the editor.
+        internal string Label => $"{(IsDirect ? $"{Family}!" : $"{Family}:{NearestDepth}")}{(ViaDispatchOnly ? "?" : "")}";
     }
 
     internal sealed record LensMethod(
@@ -124,14 +127,24 @@ internal static class FileEffectLens
 
     private static IReadOnlyList<LensBadge> Badges(IEnumerable<FileEffectAggregate> effects) =>
         effects
-            .Select(effect => new LensBadge(effect.Family, effect.NearestDepth))
+            .Select(effect => new LensBadge(effect.Family, effect.NearestDepth, effect.ViaDispatchOnly))
             .OrderBy(badge => badge.Family, StringComparer.Ordinal)
             .ToArray();
 
+    // Collapsing several rows on one line keeps the SHORTEST distance per family — and must keep the basis
+    // with it. A plain `Min(NearestDepth)` rebuilt the aggregate with the default (real) flag, so a line whose
+    // only route to the family was a dispatch guess printed as a fact: `cache:18` sat under a `cache:19?`
+    // method badge, and the two disagreed about the same route. Mirrors FileEffectReadModelIndex.Best: a real
+    // row beats a dispatch-only one, then distance decides within the surviving basis.
     private static IReadOnlyList<FileEffectAggregate> Merge(IEnumerable<FileEffectAggregate> effects) =>
         effects
             .GroupBy(effect => effect.Family, StringComparer.Ordinal)
-            .Select(group => new FileEffectAggregate(group.Key, group.Min(effect => effect.NearestDepth)))
+            .Select(group =>
+            {
+                var real = group.Where(effect => !effect.ViaDispatchOnly).ToArray();
+                var basis = real.Length > 0 ? real : group.ToArray();
+                return new FileEffectAggregate(group.Key, basis.Min(effect => effect.NearestDepth), real.Length == 0);
+            })
             .ToArray();
 
     private static IReadOnlyList<string> OrderedFamilies(IEnumerable<string> families) =>

@@ -1,10 +1,12 @@
-namespace Rig.Cli.Web;
+﻿namespace Rig.Cli.Web;
 
 internal sealed record IndexedFileDto(string Path, string Name, string Status, IReadOnlyList<string> Projects);
 
 internal sealed record IndexedFilesResponseDto(IReadOnlyList<IndexedFileDto> Files, int Total, int Limit);
 
-internal sealed record FileEffectAggregateDto(string Family, int NearestDepth);
+// ViaDispatchOnly mirrors FileEffectAggregate: the reach exists only through virtual/interface dispatch.
+// Additive on the wire; a client that ignores it renders exactly what it rendered before.
+internal sealed record FileEffectAggregateDto(string Family, int NearestDepth, bool ViaDispatchOnly);
 
 internal sealed record FileEffectMethodDto(
     string Id,
