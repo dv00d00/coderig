@@ -1,0 +1,90 @@
+# `rig annotate` pays a full cold derivation per invocation — route it to a resident host
+
+**Status:** todo · **Triage:** ready-for-agent (approach chosen 2026-09-01: route to a resident host, "what the
+web does") · **Found:** 2026-09-01, probe agent measured 30 files · **Family:** performance / CLI transport
+
+## Measured problem
+
+Every `rig annotate` call costs **34.7–51.3 s wall, ~14.3 GB read, ~5 GB peak RAM**, flat: a 0-method
+interface file costs the same as a 42-method page with 131 marked lines. The `file effects` phase is ~98% of
+wall time. A 30-file audit sweep therefore spent ~20 minutes almost entirely re-deriving identical facts.
+(Absolute numbers are from a run with two probe agents contending on the same store, so treat them as an upper
+bound; the flat floor was present on the first uncontended calls.)
+
+Why, from `Rig.Cli/Services/FileEffectsQueryService.cs`:
+
+```
+:86  WarmStore.GraphAsync         → whole-solution graph load
+:87  WarmStore.InvocationsAsync   → every invocation fact
+:88  EP data + throw refs + allocation facts
+:96  QueryEffectDerivation.ForReach(rules, inputs, graph)   ← full effect derivation, whole store
+:98  FileEffectReadModelIndex.Build(...)  → per-family reverse closure, then ONE file's projection
+```
+
+Everything above the last line is store-wide and identical for every file. There are three cache layers in
+rig and `annotate` benefits from the weakest one:
+
+| layer | lifetime | used by `annotate` |
+|---|---|---|
+| `.rig/cache.db` disk artifacts (`StoreQueryArtifactCache`, `QueryCacheKeys`) | across processes | **no** — no key, no `*Schema` |
+| `WarmStore` (`Caching/WarmStore.cs:37`) — in-process list + 32-entry file-effects LRU | one process | yes, and it dies with the process |
+| web client IndexedDB | browser | web only |
+
+`rig serve` and the Rider `rig watch` host are fast for exactly one reason: they are long-lived, so they pay
+this once. A one-shot CLI process has no resident state to inherit.
+
+## Chosen approach: ask a resident host, exactly as the browser does
+
+The browser is fast because it queries `/api/file-effects` on a warm `rig serve`. Give the CLI the same
+transport, with a disclosed fallback chain:
+
+1. `--host <url>` when passed explicitly.
+2. A **discovery marker** written by `rig serve`: `.rig/serve.json` = `{ port, pid, storeRef, started }`,
+   removed on shutdown. `annotate` reads it, ignores (and deletes) a marker whose pid is dead, and confirms
+   store identity via `/api/meta` before trusting the answer.
+3. The live pipe (`RiderFileEffectTransport`, verb `file-effects`) when a `rig watch` host serves THIS working
+   directory. Note the cwd-keying trap in
+   [a running `rig watch` is undiscoverable](./live-host-endpoint-is-undiscoverable-from-the-checkout.md):
+   a host launched from the solution directory will not be found from the analysis directory, which is where
+   `annotate` is run. Fix that card first or expect this arm to miss in the common setup.
+4. Cold in-process path (today's behaviour).
+
+The mapping back is already free: `FileEffectsResponseDto` is 1:1 with `FileEffectReadModel`, and
+`FileEffectsEndpoint.ToResponse` now projects through `FileEffectLens` — so the HTTP arm rebuilds the read model
+from the DTOs, calls `FileEffectLens.Project`, and renders IDENTICALLY to the cold arm. No wire change.
+
+Source text stays LOCAL: `SourceRenderer` reads the working tree or the git blob directly, so only facts cross
+the transport. File-path resolution also stays local (a `SourceFiles` substring query, ~0.7 s).
+
+## Requirements
+
+- The header discloses the transport and its provenance: `via rig serve http://localhost:5057` /
+  `via live host (working tree)` / `cold (start \`rig serve\` for warm calls)`. Never silently mix arms
+  across a single render.
+- `--time` gains a `transport` phase.
+- `--cold` forces the in-process arm (needed to A/B the arms and to debug the host).
+- Any host failure — unreachable, non-200, store mismatch, malformed payload — falls back to cold with ONE
+  stderr note, never a crash and never a partial render.
+- `--store <ref>` is forwarded to the host so both arms answer from the same store; a host that cannot serve
+  that store is a miss, not a silent substitution.
+- `rig annotate` must NOT auto-start a host. A background process the user did not ask for is a surprise; the
+  cold-path hint is the nudge instead.
+
+## Acceptance
+
+- With `rig serve` running in the same directory: first `annotate` call and the 30th are both < 3 s
+  (post-warm), and their output is byte-identical to `--cold` output for the same file and store.
+- With no host: unchanged behaviour, one hint line, same exit codes.
+- Stale marker (host killed) → falls back to cold, marker removed, no error beyond the note.
+- A 30-file sweep A/B: report cold total vs warm total on the MedDBase store.
+
+## Complementary, not chosen instead
+
+- **Batch input** (`rig annotate <file...>`) amortises the derivation inside ONE cold process — an
+  independent, much smaller change that helps a sweep even with no host running. Worth doing; not this card.
+- **Disk-caching the shared closures** in `.rig/cache.db` (keyed store + rules + `FileEffectsSchema`) would fix
+  the cold floor itself rather than routing around it. Needs
+  [the missing schema constant](./file-effects-artifact-has-no-cache-schema-constant.md) first.
+- [Warm graph across queries](./warm-graph-across-queries.md) is the same underlying problem for
+  `callers`/`reaches`; this card deliberately reuses the resident host it already concluded with instead of
+  introducing a daemon.
