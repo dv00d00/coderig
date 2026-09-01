@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 
@@ -412,6 +412,15 @@ internal sealed class AnalysisRulesDocument
     // Top-level key "effectEmoji": flat { "provider:operation": "emoji", "provider": "emoji" } map.
     // Later-loaded files override earlier entries; builtin-rules.json carries the defaults.
     public Dictionary<string, string>? EffectEmoji { get; set; }
+
+    // Top-level key "providers": { "<provider>": { "family": "<family>" } }. Projected to
+    // RuleSet.ProviderFamilies; see that member for what a family is and is not. Merged per key.
+    public Dictionary<string, ProviderRuleDocument>? Providers { get; set; }
+}
+
+internal sealed class ProviderRuleDocument
+{
+    public string? Family { get; set; }
 }
 
 // `render` rule section — codebase-specific `rig tree` presentation rules (collapse fan-out hubs,

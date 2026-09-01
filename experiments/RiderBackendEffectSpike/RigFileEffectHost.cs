@@ -23,13 +23,26 @@ namespace CodeRig.Rider;
 internal sealed class RigFileEffectHost
 {
     private const int Protocol = 1;
-    private const int TimeoutMilliseconds = 2_000;
+
+    // 30s, not 2s. The request is fire-and-forget (the stage commits nothing and the response invalidates the
+    // daemon), so a long timeout never blocks the editor — it only decides how long we wait before caching a
+    // failure. Measured on MedDBase: the FIRST file-effects request costs 15.6s, because it forces the
+    // whole-solution reverse read model over 442k symbols; every later request in that generation is 11-26ms.
+    // At 2s the first answer on that codebase was structurally unreachable.
+    private const int TimeoutMilliseconds = 30_000;
     private const int MaxFrameBytes = 16 * 1024 * 1024;
     private const int CacheCapacity = 128;
 
     private static readonly TimeSpan ExactCacheDuration = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan NonExactCacheDuration = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan FailureCacheDuration = TimeSpan.FromSeconds(5);
+
+    // Wire vocabulary the client has to switch on. `unreachable` is client-side only — no host produced it.
+    internal const string SourceExact = "exact";
+    internal const string SourceUnreachable = "unreachable";
+    internal const string ReasonUnreachable = "host_unreachable";
+    internal const string ScopeFile = "file";
+    internal const string ScopeHost = "host";
 
     private readonly object _gate = new();
     private readonly Dictionary<CacheKey, CacheEntry> _cache = new();
@@ -160,7 +173,18 @@ internal sealed class RigFileEffectHost
                     .ToArray()
                 : Array.Empty<FileEffectCallSiteRow>();
             var cacheDuration = exact ? ExactCacheDuration : NonExactCacheDuration;
-            Cache(key, new FileEffectReadModel(methods, callSites), DateTime.UtcNow.Add(cacheDuration));
+            Cache(
+                key,
+                new FileEffectReadModel(
+                    methods,
+                    callSites,
+                    response.SourceStatus ?? "",
+                    response.ReasonCode ?? "",
+                    response.ReasonScope ?? "",
+                    response.Reason ?? ""
+                ),
+                DateTime.UtcNow.Add(cacheDuration)
+            );
             Console.WriteLine(
                 $"[CodeRig Rider] file-effects {response.Status}/{response.SourceStatus}: "
                     + $"methods={methods.Length}, callSites={callSites.Length}, "
@@ -169,9 +193,19 @@ internal sealed class RigFileEffectHost
         }
         catch (Exception exception)
         {
+            // The host being down, timing out or speaking nonsense is a HOST-scoped cause: the status widget
+            // owns it. Announcing it per file would put a row on every open document during a cold boot,
+            // which on MedDBase runs 148s.
             Cache(
                 key,
-                new FileEffectReadModel(Array.Empty<FileEffectRow>(), Array.Empty<FileEffectCallSiteRow>()),
+                new FileEffectReadModel(
+                    Array.Empty<FileEffectRow>(),
+                    Array.Empty<FileEffectCallSiteRow>(),
+                    SourceUnreachable,
+                    ReasonUnreachable,
+                    ScopeHost,
+                    $"{exception.GetType().Name}: {exception.Message}"
+                ),
                 DateTime.UtcNow.Add(FailureCacheDuration)
             );
             Console.WriteLine($"[CodeRig Rider] file-effects unavailable: {exception.GetType().Name}: {exception.Message}");
@@ -392,6 +426,14 @@ internal sealed class RigFileEffectHost
 
         [DataMember(Name = "reason", IsRequired = true)]
         public string Reason { get; set; }
+
+        // Additive on the host side, so NOT IsRequired: a host that predates them omits the members and the
+        // client falls back to an empty code, which routes nowhere and announces nothing.
+        [DataMember(Name = "reasonCode")]
+        public string ReasonCode { get; set; }
+
+        [DataMember(Name = "reasonScope")]
+        public string ReasonScope { get; set; }
     }
 
     [DataContract]

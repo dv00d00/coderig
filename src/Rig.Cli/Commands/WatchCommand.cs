@@ -1,4 +1,4 @@
-using System.CommandLine;
+﻿using System.CommandLine;
 using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
@@ -706,11 +706,12 @@ internal sealed class WatchHost : IAsyncDisposable
         {
             var snapshot = _index.CaptureSnapshot();
             var facts = CurrentLiveFacts(snapshot);
+            var scope = RiderFileEffectResponder.IndexedProjectScope(snapshot, request.FilePath);
             capture = new RiderFileEffectCapture(
                 snapshot.Revision.Value,
-                RiderFileEffectResponder.IndexedProjectContexts(snapshot, request.FilePath),
-                FileEffectUnavailableReason(snapshot),
-                () => RiderFileEffectResponder.Selectors.Select(facts.FileEffects).ToArray()
+                scope.Contexts,
+                FileEffectUnavailableReason(snapshot, request.FilePath, scope.ProjectNames),
+                () => facts.FileEffects(RiderFileEffectResponder.SelectorsFor(_rules))
             );
         }
         finally
@@ -730,7 +731,7 @@ internal sealed class WatchHost : IAsyncDisposable
         try
         {
             var snapshot = _index.CaptureSnapshot();
-            return RiderWatchControlResponder.Answer(request, snapshot.Revision.Value, FileEffectUnavailableReason(snapshot));
+            return RiderWatchControlResponder.Answer(request, snapshot.Revision.Value, HostUnavailableReason(snapshot)?.Text);
         }
         finally
         {
@@ -738,32 +739,55 @@ internal sealed class WatchHost : IAsyncDisposable
         }
     }
 
-    // Caller holds `_gate`. This first slice does not attempt demand refinement: any global reconciliation
-    // debt or source-integrity caveat makes a clean-looking file answer unsafe, so it fails closed as stale.
-    private string? FileEffectUnavailableReason(FactSnapshot snapshot)
+    // Caller holds `_gate`. The causes that are NOT attributable to any one file: a topology change and a
+    // watcher overflow invalidate the whole resident generation, and an error diagnostic with no source
+    // location cannot be pinned to a file or a project, so it keeps failing closed for everyone.
+    private FileEffectUnavailable? HostUnavailableReason(FactSnapshot snapshot)
     {
         if (Volatile.Read(ref _topologyChanged) != 0)
         {
-            return TopologyStatusSegment;
+            return new FileEffectUnavailable(
+                RiderFileEffectResponder.ReasonTopologyChanged,
+                RiderFileEffectResponder.ScopeHost,
+                TopologyStatusSegment
+            );
         }
 
         if (Volatile.Read(ref _watcherOverflowed) != 0)
         {
-            return "file-watcher overflowed — exact file effects cannot be established; restart required";
+            return new FileEffectUnavailable(
+                RiderFileEffectResponder.ReasonWatcherOverflow,
+                RiderFileEffectResponder.ScopeHost,
+                "file-watcher overflowed — exact file effects cannot be established; restart required"
+            );
         }
 
-        if (snapshot.Dirty.PendingProjects.Count > 0)
+        if (snapshot.GetCompilationHealth() is { UnlocatedErrorCount: > 0 } unlocated)
         {
-            return $"{snapshot.Dirty.PendingProjects.Count} project(s) unreconciled";
-        }
-
-        if (snapshot.GetCompilationHealth() is { IsClean: false } health)
-        {
-            return $"compilation is incomplete ({health.TotalErrorCount} error diagnostic(s), {health.PartialProjects.Count} partial project(s))";
+            return new FileEffectUnavailable(
+                RiderFileEffectResponder.ReasonUnlocatedCompileErrors,
+                RiderFileEffectResponder.ScopeHost,
+                $"{unlocated.UnlocatedErrorCount} error diagnostic(s) carry no source location, so no file can be cleared"
+            );
         }
 
         return null;
     }
+
+    // Caller holds `_gate`. The host-wide causes first, then the file-scoped decision (a pure function in the
+    // responder, so it is testable without a resident host).
+    private FileEffectUnavailable? FileEffectUnavailableReason(FactSnapshot snapshot, string filePath, IReadOnlySet<string> projectNames) =>
+        HostUnavailableReason(snapshot)
+        ?? RiderFileEffectResponder.UnavailableForFile(
+            filePath,
+            projectNames,
+            snapshot
+                .Dirty.PendingProjects.Select(id => snapshot.Solution.GetProject(id)?.Name)
+                .Where(name => name is not null)
+                .Select(name => name!)
+                .ToArray(),
+            snapshot.GetCompilationHealth()
+        );
 
     // Commands with keyed demand topology capture their planning basis briefly under the
     // host gate, do all Roslyn work outside that gate, then accept only the exact snapshot reference returned

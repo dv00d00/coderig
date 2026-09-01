@@ -1,4 +1,4 @@
-using System.CommandLine;
+﻿using System.CommandLine;
 using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
@@ -135,7 +135,7 @@ internal static class ReachesCommand
         using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
 
         var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
-        WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
+        PrepareFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
         // --raw zeroes cut/context; reaches keeps Factory (it monomorphizes generic factories even under
         // --raw, a long-standing asymmetry vs path/tree/callers).
         var shaped = opts.Raw ? rules with { Cut = [], Context = [] } : rules;

@@ -124,6 +124,27 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                 return;
             }
 
+            // A non-exact answer carries NO rows by contract, so there is nothing to project — but the reason
+            // must not vanish. A cause the host scoped to this file gets one row in Problems; a host-scoped
+            // cause is left to the status widget (see RigCoverageHighlighting).
+            if (!model.IsExact)
+            {
+                committer(
+                    new DaemonStageResult(
+                        model.HasFileScopedReason
+                            ? new[]
+                            {
+                                new HighlightingInfo(
+                                    FileRange(),
+                                    new RigCoverageHighlighting(_file, FileRange(), model.ReasonCode, model.Reason)
+                                ),
+                            }
+                            : Array.Empty<HighlightingInfo>()
+                    )
+                );
+                return;
+            }
+
             var byDocId = new Dictionary<string, List<FileEffectRow>>(StringComparer.Ordinal);
             foreach (var row in model.Methods)
             {
@@ -250,6 +271,14 @@ internal sealed class RigEffectDaemonStage : CSharpDaemonStageBase
                         + $"uiHighlightings={highlightings.Count}, file={filePath}"
                 );
             committer(new DaemonStageResult(highlightings));
+        }
+
+        // A zero-length range at the top of the file: Problems groups by file, so the anchor only has to be
+        // inside it, and a zero-length range cannot underline code that is not at fault.
+        private DocumentRange FileRange()
+        {
+            var range = _file.GetDocumentRange();
+            return new DocumentRange(range.Document, new TextRange(range.StartOffset.Offset));
         }
 
         private IEnumerable<(int Line, DocumentRange NameRange)> InvocationNameRanges()

@@ -153,18 +153,18 @@ public sealed class RiderFileEffectTransportTests
     [Test]
     public void Responder_distinguishes_effectful_clean_unindexed_ambiguous_and_stale_files()
     {
-        var index = SqlIndex();
+        var index = SqlAndFileIndex();
         var builds = 0;
-        IReadOnlyList<FileEffectReadModelIndex> Build()
+        FileEffectReadModelIndex Build()
         {
             builds++;
-            return [index, FileIndex()];
+            return index;
         }
 
         var effectfulRequest = Request(RepoRoot, "effectful-id", "effectful-token", EffectFile);
         var effectful = RiderFileEffectResponder.Respond(
             effectfulRequest,
-            new RiderFileEffectCapture(19, ["project:A"], StaleReason: null, Build)
+            new RiderFileEffectCapture(19, ["project:A"], Unavailable: null, Build)
         );
         effectful.Status.ShouldBe(StatusOk);
         effectful.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceExact);
@@ -183,51 +183,64 @@ public sealed class RiderFileEffectTransportTests
                 ("M:File.Command", "M:CommandOwner", 20, "sql", 0),
                 ("M:File.Ef", "M:EfOwner", 10, "sql", 0),
             ]);
-        RiderFileEffectResponder
-            .SqlSelector.Predicates.Select(predicate => predicate.Provider)
-            .ShouldBe(["efcore", "db_connection", "db_reader", "db_command", "db_transaction", "yessql"]);
-        RiderFileEffectResponder.FileSelector.Predicates.Select(predicate => predicate.Provider).ShouldBe(["io"]);
 
         var clean = RiderFileEffectResponder.Respond(
             Request(RepoRoot, "clean-id", "clean-token", CleanFile),
-            new RiderFileEffectCapture(19, ["project:A"], StaleReason: null, Build)
+            new RiderFileEffectCapture(19, ["project:A"], Unavailable: null, Build)
         );
         clean.Status.ShouldBe(StatusOk);
         clean.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceExact);
         clean.Methods.ShouldBeEmpty();
         clean.CallSites.ShouldBeEmpty();
         clean.Reason.ShouldBe("");
+        clean.ReasonCode.ShouldBe("");
+        clean.ReasonScope.ShouldBe("");
 
         var builtBeforeFailures = builds;
         var unindexed = RiderFileEffectResponder.Respond(
             Request(RepoRoot, "unindexed-id", "unindexed-token", Path.Combine(RepoRoot, "Missing.cs")),
-            new RiderFileEffectCapture(20, [], StaleReason: null, Build)
+            new RiderFileEffectCapture(20, [], Unavailable: null, Build)
         );
         unindexed.Status.ShouldBe(StatusOk);
         unindexed.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceUnindexed);
         unindexed.Methods.ShouldBeEmpty();
         unindexed.CallSites.ShouldBeEmpty();
         unindexed.Reason.ShouldNotBeEmpty();
+        unindexed.ReasonCode.ShouldBe(RiderFileEffectResponder.ReasonNotIndexed);
+        unindexed.ReasonScope.ShouldBe(RiderFileEffectResponder.ScopeFile);
 
         var ambiguous = RiderFileEffectResponder.Respond(
             Request(RepoRoot, "ambiguous-id", "ambiguous-token", EffectFile),
-            new RiderFileEffectCapture(21, ["project:A", "project:B"], StaleReason: null, Build)
+            new RiderFileEffectCapture(21, ["project:A", "project:B"], Unavailable: null, Build)
         );
         ambiguous.Status.ShouldBe(StatusOk);
         ambiguous.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceAmbiguous);
         ambiguous.Methods.ShouldBeEmpty();
         ambiguous.CallSites.ShouldBeEmpty();
         ambiguous.Reason.ShouldContain("2 project contexts");
+        ambiguous.ReasonCode.ShouldBe(RiderFileEffectResponder.ReasonAmbiguousContext);
+        ambiguous.ReasonScope.ShouldBe(RiderFileEffectResponder.ScopeFile);
 
         var stale = RiderFileEffectResponder.Respond(
             Request(RepoRoot, "stale-id", "stale-token", EffectFile),
-            new RiderFileEffectCapture(22, ["project:A"], "one project unreconciled", Build)
+            new RiderFileEffectCapture(
+                22,
+                ["project:A"],
+                new FileEffectUnavailable(
+                    RiderFileEffectResponder.ReasonProjectUnreconciled,
+                    RiderFileEffectResponder.ScopeHost,
+                    "one project unreconciled"
+                ),
+                Build
+            )
         );
         stale.Status.ShouldBe(StatusOk);
         stale.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceStale);
         stale.Methods.ShouldBeEmpty();
         stale.CallSites.ShouldBeEmpty();
         stale.Reason.ShouldBe("one project unreconciled");
+        stale.ReasonCode.ShouldBe(RiderFileEffectResponder.ReasonProjectUnreconciled);
+        stale.ReasonScope.ShouldBe(RiderFileEffectResponder.ScopeHost);
         builds.ShouldBe(builtBeforeFailures, "non-exact source states must not force the reverse read model");
     }
 
@@ -240,7 +253,7 @@ public sealed class RiderFileEffectTransportTests
     {
         var response = RiderFileEffectResponder.Respond(
             Request(RepoRoot, "external-id", "external-token", EffectFile),
-            new RiderFileEffectCapture(31, ["project:A"], StaleReason: null, () => [ExternalCallIndex()])
+            new RiderFileEffectCapture(31, ["project:A"], Unavailable: null, ExternalCallIndex)
         );
 
         response.SourceStatus.ShouldBe(RiderFileEffectResponder.SourceExact);
@@ -334,7 +347,7 @@ public sealed class RiderFileEffectTransportTests
         return (await ReadFrameAsync(pipe, CancellationToken.None)).ShouldNotBeNull();
     }
 
-    private static FileEffectReadModelIndex SqlIndex()
+    private static FileEffectReadModelIndex SqlAndFileIndex()
     {
         var graph = Graph(
             [
@@ -359,8 +372,11 @@ public sealed class RiderFileEffectTransportTests
             new DerivedEffect("efcore", "read", "db", "M:EfOwner", OwnerFile, 10),
             new DerivedEffect("db_command", "execute", "db", "M:CommandOwner", OwnerFile, 20),
             new DerivedEffect("http", "send", "network", "M:HttpOwner", OwnerFile, 30),
+            // The `file` family's own effect, on the SAME owner the db_command effect sits on: one call site
+            // then carries two families, which is what the merged model has to express.
+            new DerivedEffect("io", "write", "file", "M:CommandOwner", OwnerFile, 21),
         };
-        return FileEffectReadModelIndex.Build(graph, symbols, effects, RiderFileEffectResponder.SqlSelector);
+        return FileEffectReadModelIndex.Build(graph, symbols, effects, FixtureSelectors);
     }
 
     // Mirrors Writes.SaveFactsBatchedAsync: DbConnection.BeginTransactionAsync (338) and
@@ -374,16 +390,26 @@ public sealed class RiderFileEffectTransportTests
             new DerivedEffect("db_transaction", "begin", "Common.DbConnection", "M:File.Save", EffectFile, 338),
             new DerivedEffect("db_transaction", "commit", "Common.DbTransaction", "M:File.Save", EffectFile, 499),
         };
-        return FileEffectReadModelIndex.Build(graph, symbols, effects, RiderFileEffectResponder.SqlSelector);
+        return FileEffectReadModelIndex.Build(graph, symbols, effects, FixtureSelectors);
     }
 
-    private static FileEffectReadModelIndex FileIndex()
-    {
-        var graph = Graph([new CallEdge("M:File.Command", "M:CommandOwner", "invocation", EffectFile, 20)]);
-        var symbols = new[] { Method("M:File.Command", EffectFile, 20), Method("M:CommandOwner", OwnerFile, 20) };
-        var effects = new[] { new DerivedEffect("io", "write", "file", "M:CommandOwner", OwnerFile, 20) };
-        return FileEffectReadModelIndex.Build(graph, symbols, effects, RiderFileEffectResponder.FileSelector);
-    }
+    // The families under test, spelled out here rather than taken from the responder: the responder derives
+    // them from a RULE SET now, and a fixture that borrowed them would silently change shape with the rules.
+    private static readonly IReadOnlyList<FileEffectSelector> FixtureSelectors =
+    [
+        new FileEffectSelector(
+            "sql",
+            [
+                new EffectPredicate("efcore"),
+                new EffectPredicate("db_connection"),
+                new EffectPredicate("db_reader"),
+                new EffectPredicate("db_command"),
+                new EffectPredicate("db_transaction"),
+                new EffectPredicate("yessql"),
+            ]
+        ),
+        new FileEffectSelector("file", [new EffectPredicate("io")]),
+    ];
 
     private static SymbolFact Method(string id, string file, int line) =>
         new(id, SymbolKinds.Method, id, "Fixture", "T:Fixture", "", "", id, file, line, line + 1, "Fixture", false, BodyHash: id);

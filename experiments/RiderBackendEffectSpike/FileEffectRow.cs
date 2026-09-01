@@ -41,15 +41,46 @@ internal sealed class FileEffectCallSiteRow
     public int NearestDepth { get; }
 }
 
+// Methods + call sites are the ANSWER; Status/ReasonCode/ReasonScope/Reason are why the answer is empty.
+// They used to be dropped into a Console line, which made "no host", "this file did not compile" and
+// "there are genuinely no effects here" one indistinguishable blank screen.
 internal sealed class FileEffectReadModel
 {
-    public FileEffectReadModel(IReadOnlyList<FileEffectRow> methods, IReadOnlyList<FileEffectCallSiteRow> callSites)
+    public FileEffectReadModel(
+        IReadOnlyList<FileEffectRow> methods,
+        IReadOnlyList<FileEffectCallSiteRow> callSites,
+        string status,
+        string reasonCode,
+        string reasonScope,
+        string reason
+    )
     {
         Methods = methods;
         CallSites = callSites;
+        Status = status;
+        ReasonCode = reasonCode;
+        ReasonScope = reasonScope;
+        Reason = reason;
     }
 
     public IReadOnlyList<FileEffectRow> Methods { get; }
 
     public IReadOnlyList<FileEffectCallSiteRow> CallSites { get; }
+
+    // The host's sourceStatus (`exact` / `stale` / `unindexed` / `ambiguous`) or the client-side
+    // `unreachable`. Empty only if a host answered without one, which the contract forbids.
+    public string Status { get; }
+
+    public string ReasonCode { get; }
+
+    // `file` = persistent and about THIS document, so it is worth a row in Problems. `host` = global and
+    // usually transient (booting, reconciling), so it belongs to the status widget and nothing else.
+    public string ReasonScope { get; }
+
+    public string Reason { get; }
+
+    public bool IsExact => string.Equals(Status, RigFileEffectHost.SourceExact, System.StringComparison.Ordinal);
+
+    public bool HasFileScopedReason =>
+        !IsExact && ReasonCode.Length > 0 && string.Equals(ReasonScope, RigFileEffectHost.ScopeFile, System.StringComparison.Ordinal);
 }

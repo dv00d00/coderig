@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using Rig.Analysis.Inventory;
 using Rig.Cli.Effects;
@@ -139,23 +139,25 @@ internal sealed class LiveFactSource
     // Rider's semantic file read model, memoized per fact GENERATION and per normalized selector. Unlike tree
     // artifacts this has its own deliberately small bound: arbitrary requests must not make a resident
     // generation's memory grow without limit. Equivalent predicate sets share one Lazy even when reordered.
-    internal FileEffectReadModelIndex FileEffects(FileEffectSelector selector)
+    internal FileEffectReadModelIndex FileEffects(IReadOnlyList<FileEffectSelector> selectors)
     {
-        ArgumentNullException.ThrowIfNull(selector);
-        var key = NormalizeFileEffectSelector(selector);
+        ArgumentNullException.ThrowIfNull(selectors);
+        var key = NormalizeFileEffectSelectors(selectors);
         Lazy<FileEffectReadModelIndex> index;
         lock (_fileEffectLock)
         {
             if (!_fileEffectIndexes.TryGetValue(key, out index!))
             {
                 index = Memo(
-                    $"fileEffects[{selector.Family}]",
+                    // Families SORTED, so the artifact name is a function of the same SET the memo key is —
+                    // otherwise the timing line names whichever order happened to build it first.
+                    $"fileEffects[{string.Join('+', selectors.Select(selector => selector.Family).OrderBy(family => family, StringComparer.Ordinal))}]",
                     () =>
                         FileEffectReadModelIndex.Build(
                             TraversalGraph,
                             Facts.EnumerateSymbols(),
                             Effects,
-                            selector,
+                            selectors,
                             indexedFilePaths: Facts.EnumerateSourceFiles().Select(file => file.FilePath)
                         )
                 );
@@ -343,6 +345,11 @@ internal sealed class LiveFactSource
     // per generation without a thread ever blocking on it. `.GetAwaiter().GetResult()` inside a Lazy<T> would
     // memoize the same value and be sync-over-async — the hazard this tool ships a detector for.
     private Lazy<Task<T>> MemoAsync<T>(string artifact, Func<Task<T>> build) => new Lazy<Task<T>>(() => TimedAsync(artifact, build));
+
+    // The memo key is the SET of selectors, order-insensitive: the same families asked for in a different
+    // order is the same index, and rebuilding it would cost a whole labelled traversal.
+    private static string NormalizeFileEffectSelectors(IReadOnlyList<FileEffectSelector> selectors) =>
+        string.Join("&", selectors.Select(NormalizeFileEffectSelector).OrderBy(key => key, StringComparer.Ordinal));
 
     private static string NormalizeFileEffectSelector(FileEffectSelector selector)
     {

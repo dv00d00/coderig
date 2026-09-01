@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Rig.Domain.Data;
 
 namespace Rig.Analysis.Rules;
@@ -84,6 +84,7 @@ public static class RuleSetLoader
             EffectEmoji = doc.EffectEmoji is not null
                 ? new Dictionary<string, string>(doc.EffectEmoji, StringComparer.OrdinalIgnoreCase)
                 : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ProviderFamilies = ProjectProviderFamilies(doc.Providers),
             DiRegistrations = doc.DiRegistrations ?? [],
             FileInclude = (doc.Files?.Include ?? []).Select(rule => rule.ToFileRule("include")).ToArray(),
             FileExclude = (doc.Files?.Exclude ?? []).Select(rule => rule.ToFileRule("exclude")).ToArray(),
@@ -215,6 +216,7 @@ public static class RuleSetLoader
         acc.Observations = MergeObservations(acc.Observations, next.Observations);
         acc.Render = MergeRender(acc.Render, next.Render);
         acc.EffectEmoji = MergeEmoji(acc.EffectEmoji, next.EffectEmoji);
+        acc.Providers = MergeProviders(acc.Providers, next.Providers);
         return acc;
     }
 
@@ -380,6 +382,43 @@ public static class RuleSetLoader
         // Ordinal, NOT OrdinalIgnoreCase: the keys are `provider:operation` tokens compared ordinally against
         // derived effects (`http:POST` and `http:post` are different operations in a ruleset's vocabulary).
         var merged = new Dictionary<string, string>(existing ?? [], StringComparer.Ordinal);
+        foreach (var kv in incoming)
+        {
+            merged[kv.Key] = kv.Value;
+        }
+
+        return merged;
+    }
+
+    // A provider with no family declared is a no-op row rather than a family named "" — authoring
+    // `"llblgen": {}` must not make every llblgen effect belong to the empty family.
+    private static Dictionary<string, string> ProjectProviderFamilies(Dictionary<string, ProviderRuleDocument>? providers)
+    {
+        var families = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in providers ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value?.Family))
+            {
+                families[kv.Key] = kv.Value!.Family!;
+            }
+        }
+
+        return families;
+    }
+
+    private static Dictionary<string, ProviderRuleDocument>? MergeProviders(
+        Dictionary<string, ProviderRuleDocument>? existing,
+        Dictionary<string, ProviderRuleDocument>? incoming
+    )
+    {
+        if (incoming is null || incoming.Count == 0)
+        {
+            return existing;
+        }
+
+        // PER KEY, like MergeEmoji and dualWrite.systemClassMap: an overlay ADDS providers without restating
+        // the builtin's, and a restated provider wins.
+        var merged = new Dictionary<string, ProviderRuleDocument>(existing ?? [], StringComparer.OrdinalIgnoreCase);
         foreach (var kv in incoming)
         {
             merged[kv.Key] = kv.Value;

@@ -54,7 +54,7 @@ public sealed class RiderFileEffectReadModelTests
 
         var file = index.Find(File);
         file.ShouldNotBeNull();
-        file!.EffectSelector.ShouldBe("sql");
+        file!.EffectSelectors.ShouldBe(["sql"]);
         file.Methods.Select(method =>
                 (method.SymbolId, Family: method.Effects.Single().Family, NearestDepth: method.Effects.Single().NearestDepth)
             )

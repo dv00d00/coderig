@@ -1,4 +1,4 @@
-{
+﻿{
   "entrypoints": {
     "classInheritance": [
       {
@@ -2139,6 +2139,39 @@
   // Emoji for the providers THIS file declares. The map merges per key across the cascade, so a project ruleset
   // gives its own providers an icon without restating these (the llblgen / echo_publish / eventbus /
   // entity_cache entries that used to ship here moved to the MedDBase ruleset with their providers).
+  // provider -> family. Only the providers THIS file declares effect rules for, and only builtin-GENERIC
+  // ones: a project's own stack (llblgen, echo, entity_cache) declares its families in its own ruleset, which
+  // is the F5 lesson from docs/backlog/progress/core-purity-project-vocabulary.md. Merged per key, so an
+  // overlay adds providers without restating these.
+  //
+  // A family groups providers a reader treats as one subsystem, which is what makes an IDE surface possible:
+  // the Rider read model builds one reverse closure per family, so this list is also the render vocabulary.
+  // A provider with no family here is NOT rendered - absence is the filter.
+  "providers": {
+    "efcore": { "family": "db" },
+    "db_command": { "family": "db" },
+    "db_connection": { "family": "db" },
+    "db_reader": { "family": "db" },
+    "db_transaction": { "family": "db" },
+    "repository": { "family": "db" },
+    "yessql": { "family": "db" },
+    "elasticsearch": { "family": "search" },
+    "azure_search": { "family": "search" },
+    "redis": { "family": "cache" },
+    "inproc_cache": { "family": "cache" },
+    "rabbitmq": { "family": "bus" },
+    "mediatr": { "family": "bus" },
+    "http": { "family": "rpc" },
+    "soap": { "family": "rpc" },
+    "fhir": { "family": "rpc" },
+    "smtp": { "family": "rpc" },
+    "socket": { "family": "rpc" },
+    "io": { "family": "io" },
+    "aws_s3": { "family": "blob" },
+    "azure_blob": { "family": "blob" },
+    "object_store": { "family": "blob" }
+  },
+
   "effectEmoji": {
     "soap": "☎️",
     "http": "🌐",

@@ -1,3 +1,4 @@
+﻿using Rig.Analysis.Rules;
 using Rig.Cli.Caching;
 using Rig.Cli.Commands;
 using Rig.Domain.Data;
@@ -468,6 +469,10 @@ internal static class EffectDerivation
 
     // The distinct provider strings (e.g. "http", "throw") known from the effective rule set.
     // A bare-provider --only/--exclude token is valid iff it appears here.
+    // The declared FAMILY tokens — the third valid token tier next to `provider` and `provider:operation`.
+    internal static HashSet<string> KnownFamilies(RuleSet rules) =>
+        new(ProviderCatalog.DeclaredFamilies(rules), StringComparer.OrdinalIgnoreCase);
+
     internal static HashSet<string> KnownProviders(RuleSet rules) =>
         new(rules.Effects.Select(r => r.Provider).Append("alloc"), StringComparer.OrdinalIgnoreCase);
 
@@ -484,6 +489,36 @@ internal static class EffectDerivation
     // "unknown" only when it matches neither a bare provider NOR any provider:op — so "http" is valid
     // when ANY http:* rule exists, and "http:GET" is valid iff that exact pair exists. Token-matching
     // mirrors ApplyEffectFilters exactly (case-insensitive, bare provider matches any op of that provider).
+    // The one place --only/--exclude tokens enter a command: expand FAMILY tokens into the providers they
+    // name, then warn about whatever still matches nothing.
+    //
+    // Expansion rather than a third arm in the matcher, deliberately: a family is SUGAR over the token set
+    // that already exists, so nothing downstream — the matcher, the cache signature, the live transport —
+    // has to learn about families at all. The sets are the ones the query services read, so expanding them
+    // here covers every surface without a parameter threaded through five call chains.
+    internal static void PrepareFilterTokens(HashSet<string> only, HashSet<string> exclude, RuleSet rules, TextWriter errorWriter)
+    {
+        ExpandFamilyTokens(only, rules);
+        ExpandFamilyTokens(exclude, rules);
+        WarnUnknownFilterTokens(only, exclude, rules, errorWriter);
+    }
+
+    private static void ExpandFamilyTokens(HashSet<string> tokens, RuleSet rules)
+    {
+        if (tokens.Count == 0 || rules.ProviderFamilies.Count == 0)
+        {
+            return;
+        }
+
+        // The family token itself is kept: harmless (no effect's provider equals a family name unless that
+        // provider IS the family, which is the identity case) and it keeps the disclosure readable.
+        var providers = rules.ProviderFamilies.Where(pair => tokens.Contains(pair.Value)).Select(pair => pair.Key).ToArray();
+        foreach (var provider in providers)
+        {
+            tokens.Add(provider);
+        }
+    }
+
     internal static void WarnUnknownFilterTokens(HashSet<string> only, HashSet<string> exclude, RuleSet rules, TextWriter errorWriter)
     {
         if (only.Count == 0 && exclude.Count == 0)
@@ -493,13 +528,14 @@ internal static class EffectDerivation
 
         var knownProviders = KnownProviders(rules);
         var knownProviderOps = KnownProviderOps(rules);
+        var knownFamilies = KnownFamilies(rules);
 
         // Compute the sorted provider list once — only consumed when at least one unknown token is found.
         string? sortedProvidersLabel = null;
 
         foreach (var token in only.Concat(exclude))
         {
-            if (!TokenIsKnown(token, knownProviders, knownProviderOps))
+            if (!TokenIsKnown(token, knownProviders, knownProviderOps) && !knownFamilies.Contains(token))
             {
                 sortedProvidersLabel ??= string.Join(", ", knownProviders.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
                 errorWriter.WriteLine(

@@ -1,4 +1,4 @@
-using Rig.Domain.Data;
+﻿using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
 
@@ -1138,6 +1138,154 @@ public static partial class FactPathFinder
         }
 
         return depthOf;
+    }
+
+    // LABELLED multi-source reverse reachability: k independent ReachedByAny closures computed in ONE pass.
+    // Result[i] is exactly what ReachedByAny(graph, seedsByLabel[i], …) returns — same keys, same depths —
+    // which is what the equivalence test pins. That equality is exact for maxDepth; maxNodes is a RESOURCE
+    // bound counting nodes TOUCHED by any label, so a bounded fused walk can admit a different node set than
+    // k bounded separate walks. Every caller today passes int.MaxValue for both.
+    //
+    // Why fuse instead of looping: the index and reverse maps are already memoised per graph, but the BFS and
+    // its predecessor enumeration are not, so k labels meant k full walks of a 442k-node graph. Here a node
+    // carries a MASK of the labels whose distance it just improved, so one predecessor enumeration serves
+    // every label travelling with it — and labels do travel together, because the callers that reach a db
+    // effect are largely the callers that reach a cache effect. The fallback is graceful: labels that spread
+    // differently simply re-enqueue the node with a smaller mask, which is the k-walk cost and no worse.
+    //
+    // Cap: 64 labels (one ulong of mask). A caller with more families than that has a taxonomy problem, not
+    // a traversal problem, so this throws rather than silently truncating.
+    public static IReadOnlyList<IReadOnlyDictionary<string, int>> ReachedByLabelledSeeds(
+        FactGraphData graph,
+        IReadOnlyList<IReadOnlyCollection<string>> seedsByLabel,
+        int maxDepth = 20,
+        int maxNodes = 20000,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(seedsByLabel);
+        if (seedsByLabel.Count > 64)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(seedsByLabel),
+                seedsByLabel.Count,
+                "At most 64 labels can be traversed in one pass."
+            );
+        }
+
+        var labels = seedsByLabel.Count;
+        if (labels == 0)
+        {
+            return [];
+        }
+
+        var index = BuildIndex(graph, narrowDispatch);
+        var rev = BuildReverseMaps(graph, narrowDispatch, mode);
+
+        // int.MaxValue = "this label has not reached this node". One array per node rather than one dictionary
+        // per label: the node key is interned once and the label lookup is an index.
+        var depths = new Dictionary<string, int[]>(StringComparer.Ordinal);
+        var queue = new Queue<(string Node, ulong Mask)>();
+
+        int[] Slot(string node)
+        {
+            if (depths.TryGetValue(node, out var existing))
+            {
+                return existing;
+            }
+
+            var fresh = new int[labels];
+            Array.Fill(fresh, int.MaxValue);
+            depths.Add(node, fresh);
+            return fresh;
+        }
+
+        for (var label = 0; label < labels; label++)
+        {
+            // A seed absent from the graph (a method with no edges either way) is not a traversal node —
+            // skipped, exactly as ReachedByAny does.
+            foreach (var seed in seedsByLabel[label])
+            {
+                if (!index.Nodes.Contains(seed))
+                {
+                    continue;
+                }
+
+                var slot = Slot(seed);
+                if (slot[label] == 0)
+                {
+                    continue;
+                }
+
+                slot[label] = 0;
+                queue.Enqueue((seed, 1UL << label));
+            }
+        }
+
+        while (queue.Count > 0 && depths.Count < maxNodes)
+        {
+            var (current, mask) = queue.Dequeue();
+            var currentDepths = depths[current];
+
+            // Only the labels still in the mask can propagate from here, and only while under maxDepth.
+            var travelling = 0UL;
+            for (var label = 0; label < labels; label++)
+            {
+                if ((mask & (1UL << label)) != 0 && currentDepths[label] < maxDepth)
+                {
+                    travelling |= 1UL << label;
+                }
+            }
+
+            if (travelling == 0)
+            {
+                continue;
+            }
+
+            foreach (var (pred, _) in Predecessors(current, index, rev))
+            {
+                var predDepths = Slot(pred);
+                var improved = 0UL;
+                for (var label = 0; label < labels; label++)
+                {
+                    if ((travelling & (1UL << label)) == 0)
+                    {
+                        continue;
+                    }
+
+                    var candidate = currentDepths[label] + 1;
+                    if (candidate < predDepths[label])
+                    {
+                        predDepths[label] = candidate;
+                        improved |= 1UL << label;
+                    }
+                }
+
+                if (improved != 0)
+                {
+                    queue.Enqueue((pred, improved));
+                }
+            }
+        }
+
+        var result = new IReadOnlyDictionary<string, int>[labels];
+        for (var label = 0; label < labels; label++)
+        {
+            var perLabel = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var pair in depths)
+            {
+                if (pair.Value[label] != int.MaxValue)
+                {
+                    perLabel.Add(pair.Key, pair.Value[label]);
+                }
+            }
+
+            result[label] = perLabel;
+        }
+
+        return result;
     }
 
     // Entry-point CANDIDATES that reach toPattern: the reachable methods with NO predecessor at all

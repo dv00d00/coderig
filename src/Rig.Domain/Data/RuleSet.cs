@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using Rig.Domain.Functions;
 
 namespace Rig.Domain.Data;
@@ -58,6 +58,20 @@ public sealed record RuleSet
     public FactRenderRules Render { get; init; } = new(CollapseSeams: [], OpaqueTypes: []);
     public IReadOnlyList<DeliveryRule> Delivery { get; init; } = [];
     public IReadOnlyDictionary<string, string> EffectEmoji { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    // provider -> the FAMILY it belongs to. The first DECLARATION of a noun that ten rule sections already
+    // select on by bare string (effects, effectEmoji, dualWrite.systemClassMap, observations.*, cacheCoherence,
+    // crossMethodAmplification) — which is why a typo in one of those lists silently disables a gate today.
+    //
+    // A family groups providers that are the same SUBSYSTEM to a reader (llblgen + dapper + db_command = db),
+    // shrinking a 70-provider vocabulary to the handful an IDE can render. It is NOT the same axis as
+    // dualWrite.systemClassMap: that answers "is this a DURABLE WRITE and to which system" and is therefore
+    // operation-keyed (http:POST yes, http:GET no), so the two deliberately stay separate.
+    //
+    // ABSENT ⇒ family = the provider's own name (identity, never a built-in literal — this file ships no
+    // project vocabulary). Merge is PER KEY, so an overlay adds providers without restating the builtin's.
+    public IReadOnlyDictionary<string, string> ProviderFamilies { get; init; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     // Index/extraction-side slices, consumed in authoring form by SolutionSourceLoader / SourceFileClassifier

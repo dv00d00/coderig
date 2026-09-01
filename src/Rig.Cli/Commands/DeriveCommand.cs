@@ -1,4 +1,4 @@
-using System.CommandLine;
+﻿using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Effects;
@@ -112,6 +112,20 @@ internal static class DeriveCommand
         {
             var knownProviders = KnownProviders(rules);
             var knownProviderOps = KnownProviderOps(rules);
+            var families = ProviderCatalog.EffectfulFamilies(rules);
+            if (families.Count > 0)
+            {
+                // Families first: they are the coarsest token and the one a reader reaches for. Each line
+                // names the providers it expands to, because that expansion IS the filter semantics.
+                io.TextOutput.Output.WriteLine("Known effect families (use with --only / --exclude):");
+                foreach (var family in families)
+                {
+                    io.TextOutput.Output.WriteLine($"  {family.Family} -> {string.Join(", ", family.Providers)}");
+                }
+
+                io.TextOutput.Output.WriteLine();
+            }
+
             io.TextOutput.Output.WriteLine("Known effect providers (use with --only / --exclude):");
             foreach (var provider in knownProviders.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
             {
@@ -128,7 +142,7 @@ internal static class DeriveCommand
             return 0;
         }
 
-        WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
+        PrepareFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
         // F7: use the out-param overload so the resolved store dir is available for the StoreKey computation
         // below without a second ResolveReadStoreDir call (io:read ×7). Gated: schema fail-fast at open.
         var (context, rigDir) = await OpenReadContextGatedAsync(io.WorkspaceLocation, withStoreDir: true);

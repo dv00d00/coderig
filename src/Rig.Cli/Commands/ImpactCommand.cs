@@ -1,4 +1,4 @@
-using System.CommandLine;
+﻿using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.Caching;
 using Rig.Cli.CommandLine;
@@ -264,7 +264,7 @@ internal static class ImpactCommand
                 extraRules: opts.ExtraRules,
                 loadedPaths: out _
             );
-            WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: ruleSet, errorWriter: io.TextOutput.Error);
+            PrepareFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: ruleSet, errorWriter: io.TextOutput.Error);
         }
 
         RenderImpact(

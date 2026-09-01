@@ -1,4 +1,4 @@
-using Rig.Analysis.Rules;
+﻿using Rig.Analysis.Rules;
 using Rig.Domain.Functions;
 using Shouldly;
 
@@ -51,6 +51,36 @@ public sealed class RuleSetLoaderTests
         // same bug wearing a different hat.
         ruleSet.Observations.AmplificationOrEmpty.ShouldNotBeEmpty();
         ruleSet.Observations.EnumeratingMethods.ShouldNotBeEmpty();
+    }
+
+    // Same trap, the `providers` section: an overlay declaring its OWN provider families must not wipe the
+    // builtin ones, and the section must survive Merge at all. If it is dropped the failure is silent in the
+    // worst way — the Rider read model derives its selector set from these families, so the plugin simply
+    // renders nothing for the project vocabulary and looks like it has no data.
+    [Test]
+    public void Provider_families_survive_the_cascade_merge_and_merge_per_key()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            // lang=json
+            """
+            {
+              "providers": {
+                "llblgen": { "family": "db" },
+                "entity_cache": { "family": "cache" },
+                "io": { "family": "filesystem" }
+              }
+            }
+            """
+        );
+
+        var ruleSet = RuleSetLoader.LoadForSolution(workspace.SolutionPath);
+
+        ruleSet.ProviderFamilies["llblgen"].ShouldBe("db");
+        ruleSet.ProviderFamilies["entity_cache"].ShouldBe("cache");
+        // Per key: the builtin's own providers survive an overlay that never mentions them...
+        ruleSet.ProviderFamilies["efcore"].ShouldBe("db");
+        // ...and a restated provider wins (builtin says io -> io).
+        ruleSet.ProviderFamilies["io"].ShouldBe("filesystem");
     }
 
     // The FR-8 dual_write system-class map must survive the cascade merge, and it must merge PER KEY: an

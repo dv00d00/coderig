@@ -45,14 +45,16 @@ public sealed record FileEffectCallSite(
     IReadOnlyList<FileEffectAggregate> Effects
 );
 
+// EffectSelectors are the families this model was projected for — ALL of them, whether or not the file has a
+// row in each. A consumer reading "no cache row here" needs to know cache was actually asked about.
 public sealed record FileEffectReadModel(
     string FilePath,
-    string EffectSelector,
+    IReadOnlyList<string> EffectSelectors,
     IReadOnlyList<FileEffectMethod> Methods,
     IReadOnlyList<FileEffectCallSite> CallSites
 );
 
-/// <summary>Projects one effect family's multi-source reverse closure into immutable, Rider-ready per-file read models.</summary>
+/// <summary>Projects every effect family's multi-source reverse closure into immutable, Rider-ready per-file read models.</summary>
 public sealed class FileEffectReadModelIndex
 {
     private static readonly StringComparer FilePathComparer =
@@ -65,59 +67,74 @@ public sealed class FileEffectReadModelIndex
         _files = files;
     }
 
+    // Single-family entry point, kept because most callers and every fixture ask about one family.
     public static FileEffectReadModelIndex Build(
         FactGraphData graph,
         IEnumerable<SymbolFact> symbols,
         IEnumerable<DerivedEffect> effects,
         FileEffectSelector selector,
         IEnumerable<string>? indexedFilePaths = null
+    ) => Build(graph, symbols, effects, [selector], indexedFilePaths);
+
+    // Every family in ONE build. What is shared, and why that is the whole point: the canonical-method
+    // projection and its per-file grouping run over every symbol in the solution (442k on MedDBase), and the
+    // reverse closure walks the whole graph. Done per family they cost k times as much - measured at 15.6s for
+    // TWO families on MedDBase, which is also why the first request used to time out in the Rider client.
+    // Here the grouping happens once and the k closures come from one labelled walk.
+    public static FileEffectReadModelIndex Build(
+        FactGraphData graph,
+        IEnumerable<SymbolFact> symbols,
+        IEnumerable<DerivedEffect> effects,
+        IReadOnlyList<FileEffectSelector> selectors,
+        IEnumerable<string>? indexedFilePaths = null
     )
     {
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(symbols);
         ArgumentNullException.ThrowIfNull(effects);
-        ArgumentNullException.ThrowIfNull(selector);
+        ArgumentNullException.ThrowIfNull(selectors);
+        if (selectors.Count == 0)
+        {
+            throw new ArgumentException("At least one effect selector is required.", nameof(selectors));
+        }
 
         var symbolRows = symbols.ToArray();
+        var effectRows = effects as IReadOnlyList<DerivedEffect> ?? effects.ToArray();
+        var families = Array.AsReadOnly(selectors.Select(selector => selector.Family).ToArray());
         var methodsByFile = SymbolFactProjections
             .SelectCanonicalMethodFacts(symbolRows)
             .Where(symbol => !string.IsNullOrWhiteSpace(symbol.FilePath))
             .GroupBy(symbol => symbol.FilePath, FilePathComparer)
-            .ToDictionary(group => group.Key, group => group.AsEnumerable(), FilePathComparer);
-        var selectedEffects = effects.Where(effect => selector.Predicates.Any(predicate => Matches(effect, predicate))).ToArray();
-        var effectOwners = selectedEffects
-            .Select(effect => effect.EnclosingSymbolId)
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Cast<string>()
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        // One traversal for the UNION of every exact predicate in the named family. Projecting a file below
-        // is therefore only a dictionary join, never a forward graph walk per method.
-        var reached = FactPathFinder.ReachedByAny(
-            graph,
-            effectOwners,
-            maxDepth: int.MaxValue,
-            maxNodes: int.MaxValue,
-            narrowDispatch: true,
-            mode: FactPathFinder.TraversalMode.SyncCut
-        );
+            .ToDictionary(group => group.Key, group => group.ToArray(), FilePathComparer);
 
-        // Static monomorphization splits one generic member into `{baseId}~mono⟨binding⟩` NODES and redirects
-        // concrete calls to them, while both ends of this projection speak BASE ids: the closure is seeded
-        // from effect owners (reference facts, always base) and Rider resolves what it gets against a PSI
-        // declaration, which carries no binding. So collapse every reached instantiation onto its base id,
-        // keeping the SHORTEST distance — without it a generic callee is simply absent from the join, which
-        // cost Writes.SaveFactsBatchedAsync all five of its InsertRows``1 call sites and would cost a method
-        // its whole summary when its only route to the family runs through an instantiation.
-        var reachedByBase = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var pair in reached)
-        {
-            var canonical = MonomorphizedNodeId.BaseOf(pair.Key);
-            if (!reachedByBase.TryGetValue(canonical, out var known) || pair.Value < known)
-            {
-                reachedByBase[canonical] = pair.Value;
-            }
-        }
+        var selectedPerFamily = selectors
+            .Select(selector => effectRows.Where(effect => selector.Predicates.Any(predicate => Matches(effect, predicate))).ToArray())
+            .ToArray();
+        var ownersPerFamily = selectedPerFamily
+            .Select(selected =>
+                (IReadOnlyCollection<string>)
+                    selected
+                        .Select(effect => effect.EnclosingSymbolId)
+                        .Where(id => !string.IsNullOrWhiteSpace(id))
+                        .Cast<string>()
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()
+            )
+            .ToArray();
+
+        // One traversal for the union of every family's exact predicates. Projecting a file below is therefore
+        // only a dictionary join, never a forward graph walk per method.
+        var reachedPerFamily = FactPathFinder
+            .ReachedByLabelledSeeds(
+                graph,
+                ownersPerFamily,
+                maxDepth: int.MaxValue,
+                maxNodes: int.MaxValue,
+                narrowDispatch: true,
+                mode: FactPathFinder.TraversalMode.SyncCut
+            )
+            .Select(CollapseInstantiations)
+            .ToArray();
 
         var knownFiles = (indexedFilePaths ?? symbolRows.Select(symbol => symbol.FilePath))
             .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -129,36 +146,110 @@ public sealed class FileEffectReadModelIndex
             )
             .GroupBy(edge => edge.FilePath, FilePathComparer)
             .ToDictionary(group => group.Key, group => group.ToArray(), FilePathComparer);
-        var selectedEffectsByFile = selectedEffects
-            .Where(effect => !string.IsNullOrWhiteSpace(effect.FilePath))
-            .GroupBy(effect => effect.FilePath, FilePathComparer)
-            .ToDictionary(group => group.Key, group => group.ToArray(), FilePathComparer);
+        var selectedByFilePerFamily = selectedPerFamily
+            .Select(selected =>
+                selected
+                    .Where(effect => !string.IsNullOrWhiteSpace(effect.FilePath))
+                    .GroupBy(effect => effect.FilePath, FilePathComparer)
+                    .ToDictionary(group => group.Key, group => group.ToArray(), FilePathComparer)
+            )
+            .ToArray();
+
         var files = new Dictionary<string, FileEffectReadModel>(FilePathComparer);
         foreach (var filePath in knownFiles)
         {
-            var fileMethods = (methodsByFile.GetValueOrDefault(filePath) ?? []).ToArray();
+            var fileMethods = methodsByFile.GetValueOrDefault(filePath) ?? [];
             var fileMethodIds = fileMethods.Select(method => method.SymbolId).ToHashSet(StringComparer.Ordinal);
-            var methods = Array.AsReadOnly(
-                fileMethods
-                    .Where(symbol => reachedByBase.ContainsKey(symbol.SymbolId))
-                    .OrderBy(symbol => symbol.SymbolId, StringComparer.Ordinal)
-                    .Select(symbol => new FileEffectMethod(
-                        symbol.SymbolId,
-                        Array.AsReadOnly([new FileEffectAggregate(selector.Family, reachedByBase[symbol.SymbolId])])
-                    ))
-                    .ToArray()
-            );
-            var callSites = BuildCallSites(
-                invocationEdgesByFile.GetValueOrDefault(filePath) ?? [],
-                selectedEffectsByFile.GetValueOrDefault(filePath) ?? [],
-                reachedByBase,
-                fileMethodIds,
-                selector.Family
-            );
-            files[filePath] = new FileEffectReadModel(filePath, selector.Family, methods, callSites);
+            var fileEdges = invocationEdgesByFile.GetValueOrDefault(filePath) ?? [];
+
+            var methodRows = new List<(string SymbolId, FileEffectAggregate Effect)>();
+            var callSiteRows = new List<(CallSiteKey Key, FileEffectAggregate Effect)>();
+            for (var family = 0; family < selectors.Count; family++)
+            {
+                var reached = reachedPerFamily[family];
+                foreach (var symbol in fileMethods)
+                {
+                    if (reached.TryGetValue(symbol.SymbolId, out var depth))
+                    {
+                        methodRows.Add((symbol.SymbolId, new FileEffectAggregate(families[family], depth)));
+                    }
+                }
+
+                var fileEffects = selectedByFilePerFamily[family].GetValueOrDefault(filePath) ?? [];
+                foreach (var site in BuildCallSiteKeys(fileEdges, fileEffects, reached, fileMethodIds))
+                {
+                    var depth = reached.TryGetValue(site.TargetSymbolId, out var known) ? known : 0;
+                    callSiteRows.Add((site, new FileEffectAggregate(families[family], depth)));
+                }
+            }
+
+            files[filePath] = new FileEffectReadModel(filePath, families, MergeMethods(methodRows), MergeCallSites(callSiteRows));
         }
 
         return new FileEffectReadModelIndex(files);
+    }
+
+    // Static monomorphization splits one generic member into `{baseId}~mono` NODES and redirects concrete
+    // calls to them, while both ends of this projection speak BASE ids: the closure is seeded from effect
+    // owners (reference facts, always base) and Rider resolves what it gets against a PSI declaration, which
+    // carries no binding. So collapse every reached instantiation onto its base id, keeping the SHORTEST
+    // distance - without it a generic callee is simply absent from the join, which cost
+    // Writes.SaveFactsBatchedAsync all five of its InsertRows``1 call sites and would cost a method its whole
+    // summary when its only route to the family runs through an instantiation.
+    private static Dictionary<string, int> CollapseInstantiations(IReadOnlyDictionary<string, int> reached)
+    {
+        var reachedByBase = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var pair in reached)
+        {
+            var canonical = MonomorphizedNodeId.BaseOf(pair.Key);
+            if (!reachedByBase.TryGetValue(canonical, out var known) || pair.Value < known)
+            {
+                reachedByBase[canonical] = pair.Value;
+            }
+        }
+
+        return reachedByBase;
+    }
+
+    // One row per (symbol, family): a method reaching several families carries one aggregate each, ordered so
+    // the wire shape is stable.
+    private static IReadOnlyList<FileEffectMethod> MergeMethods(IReadOnlyList<(string SymbolId, FileEffectAggregate Effect)> rows) =>
+        Array.AsReadOnly(
+            rows.GroupBy(row => row.SymbolId, StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => new FileEffectMethod(
+                    group.Key,
+                    Array.AsReadOnly(group.Select(row => row.Effect).OrderBy(effect => effect.Family, StringComparer.Ordinal).ToArray())
+                ))
+                .ToArray()
+        );
+
+    // Same merge for call sites, plus the CROSS-FAMILY arm of the precedence rule BuildCallSiteKeys already
+    // applies within one family: an untargeted row (an effect at a call into external code, empty target) is
+    // dropped when ANY family produced a targeted row at the same (enclosing, line). Otherwise a line whose db
+    // effect is external and whose cache effect resolves would emit both, and the client - which anchors an
+    // untargeted row on the leftmost invocation of the line - could mark the wrong call.
+    private static IReadOnlyList<FileEffectCallSite> MergeCallSites(IReadOnlyList<(CallSiteKey Key, FileEffectAggregate Effect)> rows)
+    {
+        var targeted = rows.Where(row => row.Key.TargetSymbolId.Length > 0)
+            .Select(row => new SourceSite(row.Key.EnclosingSymbolId, row.Key.Line))
+            .ToHashSet();
+        return Array.AsReadOnly(
+            rows.Where(row =>
+                    row.Key.TargetSymbolId.Length > 0 || !targeted.Contains(new SourceSite(row.Key.EnclosingSymbolId, row.Key.Line))
+                )
+                .GroupBy(row => row.Key)
+                .OrderBy(group => group.Key.EnclosingSymbolId, StringComparer.Ordinal)
+                .ThenBy(group => group.Key.Line)
+                .ThenBy(group => group.Key.TargetSymbolId, StringComparer.Ordinal)
+                .Select(group => new FileEffectCallSite(
+                    group.Key.EnclosingSymbolId,
+                    group.Key.TargetSymbolId,
+                    group.Key.Line,
+                    Array.AsReadOnly(group.Select(row => row.Effect).OrderBy(effect => effect.Family, StringComparer.Ordinal).ToArray())
+                ))
+                .ToArray()
+        );
     }
 
     public FileEffectReadModel? Find(string filePath)
@@ -171,12 +262,13 @@ public sealed class FileEffectReadModelIndex
         string.Equals(effect.Provider, predicate.Provider, StringComparison.Ordinal)
         && (predicate.Operation is null || string.Equals(effect.Operation, predicate.Operation, StringComparison.Ordinal));
 
-    private static IReadOnlyList<FileEffectCallSite> BuildCallSites(
+    // The call-site KEYS one family contributes to one file. The family aggregate is attached by the caller,
+    // which also applies the cross-family precedence (see MergeCallSites).
+    private static IReadOnlyList<CallSiteKey> BuildCallSiteKeys(
         IReadOnlyList<CallEdge> fileInvocationEdges,
         IReadOnlyList<DerivedEffect> selectedEffects,
         IReadOnlyDictionary<string, int> reached,
-        IReadOnlySet<string> fileMethodIds,
-        string family
+        IReadOnlySet<string> fileMethodIds
     )
     {
         // Both ends are canonicalised first: a call INTO an instantiation carries a `~mono` callee, and a
@@ -235,22 +327,7 @@ public sealed class FileEffectReadModelIndex
             .Where(effect => effect.Line > 0 && !targetedSites.Contains(new SourceSite(effect.EnclosingSymbolId!, effect.Line)))
             .Select(effect => new CallSiteKey(effect.EnclosingSymbolId!, "", effect.Line));
 
-        return Array.AsReadOnly(
-            directSites
-                .Concat(indirectSites)
-                .Concat(externalSites)
-                .Distinct()
-                .OrderBy(site => site.EnclosingSymbolId, StringComparer.Ordinal)
-                .ThenBy(site => site.Line)
-                .ThenBy(site => site.TargetSymbolId, StringComparer.Ordinal)
-                .Select(site => new FileEffectCallSite(
-                    site.EnclosingSymbolId,
-                    site.TargetSymbolId,
-                    site.Line,
-                    Array.AsReadOnly([new FileEffectAggregate(family, reached.TryGetValue(site.TargetSymbolId, out var depth) ? depth : 0)])
-                ))
-                .ToArray()
-        );
+        return Array.AsReadOnly(directSites.Concat(indirectSites).Concat(externalSites).Distinct().ToArray());
     }
 
     private readonly record struct SourceSite(string EnclosingSymbolId, int Line);

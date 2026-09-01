@@ -1,4 +1,4 @@
-using System.CommandLine;
+﻿using System.CommandLine;
 using System.Diagnostics;
 using System.Globalization;
 using Rig.Analysis.Rules;
@@ -126,7 +126,7 @@ internal static class AmplifyCommand
             extraRules: opts.ExtraRules,
             loadedPaths: out var loadedRulePaths
         );
-        WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
+        PrepareFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
 
         var (context, rigDir) = await OpenReadContextGatedAsync(io.WorkspaceLocation, withStoreDir: true);
         await using var contextScope = context;
