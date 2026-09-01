@@ -1,7 +1,13 @@
 # The file lens can emit a marked line whose owning method has no method row
 
-**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent
+**Status:** done · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent
 auditing `rig annotate` · **Family:** file lens (read model)
+
+## Outcome
+
+The projection now seeds isolated direct owners and derives a method-family row from every emitted call-site,
+then min-merges duplicate `(method, family)` evidence. A synthetic invariant asserts that every marked line's
+families are a subset of its owning method row, alongside the original monomorphized join coverage.
 
 ## What happens
 

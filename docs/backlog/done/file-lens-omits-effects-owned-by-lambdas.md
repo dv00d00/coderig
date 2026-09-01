@@ -1,7 +1,14 @@
 # The file lens omits every effect owned by a lambda — 24% of MedDBase effects
 
-**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-08-31 quantifying the Rider
+**Status:** done · **Triage:** ready-for-agent · **Found:** 2026-08-31 quantifying the Rider
 plugin's blind spots; re-confirmed 2026-09-01 by a probe agent on 30 files · **Family:** file lens (read model)
+
+## Outcome
+
+The shared read model now follows extraction-preserved `methodGroup`/handoff ownership edges from synthetic
+lambdas to the outer declared method or accessor, folds the effect owner there, and keeps the lambda's physical
+line. The store-backed path is covered without loading lambda symbol rows; nested and property/getter cases are
+synthetic regressions. Web, CLI and Rider transport all consume this same projection.
 
 ## What happens
 

@@ -8,10 +8,10 @@ public sealed class FileEffectsCacheSchemaTests
     [Test]
     public void File_effect_cache_and_browser_derivation_are_gated_by_the_same_schema()
     {
-        QueryCacheKeys.FileEffectsSchema.ShouldBe(1);
+        QueryCacheKeys.FileEffectsSchema.ShouldBe(2);
         QueryCacheKeys
             .FileEffectsCacheKey("store", "rules", "/repo/A.cs")
-            .ShouldBe("9B4025D340872C273380142F35A3C91D966B9018B15BA1CEBAFE371C7A100114");
+            .ShouldBe("0C31D6B9ADA8755244A0D6A59DF4B83D351CF6EE54620D40154056088ED8A93B");
         QueryCacheKeys.DerivationSchemaToken().Split('.').Last().ShouldBe(QueryCacheKeys.FileEffectsSchema.ToString());
     }
 }

@@ -161,10 +161,11 @@ public sealed class RiderFileEffectReadModelTests
             .ShouldBe([("M:File.Save", "", 338, "sql", 0), ("M:File.Save", "", 499, "sql", 0)]);
     }
 
-    // Both arms can claim one (enclosing, line). The edge-derived row wins because it names a target Rider
-    // can resolve against the PSI invocation; two rows on one line would double-mark it.
+    // Both arms can claim one (enclosing, line). A safely recovered direct target is enough by itself, but a
+    // separate distant target must coexist with the empty depth-zero row so the shared model loses neither
+    // fact. Rider resolves the targeted row first; the text/web lens min-merges the line.
     [Test]
-    public void An_edge_derived_call_site_wins_over_an_effect_derived_one_on_the_same_line()
+    public void A_direct_row_survives_beside_a_distinct_distant_target_on_the_same_line()
     {
         var graph = Graph([
             new CallEdge("M:File.Caller", "M:Owner", "invocation", File, 10),
@@ -175,9 +176,9 @@ public sealed class RiderFileEffectReadModelTests
         var effects = new[]
         {
             Effect("ado", "read", "M:Owner", 31),
-            // Same line as the single-edge site: the recovered target must survive, the empty one must not.
+            // Same line as the single-edge direct site: the recovered target is the direct fact.
             new DerivedEffect("ado", "read", "db", "M:File.Caller", File, 10),
-            // Same line as an INDIRECT site: the reachable callee still wins over the empty target.
+            // Same line as an INDIRECT site: preserve both the direct empty row and the distant target.
             new DerivedEffect("ado", "read", "db", "M:File.Caller", File, 20),
         };
 
@@ -188,7 +189,11 @@ public sealed class RiderFileEffectReadModelTests
 
         model
             .CallSites.Select(site => (site.EnclosingSymbolId, site.TargetSymbolId, site.Line, site.Effects.Single().NearestDepth))
-            .ShouldBe([("M:File.Caller", "M:Owner", 10, 0), ("M:File.Caller", "M:Bridge", 20, 1)]);
+            .ShouldBe([
+                ("M:File.Caller", "M:Owner", 10, 0),
+                ("M:File.Caller", "", 20, 0),
+                ("M:File.Caller", "M:Bridge", 20, 1),
+            ]);
     }
 
     // The effect-derived arm keys off the effect's OWN FilePath, so an effect in the callee's body belongs to

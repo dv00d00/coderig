@@ -105,7 +105,8 @@ internal static class QueryCacheKeys
     // v1: the per-file semantic effect projection shared by web, annotate and Rider. This gates both the
     // browser derivation token and the resident process LRU, so same-store projection fixes cannot leave
     // either surface serving the pre-fix read model.
-    internal const int FileEffectsSchema = 1;
+    // v1->v2: fold lambda-owned effects to declarations, preserve co-located direct rows, and enforce method/site consistency.
+    internal const int FileEffectsSchema = 2;
 
     // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)

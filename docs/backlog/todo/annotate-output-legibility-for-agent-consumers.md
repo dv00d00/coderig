@@ -49,4 +49,4 @@ statement that makes an absent badge meaningful.
 ## Out of scope
 
 The line-precision disclosure and the lambda blind spot, both already stated in output and in the rig skill;
-the lambda gap itself is [its own card](./file-lens-omits-effects-owned-by-lambdas.md).
+  the lambda gap itself is [its own card](../done/file-lens-omits-effects-owned-by-lambdas.md).
