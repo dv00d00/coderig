@@ -100,8 +100,8 @@
 }
 
 .rig-diff-island .diff-gutter {
-  width: 7.25rem;
-  min-width: 7.25rem;
+  width: 12rem;
+  min-width: 12rem;
 }
 
 .rig-diff-gutter {
@@ -124,21 +124,65 @@
   display: inline-flex;
   align-items: center;
   gap: 0.12rem;
+  white-space: nowrap;
 }
 
-.rig-diff-mark {
+.rig-diff-effect-mark,
+.rig-diff-finding,
+.rig-diff-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.12rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.08rem 0.28rem;
+  font-size: 0.68rem;
+  font-weight: 750;
+  line-height: 1.1;
+}
+
+.rig-diff-effect-mark.here {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 24%, var(--panel));
+}
+
+.rig-diff-effect-mark.below {
+  color: var(--muted);
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+.rig-diff-effect-mark.guess {
+  border-style: dashed;
+}
+
+.rig-diff-effect-mark small,
+.rig-diff-loop {
   color: var(--accent);
-  font-size: 0.9rem;
-  font-weight: 800;
+  font-size: 0.65rem;
 }
 
-.rig-diff-mark.depth-0 {
+.rig-diff-finding.hazard,
+.rig-diff-finding-row.hazard {
   color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
 }
 
-.rig-diff-mark.depth-2,
-.rig-diff-mark.depth-3 {
-  opacity: 0.66;
+.rig-diff-finding.anchor,
+.rig-diff-finding-row.anchor {
+  color: #d28bff;
+  border-color: color-mix(in srgb, #d28bff 55%, var(--border));
+}
+
+.rig-diff-finding.amplification,
+.rig-diff-finding-row.amplification {
+  color: #e6a84a;
+  border-color: color-mix(in srgb, #e6a84a 55%, var(--border));
+}
+
+.rig-diff-more {
+  color: var(--muted);
+  border-color: var(--border);
 }
 
 .rig-diff-widget {
@@ -150,6 +194,25 @@
   color: var(--fg);
   background: var(--panel);
   border-block: 1px solid var(--border);
+}
+
+.rig-diff-findings {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.rig-diff-findings:empty {
+  display: none;
+}
+
+.rig-diff-finding-row {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.22rem 0.5rem;
+  background: var(--bg);
+  font-size: 0.74rem;
 }
 
 .rig-diff-path {
@@ -168,13 +231,9 @@
   border-color: var(--accent);
 }
 
-.rig-diff-effect {
-  border-radius: 999px;
-  padding: 0.08rem 0.4rem;
-  color: var(--accent);
-  background: var(--chip);
-  font-size: 0.75rem;
-  font-weight: 700;
+.rig-diff-tier-status {
+  border-left: 1px solid var(--border);
+  padding-left: 0.65rem;
 }
 
 .rig-diff-open {
@@ -197,7 +256,12 @@
   }
 
   .rig-diff-island .diff-gutter {
-    width: 5.5rem;
-    min-width: 5.5rem;
+    width: 8rem;
+    min-width: 8rem;
+  }
+
+  .rig-diff-effect-mark span:nth-child(2),
+  .rig-diff-effect-mark span:nth-child(3) {
+    display: none;
   }
 }

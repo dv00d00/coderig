@@ -12241,71 +12241,175 @@ function Bo(e) {
 	return (t.split(/[.:+]/).pop() || t).replace(/``\d+$/, "<T>");
 }
 function Vo(e) {
-	let t = e.toLowerCase();
-	return t === "io" || t.includes("file") || t.includes("filesystem") ? "▱" : t.includes("sql") || t.includes("db") ? "▰" : t.includes("http") || t.includes("rpc") ? "↗" : t.includes("cache") ? "◇" : t.includes("message") || t.includes("queue") ? "▷" : "◆";
+	let t = e.nearestDepth === 0 ? "!" : `:${e.nearestDepth}`;
+	return `${e.family}${t}${e.looped ? "*" : ""}${e.viaDispatchOnly ? "?" : ""}`;
 }
-function Ho(e, t) {
+function Ho(e) {
+	return [
+		`${Vo(e)} — ${e.nearestDepth === 0 ? "the effect is in this call's body" : `nearest is ${e.nearestDepth} calls below`}`,
+		e.viaDispatchOnly ? "BASIS: virtual/interface dispatch only — a lead, not a proven call" : "BASIS: a real call edge",
+		e.looped ? "AMPLIFIED: runs once per enclosing iteration" : ""
+	].filter(Boolean).join("\n");
+}
+function Uo(e, t) {
 	return t === "old" ? e.type === "insert" ? null : e.type === "delete" ? e.lineNumber : e.oldLineNumber : e.type === "delete" ? null : e.type === "insert" ? e.lineNumber : e.newLineNumber;
 }
-function Uo(e) {
-	let t = /* @__PURE__ */ new Map();
-	for (let n of e) {
-		let e = t.get(n.line) || [];
-		e.push(n), t.set(n.line, e);
+function Wo(e) {
+	let t = /* @__PURE__ */ new Map(), n = (e) => {
+		let n = t.get(e);
+		return n || (n = {
+			sites: [],
+			effects: [],
+			hazards: [],
+			amplifications: [],
+			anchors: []
+		}, t.set(e, n)), n;
+	};
+	for (let t of e.effects.sites) {
+		let e = n(t.line);
+		e.sites.push(t);
+		for (let n of t.effects) {
+			let t = e.effects.find((e) => e.family === n.family);
+			if (!t) {
+				e.effects.push({ ...n });
+				continue;
+			}
+			let r = t.viaDispatchOnly && !n.viaDispatchOnly, i = t.viaDispatchOnly === n.viaDispatchOnly && n.nearestDepth < t.nearestDepth, a = t.looped || n.looped;
+			r || i ? Object.assign(t, n, { looped: a }) : t.looped = a;
+		}
 	}
+	for (let t of e.findings?.hazards || []) n(t.line).hazards.push(t);
+	for (let t of e.findings?.amplifications || []) n(t.line).amplifications.push(t);
+	for (let t of e.findings?.anchors || []) n(t.line).anchors.push(t);
+	for (let e of t.values()) e.effects.sort((e, t) => Number(e.viaDispatchOnly) - Number(t.viaDispatchOnly) || e.nearestDepth - t.nearestDepth || e.family.localeCompare(t.family));
 	return t;
 }
-function Wo({ sites: e }) {
-	let t = e.flatMap((e) => e.effects);
-	return /* @__PURE__ */ (0, m.jsx)("span", {
-		className: "rig-diff-marks",
-		"aria-label": `${t.length} effect annotations`,
-		children: t.map((e, t) => /* @__PURE__ */ (0, m.jsx)("span", {
-			className: `rig-diff-mark depth-${Math.min(e.nearestDepth, 3)}`,
-			title: `${e.family} · ${e.nearestDepth === 0 ? "direct" : `depth ${e.nearestDepth}`}`,
-			children: Vo(e.family)
-		}, `${e.family}:${e.nearestDepth}:${t}`))
+function Go({ effect: e }) {
+	return /* @__PURE__ */ (0, m.jsxs)("span", {
+		className: `rig-diff-effect-mark ${e.nearestDepth === 0 ? "here" : "below"} ${e.viaDispatchOnly ? "guess" : ""}`,
+		title: Ho(e),
+		children: [
+			e.looped ? /* @__PURE__ */ (0, m.jsx)("span", {
+				className: "rig-diff-loop",
+				children: "⟳"
+			}) : null,
+			/* @__PURE__ */ (0, m.jsx)("span", { children: e.nearestDepth === 0 ? "●" : "○" }),
+			/* @__PURE__ */ (0, m.jsx)("span", { children: e.family }),
+			e.nearestDepth > 0 ? /* @__PURE__ */ (0, m.jsx)("small", { children: e.nearestDepth }) : null,
+			e.viaDispatchOnly ? /* @__PURE__ */ (0, m.jsx)("small", { children: "?" }) : null
+		]
 	});
 }
-function Go({ expanded: e, callbacks: t }) {
+function Ko({ insight: e }) {
+	let t = e.effects.slice(0, 2), n = e.effects.length - t.length, r = e.effects.length + e.hazards.length + e.amplifications.length + e.anchors.length;
+	return /* @__PURE__ */ (0, m.jsxs)("span", {
+		className: "rig-diff-marks",
+		"aria-label": `${r} semantic annotations`,
+		children: [
+			e.hazards.length ? /* @__PURE__ */ (0, m.jsx)("span", {
+				className: "rig-diff-finding hazard",
+				title: `${e.hazards.length} tier-1 hazard(s)`,
+				children: "⚠"
+			}) : null,
+			e.anchors.length ? /* @__PURE__ */ (0, m.jsx)("span", {
+				className: "rig-diff-finding anchor",
+				title: `${e.anchors.length} cross-method amplification anchor(s)`,
+				children: "⟳↓"
+			}) : null,
+			e.amplifications.length ? /* @__PURE__ */ (0, m.jsx)("span", {
+				className: "rig-diff-finding amplification",
+				title: `${e.amplifications.length} looped effect(s)`,
+				children: "⟳"
+			}) : null,
+			t.map((e) => /* @__PURE__ */ (0, m.jsx)(Go, { effect: e }, e.family)),
+			n > 0 ? /* @__PURE__ */ (0, m.jsxs)("span", {
+				className: "rig-diff-more",
+				title: `${n} more effect families`,
+				children: ["+", n]
+			}) : null
+		]
+	});
+}
+function qo({ expanded: e, insight: t, callbacks: n }) {
 	return /* @__PURE__ */ (0, m.jsxs)("div", {
 		className: "rig-diff-widget",
-		children: [/* @__PURE__ */ (0, m.jsxs)("strong", { children: [
-			e.side === "old" ? "base" : "head",
-			":",
-			e.line
-		] }), e.sites.map((e, n) => {
-			let r = e.targetMethodId || e.enclosingMethodId;
-			return /* @__PURE__ */ (0, m.jsxs)("button", {
-				type: "button",
-				className: "rig-diff-path",
-				onClick: () => t.onOpenTree?.(r),
-				disabled: !r,
-				title: r || "No symbol identity for this external effect",
+		children: [
+			/* @__PURE__ */ (0, m.jsxs)("strong", { children: [
+				e.side === "old" ? "base" : "head",
+				":",
+				e.line
+			] }),
+			/* @__PURE__ */ (0, m.jsxs)("div", {
+				className: "rig-diff-findings",
 				children: [
-					/* @__PURE__ */ (0, m.jsx)("span", { children: Bo(e.targetMethodId) }),
-					e.effects.map((e) => /* @__PURE__ */ (0, m.jsxs)("span", {
-						className: "rig-diff-effect",
-						children: [e.family, e.nearestDepth === 0 ? "!" : `:${e.nearestDepth}`]
-					}, `${e.family}:${e.nearestDepth}`)),
-					/* @__PURE__ */ (0, m.jsx)("span", {
-						className: "rig-diff-open",
-						children: "open tree ↗"
-					})
+					t.hazards.map((e, t) => /* @__PURE__ */ (0, m.jsxs)("span", {
+						className: `rig-diff-finding-row hazard confidence-${e.confidence}`,
+						children: [
+							"⚠ tier 1 · ",
+							e.type,
+							" · ",
+							e.confidence,
+							" · ",
+							e.subtype
+						]
+					}, `hazard:${e.type}:${t}`)),
+					t.amplifications.map((e, t) => /* @__PURE__ */ (0, m.jsxs)("span", {
+						className: "rig-diff-finding-row amplification",
+						children: [
+							"⟳ tier 2 · ",
+							e.provider,
+							":",
+							e.operation,
+							" · ",
+							e.iteration
+						]
+					}, `amplification:${e.provider}:${t}`)),
+					t.anchors.map((e, t) => /* @__PURE__ */ (0, m.jsxs)("span", {
+						className: `rig-diff-finding-row anchor confidence-${e.confidence}`,
+						children: [
+							"⟳↓ tier 3 · ",
+							e.witnessProvider,
+							":",
+							e.witnessOperation,
+							" · depth ",
+							e.witnessDepth,
+							" · ",
+							e.confidence
+						]
+					}, `anchor:${e.witnessProvider}:${t}`))
 				]
-			}, `${r}:${n}`);
-		})]
+			}),
+			t.sites.map((e, t) => {
+				let r = e.targetMethodId || e.enclosingMethodId;
+				return /* @__PURE__ */ (0, m.jsxs)("button", {
+					type: "button",
+					className: "rig-diff-path",
+					onClick: () => n.onOpenTree?.(r),
+					disabled: !r,
+					title: r || "No symbol identity for this external effect",
+					children: [
+						/* @__PURE__ */ (0, m.jsx)("span", { children: Bo(e.targetMethodId) }),
+						e.effects.map((e) => /* @__PURE__ */ (0, m.jsx)(Go, { effect: e }, `${e.family}:${e.nearestDepth}`)),
+						/* @__PURE__ */ (0, m.jsx)("span", {
+							className: "rig-diff-open",
+							children: "open tree ↗"
+						})
+					]
+				}, `${r}:${t}`);
+			})
+		]
 	});
 }
-function Ko({ model: e, callbacks: t }) {
-	let [n, r] = (0, h.useState)("unified"), [i, a] = (0, h.useState)(null), o = (0, h.useMemo)(() => e.patch.trim() ? le(e.patch) : [], [e.patch]), s = (0, h.useMemo)(() => Uo(e.base.effects.sites), [e.base.effects.sites]), c = (0, h.useMemo)(() => Uo(e.head.effects.sites), [e.head.effects.sites]), l = o[0], u = (0, h.useMemo)(() => l ? pa(l.hunks, {
+function Jo({ model: e, callbacks: t }) {
+	let [n, r] = (0, h.useState)("unified"), [i, a] = (0, h.useState)(null), o = (0, h.useMemo)(() => e.patch.trim() ? le(e.patch) : [], [e.patch]), s = (0, h.useMemo)(() => Wo(e.base), [e.base]), c = (0, h.useMemo)(() => Wo(e.head), [e.head]), l = o[0], u = (0, h.useMemo)(() => l ? pa(l.hunks, {
 		highlight: !0,
 		refractor: Ro,
 		language: "csharp",
 		oldSource: e.base.content,
 		enhancers: [da(l.hunks)]
-	}) : null, [l, e.base.content]), d = i ? { [i.key]: /* @__PURE__ */ (0, m.jsx)(Go, {
+	}) : null, [l, e.base.content]), d = i ? { [i.key]: /* @__PURE__ */ (0, m.jsx)(qo, {
 		expanded: i,
+		insight: (i.side === "old" ? s : c).get(i.line),
 		callbacks: t
 	}) } : {};
 	return /* @__PURE__ */ (0, m.jsxs)("div", {
@@ -12321,6 +12425,10 @@ function Ko({ model: e, callbacks: t }) {
 				children: [
 					/* @__PURE__ */ (0, m.jsxs)("span", { children: [e.base.effects.sites.length, " base marks"] }),
 					/* @__PURE__ */ (0, m.jsxs)("span", { children: [e.head.effects.sites.length, " head marks"] }),
+					/* @__PURE__ */ (0, m.jsx)("span", {
+						className: "rig-diff-tier-status",
+						children: e.base.findings === void 0 || e.head.findings === void 0 ? "tiers 1–3 loading…" : e.base.findings === null || e.head.findings === null ? "tiers 1–3 partially unavailable" : `${e.base.findings.hazards.length + e.base.findings.amplifications.length + e.base.findings.anchors.length}/${e.head.findings.hazards.length + e.head.findings.amplifications.length + e.head.findings.anchors.length} findings`
+					}),
 					/* @__PURE__ */ (0, m.jsx)("button", {
 						type: "button",
 						className: n === "unified" ? "on" : "",
@@ -12342,10 +12450,10 @@ function Ko({ model: e, callbacks: t }) {
 			tokens: u,
 			widgets: d,
 			renderGutter: ({ change: e, side: t, renderDefault: n, wrapInAnchor: r }) => {
-				let i = Ho(e, t), o = i == null ? [] : (t === "old" ? s : c).get(i) || [], l = kr(e);
+				let i = Uo(e, t), o = i == null ? void 0 : (t === "old" ? s : c).get(i), l = kr(e);
 				return r(/* @__PURE__ */ (0, m.jsxs)("span", {
 					className: "rig-diff-gutter",
-					children: [o.length > 0 ? /* @__PURE__ */ (0, m.jsx)("button", {
+					children: [o ? /* @__PURE__ */ (0, m.jsx)("button", {
 						type: "button",
 						className: "rig-diff-mark-button",
 						title: "Show effects and open their call trees",
@@ -12353,11 +12461,10 @@ function Ko({ model: e, callbacks: t }) {
 							e.preventDefault(), e.stopPropagation(), a((e) => e?.key === l && e.side === t ? null : {
 								key: l,
 								side: t,
-								line: i,
-								sites: o
+								line: i
 							});
 						},
-						children: /* @__PURE__ */ (0, m.jsx)(Wo, { sites: o })
+						children: /* @__PURE__ */ (0, m.jsx)(Ko, { insight: o })
 					}) : null, n()]
 				}));
 			},
@@ -12368,15 +12475,15 @@ function Ko({ model: e, callbacks: t }) {
 		})]
 	});
 }
-function qo(e, t, n = {}) {
+function Yo(e, t, n = {}) {
 	let r = Lo.get(e);
-	r || (r = (0, p.createRoot)(e), Lo.set(e, r)), r.render(/* @__PURE__ */ (0, m.jsx)(Ko, {
+	r || (r = (0, p.createRoot)(e), Lo.set(e, r)), r.render(/* @__PURE__ */ (0, m.jsx)(Jo, {
 		model: t,
 		callbacks: n
 	}));
 }
-function Jo(e) {
+function Xo(e) {
 	Lo.get(e)?.unmount(), Lo.delete(e);
 }
 //#endregion
-export { qo as mountFileDiff, Jo as unmountFileDiff };
+export { Yo as mountFileDiff, Xo as unmountFileDiff };

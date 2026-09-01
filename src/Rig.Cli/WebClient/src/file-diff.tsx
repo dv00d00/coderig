@@ -18,6 +18,8 @@ import "./file-diff.css";
 type FileEffect = {
   family: string;
   nearestDepth: number;
+  viaDispatchOnly: boolean;
+  looped: boolean;
 };
 
 type FileEffectSite = {
@@ -42,11 +44,54 @@ type FileEffects = {
   sites: FileEffectSite[];
 };
 
+type FileHazard = {
+  type: string;
+  confidence: string;
+  subtype: string;
+  key: string;
+  enclosing: string;
+  line: number;
+  detail: string;
+};
+
+type FileAmplification = {
+  type: string;
+  confidence: string;
+  subtype: string;
+  key: string;
+  enclosing: string;
+  line: number;
+  iteration: string;
+  provider: string;
+  operation: string;
+};
+
+type FileAnchor = {
+  line: number;
+  caller: string;
+  iterationKind: string;
+  witnessProvider: string;
+  witnessOperation: string;
+  witnessResource: string;
+  witnessDepth: number;
+  confidence: string;
+};
+
+type FileFindings = {
+  hazards: FileHazard[];
+  amplifications: FileAmplification[];
+  anchors: FileAnchor[];
+  crossMethodAvailable: boolean;
+};
+
 type Revision = {
   store: string;
   commit: string;
   content: string;
   effects: FileEffects;
+  // Loaded independently after the patch, matching the Windows file-lens API boundary. `undefined` means
+  // loading; `null` means the slower findings derivation was unavailable and effect badges still remain valid.
+  findings?: FileFindings | null;
 };
 
 export type FileDiffModel = {
@@ -66,7 +111,14 @@ type Expanded = {
   key: string;
   side: "old" | "new";
   line: number;
+};
+
+type LineInsight = {
   sites: FileEffectSite[];
+  effects: FileEffect[];
+  hazards: FileHazard[];
+  amplifications: FileAmplification[];
+  anchors: FileAnchor[];
 };
 
 const roots = new WeakMap<Element, Root>();
@@ -90,14 +142,21 @@ function shortTarget(value: string): string {
   return tail.replace(/``\d+$/, "<T>");
 }
 
-function familyGlyph(family: string): string {
-  const value = family.toLowerCase();
-  if (value === "io" || value.includes("file") || value.includes("filesystem")) return "▱";
-  if (value.includes("sql") || value.includes("db")) return "▰";
-  if (value.includes("http") || value.includes("rpc")) return "↗";
-  if (value.includes("cache")) return "◇";
-  if (value.includes("message") || value.includes("queue")) return "▷";
-  return "◆";
+function badgeText(effect: FileEffect): string {
+  const distance = effect.nearestDepth === 0 ? "!" : `:${effect.nearestDepth}`;
+  return `${effect.family}${distance}${effect.looped ? "*" : ""}${effect.viaDispatchOnly ? "?" : ""}`;
+}
+
+function effectTitle(effect: FileEffect): string {
+  return [
+    `${badgeText(effect)} — ${effect.nearestDepth === 0 ? "the effect is in this call's body" : `nearest is ${effect.nearestDepth} calls below`}`,
+    effect.viaDispatchOnly
+      ? "BASIS: virtual/interface dispatch only — a lead, not a proven call"
+      : "BASIS: a real call edge",
+    effect.looped ? "AMPLIFIED: runs once per enclosing iteration" : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function changeLine(change: ChangeData, side: "old" | "new"): number | null {
@@ -110,38 +169,96 @@ function changeLine(change: ChangeData, side: "old" | "new"): number | null {
   return change.type === "insert" ? change.lineNumber : change.newLineNumber;
 }
 
-function byLine(sites: FileEffectSite[]): Map<number, FileEffectSite[]> {
-  const result = new Map<number, FileEffectSite[]>();
-  for (const site of sites) {
-    const current = result.get(site.line) || [];
-    current.push(site);
-    result.set(site.line, current);
+function byLine(revision: Revision): Map<number, LineInsight> {
+  const result = new Map<number, LineInsight>();
+  const row = (line: number): LineInsight => {
+    let current = result.get(line);
+    if (!current) {
+      current = { sites: [], effects: [], hazards: [], amplifications: [], anchors: [] };
+      result.set(line, current);
+    }
+    return current;
+  };
+
+  for (const site of revision.effects.sites) {
+    const insight = row(site.line);
+    insight.sites.push(site);
+    for (const effect of site.effects) {
+      const existing = insight.effects.find((candidate) => candidate.family === effect.family);
+      if (!existing) {
+        insight.effects.push({ ...effect });
+        continue;
+      }
+      const strongerBasis = existing.viaDispatchOnly && !effect.viaDispatchOnly;
+      const nearer = existing.viaDispatchOnly === effect.viaDispatchOnly && effect.nearestDepth < existing.nearestDepth;
+      const looped = existing.looped || effect.looped;
+      if (strongerBasis || nearer) Object.assign(existing, effect, { looped });
+      else existing.looped = looped;
+    }
+  }
+  for (const finding of revision.findings?.hazards || []) row(finding.line).hazards.push(finding);
+  for (const finding of revision.findings?.amplifications || []) row(finding.line).amplifications.push(finding);
+  for (const finding of revision.findings?.anchors || []) row(finding.line).anchors.push(finding);
+  for (const insight of result.values()) {
+    insight.effects.sort(
+      (a, b) => Number(a.viaDispatchOnly) - Number(b.viaDispatchOnly) || a.nearestDepth - b.nearestDepth || a.family.localeCompare(b.family),
+    );
   }
   return result;
 }
 
-function EffectMarks({ sites }: { sites: FileEffectSite[] }) {
-  const effects = sites.flatMap((site) => site.effects);
+function EffectBadge({ effect }: { effect: FileEffect }) {
   return (
-    <span className="rig-diff-marks" aria-label={`${effects.length} effect annotations`}>
-      {effects.map((effect, index) => (
-        <span
-          className={`rig-diff-mark depth-${Math.min(effect.nearestDepth, 3)}`}
-          title={`${effect.family} · ${effect.nearestDepth === 0 ? "direct" : `depth ${effect.nearestDepth}`}`}
-          key={`${effect.family}:${effect.nearestDepth}:${index}`}
-        >
-          {familyGlyph(effect.family)}
-        </span>
-      ))}
+    <span
+      className={`rig-diff-effect-mark ${effect.nearestDepth === 0 ? "here" : "below"} ${effect.viaDispatchOnly ? "guess" : ""}`}
+      title={effectTitle(effect)}
+    >
+      {effect.looped ? <span className="rig-diff-loop">⟳</span> : null}
+      <span>{effect.nearestDepth === 0 ? "●" : "○"}</span>
+      <span>{effect.family}</span>
+      {effect.nearestDepth > 0 ? <small>{effect.nearestDepth}</small> : null}
+      {effect.viaDispatchOnly ? <small>?</small> : null}
     </span>
   );
 }
 
-function EffectWidget({ expanded, callbacks }: { expanded: Expanded; callbacks: FileDiffCallbacks }) {
+function EffectMarks({ insight }: { insight: LineInsight }) {
+  const shownEffects = insight.effects.slice(0, 2);
+  const hidden = insight.effects.length - shownEffects.length;
+  const count = insight.effects.length + insight.hazards.length + insight.amplifications.length + insight.anchors.length;
+  return (
+    <span className="rig-diff-marks" aria-label={`${count} semantic annotations`}>
+      {insight.hazards.length ? <span className="rig-diff-finding hazard" title={`${insight.hazards.length} tier-1 hazard(s)`}>⚠</span> : null}
+      {insight.anchors.length ? <span className="rig-diff-finding anchor" title={`${insight.anchors.length} cross-method amplification anchor(s)`}>⟳↓</span> : null}
+      {insight.amplifications.length ? <span className="rig-diff-finding amplification" title={`${insight.amplifications.length} looped effect(s)`}>⟳</span> : null}
+      {shownEffects.map((effect) => <EffectBadge effect={effect} key={effect.family} />)}
+      {hidden > 0 ? <span className="rig-diff-more" title={`${hidden} more effect families`}>+{hidden}</span> : null}
+    </span>
+  );
+}
+
+function EffectWidget({ expanded, insight, callbacks }: { expanded: Expanded; insight: LineInsight; callbacks: FileDiffCallbacks }) {
   return (
     <div className="rig-diff-widget">
       <strong>{expanded.side === "old" ? "base" : "head"}:{expanded.line}</strong>
-      {expanded.sites.map((site, index) => {
+      <div className="rig-diff-findings">
+        {insight.hazards.map((finding, index) => (
+          <span className={`rig-diff-finding-row hazard confidence-${finding.confidence}`} key={`hazard:${finding.type}:${index}`}>
+            ⚠ tier 1 · {finding.type} · {finding.confidence} · {finding.subtype}
+          </span>
+        ))}
+        {insight.amplifications.map((finding, index) => (
+          <span className="rig-diff-finding-row amplification" key={`amplification:${finding.provider}:${index}`}>
+            ⟳ tier 2 · {finding.provider}:{finding.operation} · {finding.iteration}
+          </span>
+        ))}
+        {insight.anchors.map((finding, index) => (
+          <span className={`rig-diff-finding-row anchor confidence-${finding.confidence}`} key={`anchor:${finding.witnessProvider}:${index}`}>
+            ⟳↓ tier 3 · {finding.witnessProvider}:{finding.witnessOperation} · depth {finding.witnessDepth} · {finding.confidence}
+          </span>
+        ))}
+      </div>
+      {insight.sites.map((site, index) => {
         const target = site.targetMethodId || site.enclosingMethodId;
         return (
           <button
@@ -153,11 +270,7 @@ function EffectWidget({ expanded, callbacks }: { expanded: Expanded; callbacks: 
             title={target || "No symbol identity for this external effect"}
           >
             <span>{shortTarget(site.targetMethodId)}</span>
-            {site.effects.map((effect) => (
-              <span className="rig-diff-effect" key={`${effect.family}:${effect.nearestDepth}`}>
-                {effect.family}{effect.nearestDepth === 0 ? "!" : `:${effect.nearestDepth}`}
-              </span>
-            ))}
+            {site.effects.map((effect) => <EffectBadge effect={effect} key={`${effect.family}:${effect.nearestDepth}`} />)}
             <span className="rig-diff-open">open tree ↗</span>
           </button>
         );
@@ -170,8 +283,8 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   const [viewType, setViewType] = useState<ViewType>("unified");
   const [expanded, setExpanded] = useState<Expanded | null>(null);
   const files = useMemo(() => (model.patch.trim() ? parseDiff(model.patch) : []), [model.patch]);
-  const oldSites = useMemo(() => byLine(model.base.effects.sites), [model.base.effects.sites]);
-  const newSites = useMemo(() => byLine(model.head.effects.sites), [model.head.effects.sites]);
+  const oldLines = useMemo(() => byLine(model.base), [model.base]);
+  const newLines = useMemo(() => byLine(model.head), [model.head]);
   const file = files[0];
   const tokens = useMemo(
     () =>
@@ -187,7 +300,15 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
     [file, model.base.content],
   );
   const widgets = expanded
-    ? { [expanded.key]: <EffectWidget expanded={expanded} callbacks={callbacks} /> }
+    ? {
+        [expanded.key]: (
+          <EffectWidget
+            expanded={expanded}
+            insight={(expanded.side === "old" ? oldLines : newLines).get(expanded.line)!}
+            callbacks={callbacks}
+          />
+        ),
+      }
     : {};
 
   return (
@@ -200,6 +321,13 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
         <div className="rig-diff-summary">
           <span>{model.base.effects.sites.length} base marks</span>
           <span>{model.head.effects.sites.length} head marks</span>
+          <span className="rig-diff-tier-status">
+            {model.base.findings === undefined || model.head.findings === undefined
+              ? "tiers 1–3 loading…"
+              : model.base.findings === null || model.head.findings === null
+                ? "tiers 1–3 partially unavailable"
+                : `${model.base.findings.hazards.length + model.base.findings.amplifications.length + model.base.findings.anchors.length}/${model.head.findings.hazards.length + model.head.findings.amplifications.length + model.head.findings.anchors.length} findings`}
+          </span>
           <button type="button" className={viewType === "unified" ? "on" : ""} onClick={() => setViewType("unified")}>
             unified
           </button>
@@ -219,11 +347,11 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
           widgets={widgets}
           renderGutter={({ change, side, renderDefault, wrapInAnchor }) => {
             const line = changeLine(change, side);
-            const sites = line == null ? [] : (side === "old" ? oldSites : newSites).get(line) || [];
+            const insight = line == null ? undefined : (side === "old" ? oldLines : newLines).get(line);
             const key = getChangeKey(change);
             return wrapInAnchor(
               <span className="rig-diff-gutter">
-                {sites.length > 0 ? (
+                {insight ? (
                   <button
                     type="button"
                     className="rig-diff-mark-button"
@@ -234,11 +362,11 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
                       setExpanded((current) =>
                         current?.key === key && current.side === side
                           ? null
-                          : { key, side, line: line!, sites },
+                          : { key, side, line: line! },
                       );
                     }}
                   >
-                    <EffectMarks sites={sites} />
+                    <EffectMarks insight={insight} />
                   </button>
                 ) : null}
                 {renderDefault()}

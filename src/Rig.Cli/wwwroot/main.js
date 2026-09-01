@@ -290,6 +290,7 @@ function setupLensKeys() {
 }
 
 let fileDiffModule;
+let reviewRequestId = 0;
 async function mountFileDiff(data) {
   fileDiffModule ||= await import("./assets/file-diff.js");
   fileDiffModule.mountFileDiff(refs.review, data, {
@@ -322,21 +323,46 @@ async function loadFileDiff(file = get().reviewFile) {
     return;
   }
 
+  const requestId = ++reviewRequestId;
   set({ appMode: "review", reviewFile: file, reviewData: null, reviewError: "" });
   refs.reviewFile.value = file;
   setBusy(true);
   status("building semantic file diff…");
+  // The Windows file-lens contract deliberately keeps effect badges and tiers 1-3 separate: findings are a
+  // slower derivation and may fail without taking the source lens down. Review preserves that boundary. Start
+  // both sides immediately, but render the exact Git patch as soon as /api/file-diff answers.
+  const findingsTask = Promise.all([
+    api.fileFindings(base, base, file).catch(() => null),
+    api.fileFindings(head, head, file).catch(() => null),
+  ]);
   try {
     const data = await api.fileDiff(base, head, file);
+    if (requestId !== reviewRequestId) return;
     set({ reviewData: data, reviewError: "" });
+    setBusy(false);
     status(
-      `${baseName(file)} · ${data.base.effects.sites.length} base marks · ${data.head.effects.sites.length} head marks`,
+      `${baseName(file)} · ${data.base.effects.sites.length} base marks · ${data.head.effects.sites.length} head marks · loading findings…`,
+    );
+    const [baseFindings, headFindings] = await findingsTask;
+    if (requestId !== reviewRequestId) return;
+    set({
+      reviewData: {
+        ...data,
+        base: { ...data.base, findings: baseFindings },
+        head: { ...data.head, findings: headFindings },
+      },
+    });
+    const findingCount = (side) =>
+      side ? side.hazards.length + side.amplifications.length + side.anchors.length : 0;
+    status(
+      `${baseName(file)} · ${data.base.effects.sites.length} base marks · ${data.head.effects.sites.length} head marks · ${findingCount(baseFindings)}/${findingCount(headFindings)} findings`,
     );
   } catch (error) {
+    if (requestId !== reviewRequestId) return;
     set({ reviewData: null, reviewError: error.message });
     status("review: " + error.message, true);
   } finally {
-    setBusy(false);
+    if (requestId === reviewRequestId) setBusy(false);
   }
 }
 
