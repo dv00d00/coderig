@@ -1,5 +1,8 @@
 # An .slnx project path that escapes the solution directory is silently dropped
 
+**Status:** todo
+**Triage:** ready-for-agent
+
 ## Symptom
 
 Indexing `C:\Git\AngleSharp.ReadOnlyDom\AngleSharp.ReadOnlyDom.slnx` (14 projects) produced a store

@@ -1,5 +1,8 @@
 # /api/hazards recomputes the cross-method correlation per request
 
+**Status:** todo
+**Triage:** ready-for-agent
+
 HazardsService now folds tier-3 cross-method amplification anchors into the mark stream, but unlike
 hazard effects (LoadOrDeriveHazardEffectsAsync) and graph findings, the cross-method computation —
 LoadInvocationRefsAsync (~2.4M rows on MedDBase) + shaped graph + the presence correlation — runs

@@ -1,5 +1,8 @@
 # Quoted-query resource attribution — recover table-touch without phantom calls
 
+**Status:** todo — postponed pending a high-effort extraction and resource-model decision.
+**Triage:** needs-triage
+
 ## The gap the v5 expression-tree gate exposed
 
 `InExpressionTree` (schema v5) correctly stops quoted references from deriving invocation effects — a
@@ -33,7 +36,4 @@ One executing query = ONE effect, carrying the RESOURCE SET of the tables its ex
 Keep the amplification/anchor semantics unchanged: the effect sits at the query execution site, so a
 query in a real loop anchors normally; nothing per-row is claimed.
 
-## Status
-
-Postponed for review (high-effort: extraction change + schema bump + reindex, new derive arm).
 Depends on nothing; supersedes the `type_argument`-for-ctors idea recorded earlier.

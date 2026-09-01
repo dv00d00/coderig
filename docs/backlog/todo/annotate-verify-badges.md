@@ -1,6 +1,7 @@
 # Design `rig annotate --verify` without comparing unlike depth quantities
 
-**Status:** todo · **Triage:** needs-info · **Found:** 2026-09-01 while auditing the file lens ·
+**Status:** todo · **Found:** 2026-09-01 while auditing the file lens ·
+**Triage:** needs-info
 **Family:** CLI / reachability verification
 
 **Depends on:** [the documented file-lens depth convention](../done/file-lens-method-depth-disagrees-with-reaches.md).

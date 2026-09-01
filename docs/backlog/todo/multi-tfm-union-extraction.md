@@ -1,5 +1,8 @@
 # Multi-TFM projects: union extraction across target frameworks
 
+**Status:** todo
+**Triage:** needs-triage
+
 ## Current behavior (as of the PreferredResult fix, 2026-07-15)
 
 A `<TargetFrameworks>a;b</TargetFrameworks>` project yields one Buildalyzer result per TFM (and can

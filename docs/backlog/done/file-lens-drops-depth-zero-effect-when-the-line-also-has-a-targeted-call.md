@@ -1,6 +1,6 @@
 ﻿# The file lens deletes a line's depth-0 effect when that line also has a targeted call
 
-**Status:** done · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent auditing `rig annotate`
+**Status:** done · **Found:** 2026-09-01 by a probe agent auditing `rig annotate`
 over 30 MedDBase files; root-caused in code afterwards · **Family:** file lens (read model) / Rider + web + CLI
 
 ## Outcome

@@ -1,6 +1,7 @@
 ﻿# The file lens showed only the first derivative, and had no filters at all
 
-**Status:** done (slices A and C) · **Completed:** 2026-09-01 · **Triage:** ready-for-agent (slice B below) ·
+**Status:** done (slices A and C) · **Completed:** 2026-09-01 · Remaining provider-grain and lazy-witness work
+was split into independent backlog cards on 2026-09-02. ·
 **Family:** file lens
 
 ## What was wrong
@@ -83,22 +84,11 @@ as two ordinary `db!` lines. `--looped --summary` reduces that file from 20 meth
 Tests: `FileEffectAmplificationTests` (5, incl. the negative "a distant looped effect never marks the calling
 method"), `FileEffectLensFilterTests` (13). Full suite 1332/1332.
 
-## Slice B — provider grain (not done)
+## Extracted follow-up — provider grain
 
-The lens is FAMILY grain, so `--only llblgen` can only widen. Provider grain means labelling the reverse
-closure by provider instead of family, and **the merged MedDBase rule set declares 66 providers with effect
-rules while `FactPathFinder.ReachedByLabelledSeeds` throws above 64 labels** (it is a bitmask-parallel BFS —
-cost is one pass regardless of label count up to the ceiling). So:
-
-- Chunk INSIDE `ReachedByLabelledSeeds` (build the index + reverse maps once, loop chunks of 64, preserve
-  output order) rather than at the call site. 66 providers × 2 bases = 4 passes instead of today's 2.
-- `FileEffectAggregate` gains `Provider`; `Family` becomes an attribute, and the 8-family view becomes a
-  GROUPING the client can expand. This also closes the unfamilied 31% for free: `ProviderCatalog.FamilyOf`
-  already returns an undeclared provider as its own family.
-- **Measure before committing:** the cold file-effects phase peaks at ~5.1 GB on MedDBase today, and
-  per-method aggregate counts go from ≤8 to ~20. Payload growth is the risk here, not time.
-- Operation grain (`--only llblgen:read`) does NOT follow from this: provider:operation is hundreds of
-  labels. Disclose the limit rather than chunking to it.
+The independently shippable provider-grain design and its 66-label calibration gate now live in
+[file-lens-provider-grain](../todo/file-lens-provider-grain.md). This completed delivery record no longer owns
+that open scope.
 
 ## Delivered — slice C (tiers 1-3 are real data)
 
@@ -149,13 +139,10 @@ counts the fixture carried, derived independently. Cold 71s (the hazard pass), w
   Added to that checkout's `.git/info/exclude` (local, no tracked file touched), so the next index is
   attributable.
 
-## Slice C leftovers (small)
+## Extracted follow-ups
 
-- The web and Rider surfaces still render `Looped` and the tiers with no witness PATH — the popover enumerates
-  the witness provider/operation/resource, which is the calibrated anchor grain, but cannot show the route.
-  The richer (anchor x witness) dataset has it and is ~40x larger; a `?witness=path` opt-in is the shape.
-- Rider renders none of this yet: the design spec exists (glyph vocabulary, gutter for tier 1, one Code Vision
-  provider, the 3-mark inline budget) and is unimplemented.
+- Lazy witness resolution: [file-lens-lazy-witness-path](../todo/file-lens-lazy-witness-path.md).
+- Rider finding visuals: [Rider plugin minimal product](../progress/rider-plugin-minimal-product.md).
 
 ## Original slice C notes, kept for the record
 

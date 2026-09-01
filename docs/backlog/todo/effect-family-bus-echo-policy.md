@@ -1,6 +1,7 @@
 # Decide whether `bus` and `echo` are distinct effect families or one alias
 
-**Status:** todo · **Triage:** needs-info · **Found:** 2026-09-01 while auditing the file lens ·
+**Status:** todo · **Found:** 2026-09-01 while auditing the file lens ·
+**Triage:** needs-info
 **Family:** rules / product vocabulary
 
 ## Problem

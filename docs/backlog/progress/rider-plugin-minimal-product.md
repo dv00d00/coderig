@@ -1,5 +1,8 @@
 # Rider plugin — minimal local product
 
+**Status:** progress — the reproducible local product shipped; the explicit host association, compilation
+identity, automated SDK coverage, and release boundary below remain locally actionable.
+
 ## Goal
 
 Ship the validated file-effect read model as a reproducible, locally installable Rider plugin before adding
@@ -30,6 +33,7 @@ interaction or configuration surface.
 - Replace nearest `.git` / `.rig` host discovery with explicit solution-to-host association.
 - Carry project/compilation identity so linked and multi-target files need not fail as ambiguous.
 - Add an automated Rider SDK daemon test for Code Vision and gutter registration.
+- Render `Looped` plus tier-1/2/3 findings with the already designed gutter/Code Vision/inline budget.
 - Add a lazy witness-path interaction rather than transporting paths for every method.
 - Replace first-root-solution restart discovery with an explicit solution-to-host association.
 - Move the backend source out of `experiments/` once compatibility policy and release cadence are chosen.

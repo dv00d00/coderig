@@ -1,7 +1,8 @@
 ﻿# The file lens can emit a marked line whose owning method has no method row
 
-**Status:** REOPENED 2026-09-01 (partially fixed) · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent
+**Status:** REOPENED 2026-09-01 (partially fixed) · **Found:** 2026-09-01 by a probe agent
 auditing `rig annotate` · **Family:** file lens (read model)
+**Triage:** ready-for-agent
 
 ## Outcome
 
@@ -29,25 +30,6 @@ list.Fill(0, LocationFields.Name, true, LocationFields.FkSite == pkSite, Transac
 plus two `db:1` callers. Instead the whole method subtree is missing from the table while the line badge is
 present. Other implicit-private methods in the audit set (e.g. `PersonModelCacheService.ResolveChamberId`)
 appear normally, so this is not a visibility filter.
-
-## Reopened 2026-09-01 — the fix reached the owner, not its callers
-
-A projection fallback now synthesises a method row from each call-site row (`site depth + 1`), so `GetList`
-correctly reads `db:1`. The underlying closure defect is untouched, and it is still visible one level out:
-
-```
-rig annotate "…\Lists\Common\LocationsHandler.cs" --summary
-      60  GetList  db:1          # present
-      55  GetData                # ABSENT, should be db:2 (calls GetList at line 57)
-      68  ValueToJson            # ABSENT, should be db:2 (calls GetList at line 70)
-```
-
-`rig reaches` confirms both callers reach the `llblgen read` at a real `d2` (not fan-out). They have no method
-row AND no line badge, because the fallback only fires where a call-site row already exists, and a call-site row
-needs the callee in the family closure — which `GetList` still is not.
-
-So the fallback is a good safety net and should stay; it is not the fix. The isolation step below is still the
-work. Add a regression assertion for the two callers, not just for the owner.
 
 ## Reopened 2026-09-01 — the fix reached the owner, not its callers
 

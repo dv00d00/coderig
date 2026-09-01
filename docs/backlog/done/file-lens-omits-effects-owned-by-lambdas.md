@@ -1,6 +1,6 @@
 # The file lens omits every effect owned by a lambda — 24% of MedDBase effects
 
-**Status:** done · **Triage:** ready-for-agent · **Found:** 2026-08-31 quantifying the Rider
+**Status:** done · **Found:** 2026-08-31 quantifying the Rider
 plugin's blind spots; re-confirmed 2026-09-01 by a probe agent on 30 files · **Family:** file lens (read model)
 
 ## Outcome

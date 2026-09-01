@@ -1,6 +1,7 @@
 ﻿# A method badge whose own lines carry no such family
 
-**Status:** todo (largely explained) · **Triage:** needs-verification of the remainder · **Found:** 2026-09-01, re-audit of the file lens ·
+**Status:** todo (largely explained) · **Found:** 2026-09-01, re-audit of the file lens ·
+**Triage:** needs-triage
 **Family:** file lens
 
 ## What happens

@@ -1,6 +1,6 @@
 # The file-effects artifact has no `*Schema` constant, so a logic change never invalidates warm clients
 
-**Status:** done · **Triage:** ready-for-agent · **Found:** 2026-09-01 reviewing the web file-lens branch ·
+**Status:** done · **Found:** 2026-09-01 reviewing the web file-lens branch ·
 **Family:** caching
 
 ## Outcome

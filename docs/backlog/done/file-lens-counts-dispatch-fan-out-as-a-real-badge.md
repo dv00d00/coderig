@@ -1,6 +1,6 @@
 ﻿# The file lens counts dispatch fan-out as a real badge, with no disclosure
 
-**Status:** done · **Completed:** 2026-09-01 · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent re-auditing the file
+**Status:** done · **Completed:** 2026-09-01 · **Found:** 2026-09-01 by a probe agent re-auditing the file
 lens; reclassified after first-hand verification · **Family:** file lens / dispatch precision · **Severity:**
 this is the lens's trust boundary — a badge can rest entirely on an over-approximation rig itself disclaims
 

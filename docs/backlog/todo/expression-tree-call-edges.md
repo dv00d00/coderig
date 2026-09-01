@@ -1,5 +1,8 @@
 # Quoted references still produce call-graph edges
 
+**Status:** todo
+**Triage:** ready-for-agent
+
 Schema v5 marks references inside QUOTED code (`reference_facts.InExpressionTree`: an `Expression<>`
 lambda or an IQueryable clause) and the derivers now skip them for invocation EFFECTS and iteration
 ANCHORS — but the references still materialize into `call_edges`, so `tree`/`reaches`/`path`/`impact`

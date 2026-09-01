@@ -1,6 +1,6 @@
 # Web timing unification — live progress + "where time went" for expensive ops
 
-**Status (2026-07-06): C1 + C2 shipped, C0 partially shipped — only the fine-phase split below is open.**
+**Status:** progress — C1 + C2 shipped 2026-07-06, C0 partially shipped; only the fine-phase split below is open.
 C0/C2 landed in `d2c71d1b` ("feat(impact): load/timing graphs"), committed ~40min after this doc was first
 written but never reflected back into it. Moved todo → progress accordingly; don't re-build what's shipped.
 
