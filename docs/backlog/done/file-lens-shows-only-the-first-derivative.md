@@ -1,6 +1,6 @@
 ﻿# The file lens showed only the first derivative, and had no filters at all
 
-**Status:** done (slice A) · **Completed:** 2026-09-01 · **Triage:** ready-for-agent (slices B and C below) ·
+**Status:** done (slices A and C) · **Completed:** 2026-09-01 · **Triage:** ready-for-agent (slice B below) ·
 **Family:** file lens
 
 ## What was wrong
@@ -100,17 +100,64 @@ cost is one pass regardless of label count up to the ceiling). So:
 - Operation grain (`--only llblgen:read`) does NOT follow from this: provider:operation is hundreds of
   labels. Disclose the limit rather than chunking to it.
 
-## RELEASE BLOCKER while slice C is open
+## Delivered — slice C (tiers 1-3 are real data)
 
-The UI slice ships `src/Rig.Cli/wwwroot/filelens-findings.mock.json` (303 KB) — real `rig derive` rows for 16
-MedDBase files, reshaped into the findings payload the API does not return yet, so the tier-1/2/3 rendering
-can be seen working. **It ends up inside the installed tool**, and `Pack="false"` cannot stop it: `PackAsTool`
-packs the PUBLISH OUTPUT, so `CopyToOutputDirectory` is what decides (verified by unpacking `rig.0.1.1.nupkg`
-— 10 wwwroot entries, mock included). The client degrades to "no findings shown" if the fetch 404s and labels
-every mocked file in the UI, so it is not dangerous, but a published rig must not carry a fixture keyed to one
-client's absolute paths. Slice C deletes the file and the `loadFindingsMock`/`MOCK_FIELDS` plumbing with it.
+The UI slice shipped tier 1-3 rendering against a checked-in fixture (`filelens-findings.mock.json`, 404 KB of
+reshaped `rig derive` rows). That fixture was line-anchored, valid for exactly one store, and — because
+`PackAsTool` packs the PUBLISH OUTPUT — it shipped inside the installed tool, where `Pack="false"` cannot stop
+it. It is now deleted, along with its regeneration script and the store-identity gate that made it safe:
 
-## Slice C — tier 1 and tier 3 (not done)
+- **`FileFindingsQueryService`** derives tiers 1-3 for ONE file, reusing the artifacts `derive` and
+  `/api/hazards` already share (`LoadOrDeriveHazardEffectsAsync` on disk, graph + invocations in the resident
+  `WarmStore`). Cheaper than `/api/hazards`, which must build a call tree first just to know which methods to
+  keep — here the filter is the file path.
+- One decision worth stating: tier 3 is derived over the WHOLE effect set and filtered on the ANCHOR, never on
+  the input. The anchor is in this file but its witness is by definition in another frame, usually another
+  file, so filtering the input first would delete exactly the evidence the tier exists to find.
+- **`GET /api/file-findings?file=`**, separate from `/api/file-effects` on purpose: a different derivation with
+  a different cost, fetched in parallel so the badges and the source never wait on it, and a findings failure
+  degrades to "no marks" rather than "no lens".
+- `Findings.CrossMethodDerived` records whether tier 3 RAN. An empty anchor list otherwise means two different
+  things — nothing found here, or no `crossMethodAmplification` section in the rules — and the overlay must be
+  able to say `TIER 3 OFF` rather than let silence read as safety.
+- `FileEffectsEndpoint.ToFindingsResponse` is extracted and pinned by `FileFindingsWebContractTests` (4 tests).
+  The reason is the rename: the finding record calls them `Reason` and `Context`, the wire calls them `subtype`
+  and `key`, and swapping those two would be invisible in review (both short lowercase strings) while making
+  every tooltip in the overlay wrong.
+
+Measured on the MedDBase store, `CompanyToChamber.cs`: **3 hazards, 11 amplifications, 3 anchors** — the same
+counts the fixture carried, derived independently. Cold 71s (the hazard pass), warm **2.7s**. Rendered live:
+
+```
+514  ⚠n+1  ⟳●db                     policy in policies — an n+1 and the repeated write on one line
+587        ⟳●db                     destRole.Save() inside foreach (var srcRole in roles)
+590  ⚠n+1  ⟳●db
+170  ⟳↓db0  ●db  ○4↓5?              tier 3 (high) + a proven direct write + the folded distant fan-out
+```
+
+### Also fixed in the same pass
+
+- **Light-theme contrast.** Marks do not sit on white: a lens row carries a severity tint and a hazard pill
+  paints its own 12% danger background on top. Composited (measured by painting the stack into a canvas, not by
+  reading the token) the dispatch chip was **3.52:1** and the hazard pill **3.91:1** — both under AA. Light
+  `--muted`/`--warn`/`--danger` darkened and dark `--danger` lightened; every mark now measures **4.73-12.9 in
+  light and 5.41-11.1 in dark**.
+- **Ten NU5118 pack warnings** on every `dotnet pack`: `PackAsTool` already packs wwwroot via the publish
+  output, so the explicit `Pack`/`PackagePath` metadata added every file a second time. Removed; package
+  verified to still carry all 9 wwwroot entries and `builtin-rules.json`.
+- **Every indexed store read `-dirty`** because `meddbase-main-application-2` has an untracked `.rig/`.
+  Added to that checkout's `.git/info/exclude` (local, no tracked file touched), so the next index is
+  attributable.
+
+## Slice C leftovers (small)
+
+- The web and Rider surfaces still render `Looped` and the tiers with no witness PATH — the popover enumerates
+  the witness provider/operation/resource, which is the calibrated anchor grain, but cannot show the route.
+  The richer (anchor x witness) dataset has it and is ~40x larger; a `?witness=path` opt-in is the shape.
+- Rider renders none of this yet: the design spec exists (glyph vocabulary, gutter for tier 1, one Code Vision
+  provider, the 3-mark inline budget) and is unimplemented.
+
+## Original slice C notes, kept for the record
 
 - Tier 3 `cross_method_amplification` already produces exactly what a lens line needs:
   `AnchorFinding(Caller, FilePath, Line, IterationKind, WitnessProvider, WitnessOperation, WitnessResource,

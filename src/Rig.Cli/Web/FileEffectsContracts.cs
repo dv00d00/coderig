@@ -44,6 +44,53 @@ internal sealed record FileEffectsResponseDto(
     FileEffectsFilterDto? Filter = null
 );
 
+// TIERS 1-3 for one file (see FileFindingsQueryService). A SEPARATE payload from the effect badges, because
+// it is a separate derivation with a separate cost: the lens renders badges the moment /api/file-effects
+// answers and folds these in when they arrive, so a slow findings query never delays the source.
+//
+// Field names are the finding records' own (Reason is the hazard SUBTYPE, Context the key / iteration kind),
+// renamed here only where the record's name would be meaningless on the wire.
+internal sealed record FileHazardDto(string Type, string Confidence, string Subtype, string Key, string Enclosing, int Line, string Detail);
+
+internal sealed record FileAmplificationDto(
+    string Type,
+    string Confidence,
+    string Subtype,
+    string Key,
+    string Enclosing,
+    int Line,
+    string Iteration,
+    string Provider,
+    string Operation
+);
+
+// Anchor grain: one row per looped CALL SITE with its nearest witness. These are EXACTLY the fields
+// CrossMethodAmplificationDataset.AnchorFinding carries — the calibrated displayed grain (93% TP+TP-weak on a
+// stratified hand audit) — and nothing more. The richer (anchor x witness) dataset has the iterated source,
+// the key token and the witness site too, but it is ~40x larger and collapsing it here would re-implement a
+// calibrated decision. Confidence is DERIVED from WitnessDepth (<=1 high, <=4 medium, else low) and sent
+// rather than left to the client, so the two cannot disagree about what counts as a lead.
+internal sealed record FileAnchorDto(
+    int Line,
+    string Caller,
+    string IterationKind,
+    string WitnessProvider,
+    string WitnessOperation,
+    string WitnessResource,
+    int WitnessDepth,
+    string Confidence
+);
+
+internal sealed record FileFindingsResponseDto(
+    string File,
+    IReadOnlyList<FileHazardDto> Hazards,
+    IReadOnlyList<FileAmplificationDto> Amplifications,
+    IReadOnlyList<FileAnchorDto> Anchors,
+    // False when the rule set declares no crossMethodAmplification section: the tier is OFF, not empty, and a
+    // reader must be able to tell "no anchors here" from "this store never looked".
+    bool CrossMethodAvailable
+);
+
 internal sealed record RigMetaResponseDto(string DerivationVersion, string WorkingDirectory, string StoreDirectory, string StoreId);
 
 internal sealed record FileSourceResponseDto(

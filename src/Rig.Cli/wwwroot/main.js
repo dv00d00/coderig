@@ -32,7 +32,7 @@ import {
 } from "./components.js";
 import {
   FileEffectsView,
-  loadFindingsMock,
+  setFileFindings,
   lensFilterDefaults,
   serverFilterChanged,
   navTargets,
@@ -180,15 +180,15 @@ async function openFile(file, line = 1) {
   setBusy(true);
   status("building file effect lens…");
   try {
-    // The findings mock rides along on the same await: it is a static asset, so it costs one cached request
-    // and never delays the lens. When the server ships tiers 1-3 on /api/file-effects this line goes away.
-    const [fileEffects, fileSource] = await Promise.all([
+    // Tiers 1-3 come from their own endpoint and their own derivation, fetched in PARALLEL: the badges and the
+    // source must not wait on the hazard/amplification pass, and a findings failure must not cost the reader
+    // the lens. Hence `.catch(null)` — no findings marks is a degraded view; no view is a broken one.
+    const [fileEffects, fileSource, findings] = await Promise.all([
       api.fileEffects(resolved(), explicit(), file),
       loadWholeSource(file),
-      // The mock is gated on the store being viewed: its findings are line-anchored, so a dataset from
-      // another commit would put marks on the wrong lines. resolved() is the id the page is reading.
-      loadFindingsMock(resolved()),
+      api.fileFindings(resolved(), explicit(), file).catch(() => null),
     ]);
+    setFileFindings(findings);
     set({ fileEffects, fileSource, fileStart: focus, fileError: "" });
     status(
       `${baseName(file)} · ${fileSource.lines.length} lines · ${fileEffects.methods.length} effectful methods · ${fileEffects.sites.length} marked calls`,

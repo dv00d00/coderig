@@ -1,4 +1,4 @@
-// FILE EFFECT LENS — the source overlay. Renders the shared projection documented in
+﻿// FILE EFFECT LENS — the source overlay. Renders the shared projection documented in
 // Rendering/FileEffectLens.cs plus the findings tiers from Rig.Domain/Functions/HazardKinds.cs.
 //
 // ONE GRAMMAR, stated once, for every mark on the page:
@@ -81,64 +81,39 @@ export const anchorConfidence = (witnessDepth) => (witnessDepth <= 1 ? "high" : 
 
 // ---- the lens model -----------------------------------------------------------------------------------
 
-// MOCKED FIELDS. Everything in this list is synthesized client-side because /api/file-effects does not
-// return it yet; the UI labels every one of them so a reader can never mistake a mock for a fact. See the
-// REQUIRED-INPUT list in the design report — when the server ships these, delete the mock plumbing and the
-// component code above it stops caring.
-export const MOCK_FIELDS = [
-  "hazards[] (tier 1) — from filelens-findings.mock.json",
-  "amplifications[] (tier 2, looped_effect) — from filelens-findings.mock.json",
-  "anchors[] (tier 3, cross_method_amplification) — from filelens-findings.mock.json",
-  "badge.provider / badge.operation — inferred, see providerKnown",
-];
+// The ONE field still synthesized client-side. Everything else on this page — badges, depths, dispatch basis,
+// repetition, and all three finding tiers — now comes from the store.
+export const MOCK_FIELDS = ["badge.provider / badge.operation at provider grain — inferred, see providerKnown"];
 
+// The findings payload for the file currently open, from /api/file-findings. Held in the module rather than
+// threaded through every component because it is per-file state with exactly one writer, and the lens model
+// needs it at the same moment it needs the badges.
+//
+// There is deliberately NO store-identity gate here any more. The marks and the badges now come from the same
+// store by construction, so they cannot describe another commit's line numbers — which is the failure the gate
+// existed to prevent while this data was a checked-in fixture.
 let findingsDoc = null;
-// The store the loaded mock was derived from, and the store actually being viewed. A MISMATCH is not a
-// cosmetic problem: every mocked finding is LINE-ANCHORED, so a dataset dumped from one commit lands its
-// `⚠` and `⟳↓` marks on whatever happens to sit at those line numbers in another. That is undetectable by
-// eye and worse than showing nothing, so a mismatch suppresses the findings entirely and says why.
-let findingsStore = null;
-let findingsStoreMismatch = null;
 
-// Lazily fetch the mock findings dataset ONCE. Returns {} on any failure — a missing mock must degrade to
-// "no findings shown", never to a broken lens. `viewingStore` is the store id the page is reading (from the
-// runs list); pass null only where it is genuinely unknown.
-export async function loadFindingsMock(viewingStore) {
-  if (findingsDoc) {
-    checkFindingsStore(viewingStore);
-    return findingsDoc;
-  }
-  try {
-    const response = await fetch("./filelens-findings.mock.json");
-    findingsDoc = response.ok ? await response.json() : { files: {} };
-  } catch {
-    findingsDoc = { files: {} };
-  }
-  findingsStore = (findingsDoc && findingsDoc.store) || null;
-  checkFindingsStore(viewingStore);
-  return findingsDoc;
+export function setFileFindings(dto) {
+  findingsDoc = dto || null;
 }
 
-function checkFindingsStore(viewingStore) {
-  findingsStoreMismatch =
-    findingsStore && viewingStore && findingsStore !== viewingStore ? { mock: findingsStore, viewing: viewingStore } : null;
-}
-
-// What the UI must say about the mock, or null when there is nothing to say.
-export function findingsProvenance() {
-  return findingsStoreMismatch;
-}
-// Path lookup is case-insensitive on the drive letter and separator-normalised: the mock keys come from a
-// tsv dump, the DTO path from the store, and the two agree on everything except casing nobody controls.
+// Path comparison is case-insensitive and separator-normalised: the response echoes the requested path, but a
+// caller may have typed either separator.
 const normPath = (p) => (p || "").replace(/\//g, "\\").toLowerCase();
 export function findingsFor(file) {
-  // Refuse rather than mis-anchor: a mock from another store has line numbers that no longer describe this
-  // source. Showing nothing is a smaller lie than showing a hazard on the wrong line.
-  if (findingsStoreMismatch) return null;
-  const files = (findingsDoc && findingsDoc.files) || {};
-  const want = normPath(file);
-  for (const key of Object.keys(files)) if (normPath(key) === want) return files[key];
-  return null;
+  if (!findingsDoc || normPath(findingsDoc.file) !== normPath(file)) return null;
+  return {
+    hazards: findingsDoc.hazards || [],
+    amplifications: findingsDoc.amplifications || [],
+    anchors: findingsDoc.anchors || [],
+  };
+}
+
+// False when the rule set declares no crossMethodAmplification section: tier 3 is OFF, not empty. A reader has
+// to be able to tell "no anchors in this file" from "this store never looked for them".
+export function crossMethodAvailable() {
+  return !findingsDoc || findingsDoc.crossMethodAvailable !== false;
 }
 
 // A badge, normalised. `provider`/`operation` are "" when the API's family grain is all we have —
@@ -152,10 +127,11 @@ function badgeOf(effect, providerHint) {
     provider: providerHint ? providerHint.provider : "",
     operation: providerHint ? providerHint.operation : "",
     providerKnown: !!providerHint,
-    // TIER 2. `effect.looped` is REAL — FileEffectAggregateDto.Looped, additive on the wire. When the store
-    // says so we mark it as a fact (`loopedReal`); the mock rows below only fill in for a server that predates
-    // the field, and they carry the iteration text a badge alone cannot.
-    looped: effect.looped ? { synthetic: false, iteration: "an enclosing loop (store: looped)" } : null,
+    // TIER 2, from the BADGE: FileEffectAggregateDto.Looped. It says THAT the effect repeats; the tier-2
+    // finding row attached below says WHICH loop, which a badge flag cannot carry. `loopedReal` records that
+    // the badge itself asserted it, so a finding row can enrich the mark without being the only thing holding
+    // it up.
+    looped: effect.looped ? { badgeOnly: true, iteration: "an enclosing loop" } : null,
     loopedReal: !!effect.looped,
   };
 }
@@ -218,7 +194,9 @@ export function lensModel(dto, findings) {
         // a new object, so reference equality reported every attached amplification as an orphan too and the
         // line grew a duplicate ⟳ mark next to the badge that already carried one.
         r.ampAttached.add(am);
-        target.looped = { ...am, synthetic: !target.loopedReal };
+        // badgeOnly=false: this mark is now backed by a finding row with its own iteration text and
+        // confidence, not just the badge flag.
+        target.looped = { ...am, badgeOnly: false };
         if (!target.providerKnown) {
           target.provider = am.provider;
           target.operation = am.operation;
@@ -544,10 +522,19 @@ function AnchorMark(anchors, grain) {
                 { class: "fx-pop-row col" },
                 h("strong", {}, `${a.confidence} confidence · witness ${a.witnessDepth} hop${a.witnessDepth === 1 ? "" : "s"} below`),
                 a.confidence === "low" ? h("span", { class: "fx-pop-lead" }, "a LEAD, not a finding — path-insensitive reach at this depth is weak evidence") : null,
-                h("span", { class: "fx-pop-note" }, `loop: ${a.iterationKind} ${a.iterationDetail || ""}`),
+                // Every row below is conditional on the field EXISTING: the anchor grain the server sends is
+                // the calibrated one (line, caller, iteration kind, witness provider/operation/resource,
+                // depth), and the richer (anchor x witness) dataset's extras — iterated source, key token,
+                // callee, witness site — are not on the wire. Printing "in undefined" would invent precision.
+                h("span", { class: "fx-pop-note" }, `loop: ${a.iterationKind}${a.iterationDetail ? ` ${a.iterationDetail}` : ""}`),
                 a.iteratedSource ? h("span", { class: "fx-pop-note" }, `over: ${a.iteratedSource}`) : null,
-                h("span", { class: "fx-pop-note" }, `call: ${a.callee}`),
-                h("span", { class: "fx-pop-note" }, `witness: ${a.witnessProvider}:${a.witnessOperation} in ${a.witnessMethod}${a.witnessLine ? `:${a.witnessLine}` : ""}`),
+                a.caller ? h("span", { class: "fx-pop-note" }, `in: ${a.caller}`) : null,
+                a.callee ? h("span", { class: "fx-pop-note" }, `call: ${a.callee}`) : null,
+                h(
+                  "span",
+                  { class: "fx-pop-note" },
+                  `witness: ${a.witnessProvider}:${a.witnessOperation}${a.witnessMethod ? ` in ${a.witnessMethod}` : ""}${a.witnessLine ? `:${a.witnessLine}` : ""}`,
+                ),
                 a.witnessResource ? h("span", { class: "fx-pop-note" }, `resource: ${a.witnessResource}`) : null,
                 a.key ? h("span", { class: "fx-pop-note" }, `key: ${a.key}`) : null,
               ),
@@ -1003,26 +990,17 @@ export function FileEffectsView(s, actions) {
       ),
     ),
     FilterBar(s, actions, model, result),
-    findingsProvenance()
-      ? h(
-          "div",
-          { class: "lens-mock stale" },
-          h("strong", {}, "MOCK SUPPRESSED "),
-          `the findings dataset was derived from store ${findingsProvenance().mock}, you are viewing ${findingsProvenance().viewing}. Its marks are line-anchored, so on another store they would land on the wrong lines — no tier 1–3 marks are shown. Effect badges and depths are REAL and come from this store.`,
-        )
-      : !model.covered
+    // Everything on the page is now derived from the store being viewed, so the only thing left to disclose is
+    // a tier that is OFF rather than empty: with no `crossMethodAmplification` section in the rules, an absent
+    // `⟳↓` mark means "never looked", which is a different statement from "nothing found here".
+    !crossMethodAvailable()
       ? h(
           "div",
           { class: "lens-mock" },
-          h("strong", {}, "MOCK "),
-          "tier 1–3 findings are not on /api/file-effects yet; this file is not in the local mock dataset, so no findings marks are shown. Effect badges and depths are REAL.",
+          h("strong", {}, "TIER 3 OFF "),
+          "this rule set declares no `crossMethodAmplification` section, so no cross-method anchors were derived — absence of a ⟳↓ mark means nothing was looked for, not that nothing is there.",
         )
-      : h(
-          "div",
-          { class: "lens-mock covered" },
-          h("strong", {}, "MOCK "),
-          `findings for this file come from filelens-findings.mock.json (real \`rig derive\` rows, reshaped) — ${model.counts.haz} hazard(s), ${model.counts.amp} amplification(s), ${model.counts.anchors} tier-3 anchor(s). Effect badges and depths are REAL.`,
-        ),
+      : null,
     h(
       "div",
       { class: "file-lens-grid" },

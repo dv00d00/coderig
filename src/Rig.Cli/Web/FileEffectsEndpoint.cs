@@ -7,6 +7,7 @@ using Rig.Cli.Rendering;
 using Rig.Cli.Services;
 using Rig.Storage.Queries;
 using static Rig.Cli.Graph.TraversalGraphLoader;
+using static Rig.Cli.Rendering.SymbolNameFormatter;
 
 namespace Rig.Cli.Web;
 
@@ -119,6 +120,31 @@ internal static class FileEffectsEndpoint
                 catch (Exception ex)
                 {
                     return Results.Problem(title: "File effects query failed", detail: ex.Message, statusCode: 400);
+                }
+            }
+        );
+
+        // TIERS 1-3 for one file. Separate from /api/file-effects on purpose: a different derivation with a
+        // different cost, fetched in parallel by the lens so badges render the instant the effect query answers
+        // and the finding marks fold in when these arrive. It replaces a client-side fixture — see the
+        // `filelens-findings` history in the backlog card.
+        app.MapGet(
+            "/api/file-findings",
+            async (string? file, string? store) =>
+            {
+                if (string.IsNullOrWhiteSpace(file))
+                {
+                    return Results.Problem(title: "Missing 'file'", detail: "Choose a path returned by /api/files.", statusCode: 400);
+                }
+
+                try
+                {
+                    var findings = await FileFindingsQueryService.ForFileAsync(workingDirectory, file, NullIfBlank(store));
+                    return Results.Json(ToFindingsResponse(file, findings));
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(title: "File findings query failed", detail: ex.Message, statusCode: 400);
                 }
             }
         );
@@ -258,6 +284,58 @@ internal static class FileEffectsEndpoint
                     filterNotes
                 )
                 : null
+        );
+    }
+
+    // The findings wire mapping, extracted so it can be pinned by a test rather than only by reading it. The
+    // renames are the whole reason: `Reason` is the hazard SUBTYPE and `Context` is the key / iteration kind,
+    // names that mean nothing to a client, and a silent swap of those two columns would be invisible in the UI
+    // (both are short lowercase strings) while making every tooltip wrong.
+    internal static FileFindingsResponseDto ToFindingsResponse(string file, FileFindingsQueryService.Findings findings)
+    {
+        ArgumentNullException.ThrowIfNull(findings);
+        return new FileFindingsResponseDto(
+            file,
+            findings
+                .Hazards.Select(hazard => new FileHazardDto(
+                    hazard.Type,
+                    hazard.Confidence,
+                    hazard.Reason,
+                    hazard.Context,
+                    ShortName(hazard.Enclosing),
+                    hazard.Line,
+                    hazard.Detail
+                ))
+                .ToArray(),
+            findings
+                .Amplifications.Select(amplification => new FileAmplificationDto(
+                    amplification.Type,
+                    amplification.Confidence,
+                    amplification.Reason,
+                    amplification.Context,
+                    ShortName(amplification.Enclosing),
+                    amplification.Line,
+                    amplification.Detail,
+                    amplification.Provider,
+                    amplification.Operation
+                ))
+                .ToArray(),
+            findings
+                .Anchors.Select(anchor => new FileAnchorDto(
+                    anchor.Line,
+                    ShortName(anchor.Caller),
+                    anchor.IterationKind,
+                    anchor.WitnessProvider,
+                    anchor.WitnessOperation,
+                    anchor.WitnessResource,
+                    anchor.WitnessDepth,
+                    anchor.Confidence
+                ))
+                .ToArray(),
+            // A tier-3 count of zero is ambiguous on its own — no anchors in this file, or no rule section at
+            // all. The service returns an empty list in both cases, so the flag is the only place the
+            // difference can be recorded; it is set from whether the derivation ran, not from the count.
+            CrossMethodAvailable: findings.CrossMethodDerived
         );
     }
 

@@ -19,7 +19,9 @@
         --warn: #d29922;
         --btn-fg: #0e1116;
         --hover: #1c2230;
-        --danger: #f85149;
+        /* Lightened from #f85149 (2026-09-01): the hazard pill paints a 12% danger tint under danger-coloured
+           text, which composited to 4.44:1 on a dark row — just under AA. */
+        --danger: #ff7b72;
         --sel: #1f6feb33;
       }
       :root[data-theme="light"] {
@@ -27,13 +29,17 @@
         --panel: #f4f6f9;
         --border: #d8dee5;
         --fg: #1f2733;
-        --muted: #586573;
+        /* Darkened 2026-09-01 from #586573/#9a6700/#cf222e. The nominal ratios against pure white were
+           fine (5.96 / 4.87 / 5.36), but marks do not sit on white: a lens row carries a severity tint and
+           a hazard pill paints its own 12% danger background on top, which measured the composite at
+           3.52:1 (dispatch chip) and 3.91:1 (hazard pill) — both under AA. These clear 4.5 composited. */
+        --muted: #48545f;
         --accent: #0969da;
         --chip: #eaeef2;
-        --warn: #9a6700;
+        --warn: #7d5300;
         --btn-fg: #ffffff;
         --hover: #eef2f6;
-        --danger: #cf222e;
+        --danger: #b3121f;
         --sel: #0969da22;
       }
       @media (prefers-color-scheme: light) {
@@ -42,13 +48,14 @@
           --panel: #f4f6f9;
           --border: #d8dee5;
           --fg: #1f2733;
-          --muted: #586573;
+          /* Same values as :root[data-theme="light"] above — see the note there. */
+          --muted: #48545f;
           --accent: #0969da;
           --chip: #eaeef2;
-          --warn: #9a6700;
+          --warn: #7d5300;
           --btn-fg: #ffffff;
           --hover: #eef2f6;
-          --danger: #cf222e;
+          --danger: #b3121f;
           --sel: #0969da22;
         }
       }
