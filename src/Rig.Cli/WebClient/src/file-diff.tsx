@@ -107,6 +107,8 @@ export type FileDiffCallbacks = {
   onOpenTree?: (symbolId: string) => void;
   ignoreWhitespace?: boolean;
   onIgnoreWhitespaceChange?: (value: boolean) => void;
+  viewed?: boolean;
+  onViewedChange?: (value: boolean) => void;
 };
 
 type Expanded = {
@@ -135,6 +137,15 @@ const syntaxHighlighter = {
 
 function shortSha(value: string): string {
   return value.slice(0, 12);
+}
+
+function pathParts(value: string): { name: string; parent: string } {
+  const normalized = value.replaceAll("\\", "/");
+  const slash = normalized.lastIndexOf("/");
+  return {
+    name: slash < 0 ? normalized : normalized.slice(slash + 1),
+    parent: slash < 0 ? "" : normalized.slice(0, slash),
+  };
 }
 
 function shortTarget(value: string): string {
@@ -288,6 +299,21 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   const oldLines = useMemo(() => byLine(model.base), [model.base]);
   const newLines = useMemo(() => byLine(model.head), [model.head]);
   const file = files[0];
+  const path = useMemo(() => pathParts(model.relativePath || model.file), [model.relativePath, model.file]);
+  const patchCounts = useMemo(() => {
+    if (!file) return { additions: 0, deletions: 0 };
+    return file.hunks.reduce(
+      (counts, hunk) => {
+        for (const change of hunk.changes) {
+          if (change.type === "insert") counts.additions += 1;
+          else if (change.type === "delete") counts.deletions += 1;
+        }
+        return counts;
+      },
+      { additions: 0, deletions: 0 },
+    );
+  }, [file]);
+  const effectDelta = model.head.effects.sites.length - model.base.effects.sites.length;
   const tokens = useMemo(
     () =>
       file
@@ -315,13 +341,24 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   return (
     <div className="rig-diff-island">
       <div className="rig-diff-head">
-        <div>
-          <strong>{model.relativePath}</strong>
-          <span>{shortSha(model.base.commit)} → {shortSha(model.head.commit)}</span>
+        <div className="rig-diff-identity" title={model.relativePath}>
+          <div className="rig-diff-file-line">
+            <strong>{path.name}</strong>
+            <span className="rig-diff-patch-counts" aria-label={`${patchCounts.additions} additions, ${patchCounts.deletions} deletions`}>
+              <b>+{patchCounts.additions}</b>
+              <i>−{patchCounts.deletions}</i>
+            </span>
+          </div>
+          {path.parent ? <span className="rig-diff-parent">{path.parent}</span> : null}
+          <span className="rig-diff-revisions">{shortSha(model.base.commit)} → {shortSha(model.head.commit)}</span>
         </div>
         <div className="rig-diff-summary">
-          <span>{model.base.effects.sites.length} base marks</span>
-          <span>{model.head.effects.sites.length} head marks</span>
+          <span
+            className={`rig-diff-effect-delta ${effectDelta > 0 ? "added" : effectDelta < 0 ? "removed" : "stable"}`}
+            title={`${model.base.effects.sites.length} base effect sites → ${model.head.effects.sites.length} head effect sites`}
+          >
+            effect sites {effectDelta > 0 ? "+" : ""}{effectDelta}
+          </span>
           <span className="rig-diff-tier-status">
             {model.base.findings === undefined || model.head.findings === undefined
               ? "tiers 1–3 loading…"
@@ -329,6 +366,14 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
                 ? "tiers 1–3 partially unavailable"
                 : `${model.base.findings.hazards.length + model.base.findings.amplifications.length + model.base.findings.anchors.length}/${model.head.findings.hazards.length + model.head.findings.amplifications.length + model.head.findings.anchors.length} findings`}
           </span>
+          <label className="rig-diff-viewed" title="Mark this file as reviewed (V)">
+            <input
+              type="checkbox"
+              checked={callbacks.viewed || false}
+              onChange={(event) => callbacks.onViewedChange?.(event.target.checked)}
+            />
+            Viewed
+          </label>
           <details className="rig-diff-settings">
             <summary aria-label="Diff settings" title="Diff settings">⚙</summary>
             <div className="rig-diff-settings-menu">

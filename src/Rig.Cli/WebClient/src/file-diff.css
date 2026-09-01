@@ -22,9 +22,108 @@
   gap: 0.65rem;
 }
 
+.rig-diff-head .rig-diff-identity {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.rig-diff-summary {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.rig-diff-file-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.65rem;
+}
+
+.rig-diff-file-line strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rig-diff-parent,
+.rig-diff-revisions {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rig-diff-parent {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rig-diff-revisions {
+  font-size: 0.68rem !important;
+  opacity: 0.75;
+}
+
+.rig-diff-patch-counts {
+  display: inline-flex;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.rig-diff-patch-counts b,
+.rig-diff-patch-counts i {
+  font-size: 0.75rem;
+  font-style: normal;
+}
+
+.rig-diff-patch-counts b {
+  color: var(--ok);
+}
+
+.rig-diff-patch-counts i {
+  color: var(--danger);
+}
+
 .rig-diff-head span {
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.rig-diff-effect-delta,
+.rig-diff-viewed {
+  padding: 0.26rem 0.48rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  white-space: nowrap;
+}
+
+.rig-diff-effect-delta.added {
+  color: var(--warn);
+}
+
+.rig-diff-effect-delta.removed {
+  color: var(--danger);
+}
+
+.rig-diff-viewed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.rig-diff-viewed:has(input:checked) {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 50%, var(--border));
+}
+
+.rig-diff-viewed input {
+  margin: 0;
 }
 
 .rig-diff-settings > summary {

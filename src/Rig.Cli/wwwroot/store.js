@@ -44,6 +44,12 @@ export const store = createStore({
   reviewFiles: null, // Git changed-file inventory for the selected base/head pair
   reviewFilesError: "",
   reviewIgnoreWhitespace: false,
+  // Review-queue controls are session UI, not shareable query state. The display preference and the
+  // base/head-scoped viewed set are hydrated from localStorage by main.js.
+  reviewFileSearch: "",
+  reviewFileFilter: "all", // all | unreviewed | semantic
+  reviewFileMode: "list", // list | tree
+  reviewViewed: [], // exact changed paths marked Viewed for the active base/head pair
   // The lens overlay's own filter — URL-addressable so a tuned view is shareable (see lensToUrl/lensFromUrl).
   // Everything but `intrinsic`/`async` is applied CLIENT-SIDE, which is the point: the underlying query costs
   // ~50s cold, so depth/basis/grain tuning must never refetch.

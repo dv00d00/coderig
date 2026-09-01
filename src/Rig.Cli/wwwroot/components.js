@@ -1399,8 +1399,117 @@ export function BreadcrumbTrail(s, actions) {
   );
 }
 
-// GitHub-style changed-file rail for Review. Every Git row stays visible; the disabled rows are an honest
-// boundary of the current one-stable-path renderer (add/delete/rename need a two-path diff contract).
+function reviewDisplayPath(file) {
+  return file.path || file.newPath || file.oldPath || file.newFile || file.oldFile || "unknown file";
+}
+
+function reviewFileIdentity(file) {
+  return file.newFile || file.oldFile || reviewDisplayPath(file);
+}
+
+function reviewPathParts(file) {
+  const full = reviewDisplayPath(file).replaceAll("\\", "/");
+  const slash = full.lastIndexOf("/");
+  return {
+    full,
+    name: slash < 0 ? full : full.slice(slash + 1),
+    parent: slash < 0 ? "" : full.slice(0, slash),
+  };
+}
+
+export function visibleReviewFiles(s) {
+  const query = s.reviewFileSearch.trim().toLocaleLowerCase();
+  const viewed = new Set(s.reviewViewed);
+  return (s.reviewFiles?.files || []).filter((file) => {
+    const path = reviewDisplayPath(file);
+    const oldPath = file.oldPath || "";
+    if (query && !`${path}\n${oldPath}`.toLocaleLowerCase().includes(query)) return false;
+    // Until two-path diffs land, unavailable rows cannot be opened or marked Viewed. Keep them in All,
+    // but do not make an Unreviewed queue that is impossible to finish.
+    if (s.reviewFileFilter === "unreviewed" && (!file.reviewable || viewed.has(reviewFileIdentity(file)))) return false;
+    if (s.reviewFileFilter === "semantic" && !file.reviewable) return false;
+    return true;
+  });
+}
+
+function reviewFileRow(file, s, actions, depth = 0) {
+  const path = reviewDisplayPath(file);
+  const identity = reviewFileIdentity(file);
+  const parts = reviewPathParts(file);
+  const selected = file.reviewable && s.reviewFile === file.newFile;
+  const viewed = s.reviewViewed.includes(identity);
+  const oldPath = (file.oldPath || file.oldFile || "").replaceAll("\\", "/");
+  const unavailableReason = file.reviewable ? "" : file.reason || "A stable indexed path is required.";
+  const unavailableLabel = file.reviewable
+    ? ""
+    : ["A", "D", "R", "C"].includes(file.status)
+      ? "two-path diff unavailable"
+      : "not indexed in both stores";
+  return h(
+    "button",
+    {
+      class:
+        "review-file-row" +
+        (selected ? " on" : "") +
+        (viewed ? " viewed" : "") +
+        (!file.reviewable ? " unavailable" : ""),
+      disabled: !file.reviewable,
+      title: [path, oldPath && oldPath !== path ? `renamed from ${oldPath}` : "", unavailableReason]
+        .filter(Boolean)
+        .join("\n"),
+      style: `--review-depth:${depth}`,
+      onClick: () => actions.openReviewFileEntry(file),
+    },
+    h("span", { class: `review-file-status status-${file.status.toLowerCase()}` }, file.status),
+    h(
+      "span",
+      { class: "review-file-label" },
+      h("span", { class: "review-file-name" }, parts.name),
+      h(
+        "span",
+        { class: "review-file-parent", title: parts.parent || path },
+        parts.parent || "repository root",
+      ),
+      unavailableLabel ? h("span", { class: "review-file-reason" }, unavailableLabel) : null,
+    ),
+    viewed ? h("span", { class: "review-file-viewed", title: "Viewed" }, "✓") : null,
+  );
+}
+
+function reviewFileTree(files, s, actions) {
+  const root = { dirs: new Map(), files: [] };
+  for (const file of files) {
+    const segments = reviewDisplayPath(file).replaceAll("\\", "/").split("/").filter(Boolean);
+    segments.pop();
+    let node = root;
+    for (const segment of segments) {
+      if (!node.dirs.has(segment)) node.dirs.set(segment, { dirs: new Map(), files: [] });
+      node = node.dirs.get(segment);
+    }
+    node.files.push(file);
+  }
+
+  const render = (node, depth = 0) => [
+    ...[...node.dirs.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .flatMap(([name, child]) => [
+        h(
+          "div",
+          { class: "review-tree-folder", style: `--review-depth:${depth}`, title: name },
+          h("span", { "aria-hidden": "true" }, "⌄"),
+          h("span", {}, name),
+        ),
+        ...render(child, depth + 1),
+      ]),
+    ...node.files
+      .sort((a, b) => reviewDisplayPath(a).localeCompare(reviewDisplayPath(b)))
+      .map((file) => reviewFileRow(file, s, actions, depth)),
+  ];
+  return render(root);
+}
+
+// Desktop review work queue. Every Git path remains discoverable; Semantic-ready is deliberately the
+// current indexed stable-path capability, not a claim that an effect changed in that file.
 export function ReviewFileList(s, actions) {
   if (s.reviewFilesError)
     return h("div", { class: "review-files-empty err" }, s.reviewFilesError);
@@ -1409,40 +1518,121 @@ export function ReviewFileList(s, actions) {
   if (!s.reviewFiles)
     return h("div", { class: "review-files-empty" }, "Loading changed files…");
   const files = s.reviewFiles.files || [];
+  const shown = visibleReviewFiles(s);
   const reviewable = files.filter((file) => file.reviewable).length;
+  const viewed = new Set(s.reviewViewed);
+  const reviewed = files.filter((file) => file.reviewable && viewed.has(reviewFileIdentity(file))).length;
+  const progress = reviewable ? Math.round((reviewed / reviewable) * 100) : 0;
+  const reviewFilter = h(
+    "select",
+    {
+      class: "review-file-filter",
+      "aria-label": "Filter review queue",
+      onChange: (event) => actions.setReviewFileFilter(event.target.value),
+    },
+    h("option", { value: "all" }, `All files · ${files.length}`),
+    h("option", { value: "unreviewed" }, "Unreviewed"),
+    h("option", { value: "semantic" }, `Semantic-ready · ${reviewable}`),
+  );
+  // `h()` assigns properties before appending children; select.value must be set after its options exist.
+  reviewFilter.value = s.reviewFileFilter;
   return h(
     "div",
     { class: "review-files-inner" },
     h(
       "div",
-      { class: "review-files-head" },
-      h("strong", {}, "Changed files"),
-      h("span", {}, `${reviewable}/${files.length}`),
-    ),
-    files.length
-      ? files.map((file) =>
+      { class: "review-files-toolbar" },
+      h(
+        "div",
+        { class: "review-files-head" },
+        h("strong", {}, "Files changed"),
+        h("span", {}, `${reviewed}/${reviewable} viewed`),
+      ),
+      h(
+        "div",
+        { class: "review-progress", title: `${reviewed} of ${reviewable} Semantic-ready files viewed` },
+        h("span", { style: `width:${progress}%` }),
+      ),
+      h(
+        "label",
+        { class: "review-file-search-wrap" },
+        h("span", { "aria-hidden": "true" }, "⌕"),
+        h("input", {
+          class: "review-file-search",
+          type: "search",
+          value: s.reviewFileSearch,
+          placeholder: "Filter paths",
+          "aria-label": "Filter changed files by path",
+          onInput: (event) => actions.setReviewFileSearch(event.target.value),
+          onKeydown: (event) => {
+            if (event.key === "Escape") actions.setReviewFileSearch("");
+          },
+        }),
+        s.reviewFileSearch
+          ? h(
+              "button",
+              {
+                class: "review-file-search-clear",
+                type: "button",
+                title: "Clear filter",
+                "aria-label": "Clear path filter",
+                onClick: () => actions.setReviewFileSearch(""),
+              },
+              "×",
+            )
+          : null,
+      ),
+      h(
+        "div",
+        { class: "review-files-controls" },
+        reviewFilter,
+        h(
+          "div",
+          { class: "review-file-modes", role: "group", "aria-label": "File display mode" },
           h(
             "button",
             {
-              class:
-                "review-file-row" +
-                (file.reviewable && s.reviewFile === file.newFile ? " on" : "") +
-                (!file.reviewable ? " unavailable" : ""),
-              disabled: !file.reviewable,
-              title: file.reason || file.path,
-              onClick: () => actions.openReviewFileEntry(file),
+              class: s.reviewFileMode === "list" ? "on" : "",
+              type: "button",
+              title: "List",
+              "aria-label": "List files",
+              onClick: () => actions.setReviewFileMode("list"),
             },
-            h("span", { class: `review-file-status status-${file.status.toLowerCase()}` }, file.status),
-            h(
-              "span",
-              { class: "review-file-path" },
-              file.oldPath && file.newPath && file.oldPath !== file.newPath
-                ? `${file.oldPath} → ${file.newPath}`
-                : file.path,
-            ),
+            "List",
           ),
+          h(
+            "button",
+            {
+              class: s.reviewFileMode === "tree" ? "on" : "",
+              type: "button",
+              title: "Tree",
+              "aria-label": "Show file tree",
+              onClick: () => actions.setReviewFileMode("tree"),
+            },
+            "Tree",
+          ),
+        ),
+      ),
+      h(
+        "div",
+        { class: "review-files-result" },
+        h("span", {}, `${shown.length} shown`),
+        h("span", {}, `${reviewable} Semantic-ready`),
+      ),
+    ),
+    shown.length
+      ? h(
+          "div",
+          { class: `review-file-list mode-${s.reviewFileMode}` },
+          s.reviewFileMode === "tree"
+            ? reviewFileTree(shown, s, actions)
+            : shown.map((file) => reviewFileRow(file, s, actions)),
         )
-      : h("div", { class: "review-files-empty" }, "No changed files."),
+      : h(
+          "div",
+          { class: "review-files-empty" },
+          files.length ? "No files match this review filter." : "No changed files.",
+        ),
   );
 }
 

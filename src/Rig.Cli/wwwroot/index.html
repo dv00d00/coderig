@@ -2356,7 +2356,7 @@
          only mounts Git hunks, so a tiny edit in a huge source file does not produce a huge DOM. */
       .review-layout {
         display: grid;
-        grid-template-columns: minmax(220px, 18vw) minmax(0, 1fr);
+        grid-template-columns: minmax(280px, 22vw) minmax(0, 1fr);
         min-height: 0;
         height: calc(100vh - 152px);
         border-top: 1px solid var(--border);
@@ -2374,33 +2374,150 @@
         background: var(--panel);
       }
       .review-files-inner {
-        padding: 8px;
+        min-height: 100%;
+        padding: 0 8px 10px;
+      }
+      .review-files-toolbar {
+        position: sticky;
+        z-index: 4;
+        top: 0;
+        display: grid;
+        gap: 8px;
+        padding: 11px 1px 9px;
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in srgb, var(--panel) 96%, transparent);
+        backdrop-filter: blur(8px);
       }
       .review-files-head {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 6px 7px 10px;
+        padding: 0 6px;
         color: var(--fg);
         font-size: 12px;
+      }
+      .review-files-head strong {
+        font-size: 13px;
       }
       .review-files-head span,
       .review-files-empty {
         color: var(--muted);
       }
+      .review-progress {
+        height: 3px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--border) 65%, transparent);
+      }
+      .review-progress span {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--ok);
+        transition: width 160ms ease;
+      }
+      .review-file-search-wrap {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr) 20px;
+        align-items: center;
+        min-height: 32px;
+        padding: 0 6px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--muted);
+        background: var(--bg);
+      }
+      .review-file-search-wrap:focus-within {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+      .review-file-search {
+        min-width: 0;
+        height: 30px;
+        padding: 0;
+        border: 0;
+        outline: 0;
+        color: var(--fg);
+        background: transparent;
+        font: 12px/1.3 ui-sans-serif, system-ui, sans-serif;
+      }
+      .review-file-search::-webkit-search-cancel-button {
+        display: none;
+      }
+      .review-file-search-clear {
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        border: 0;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+      }
+      .review-files-controls {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .review-file-filter {
+        min-width: 0;
+        height: 28px;
+        flex: 1;
+        padding: 0 6px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--fg);
+        background: var(--bg);
+        font-size: 11px;
+      }
+      .review-file-modes {
+        display: inline-flex;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      .review-file-modes button {
+        width: auto;
+        height: 26px;
+        padding: 0 7px;
+        border: 0;
+        border-left: 1px solid var(--border);
+        color: var(--muted);
+        background: var(--bg);
+        font-size: 10px;
+        cursor: pointer;
+      }
+      .review-file-modes button:first-child {
+        border-left: 0;
+      }
+      .review-file-modes button:hover,
+      .review-file-modes button.on {
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+      }
+      .review-files-result {
+        display: flex;
+        justify-content: space-between;
+        padding: 0 6px;
+        color: var(--muted);
+        font-size: 10px;
+      }
       .review-files-empty {
         padding: 14px;
         font-size: 12px;
       }
+      .review-file-list {
+        padding-top: 7px;
+      }
       .review-file-row {
         display: grid;
-        grid-template-columns: 24px minmax(0, 1fr);
-        align-items: start;
+        grid-template-columns: 20px minmax(0, 1fr) 16px;
+        align-items: center;
         width: 100%;
         gap: 6px;
         border: 0;
         border-radius: 6px;
-        padding: 7px;
+        padding: 7px 6px 7px calc(7px + var(--review-depth, 0) * 12px);
         color: var(--fg);
         background: transparent;
         text-align: left;
@@ -2413,8 +2530,11 @@
       .review-file-row.on {
         box-shadow: inset 3px 0 0 var(--accent);
       }
+      .review-file-row.viewed:not(.on) {
+        color: var(--muted);
+      }
       .review-file-row.unavailable {
-        opacity: 0.52;
+        opacity: 0.68;
         cursor: not-allowed;
       }
       .review-file-status {
@@ -2431,10 +2551,53 @@
       .review-file-status.status-d {
         color: var(--danger);
       }
-      .review-file-path {
+      .review-file-label {
+        display: grid;
         min-width: 0;
-        overflow-wrap: anywhere;
-        font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
+        gap: 1px;
+      }
+      .review-file-name,
+      .review-file-parent,
+      .review-file-reason {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .review-file-name {
+        font: 600 12px/1.35 ui-monospace, Menlo, Consolas, monospace;
+      }
+      .review-file-parent {
+        color: var(--muted);
+        direction: rtl;
+        text-align: left;
+        unicode-bidi: plaintext;
+        font: 10px/1.35 ui-monospace, Menlo, Consolas, monospace;
+      }
+      .review-file-reason {
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .review-file-viewed {
+        color: var(--ok);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .review-tree-folder {
+        display: grid;
+        grid-template-columns: 13px minmax(0, 1fr);
+        align-items: center;
+        gap: 3px;
+        min-width: 0;
+        padding: 5px 6px 3px calc(7px + var(--review-depth, 0) * 12px);
+        color: var(--muted);
+        font: 10px/1.2 ui-monospace, Menlo, Consolas, monospace;
+      }
+      .review-tree-folder span:last-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .review-diff {
         min-width: 0;

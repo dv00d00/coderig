@@ -30,6 +30,7 @@ import {
   BreadcrumbTrail,
   shortLabel,
   ReviewFileList,
+  visibleReviewFiles,
 } from "./components.js";
 import {
   FileEffectsView,
@@ -290,6 +291,51 @@ function setupLensKeys() {
   });
 }
 
+function reviewViewedStorageKey(base, head) {
+  return `rig-review-viewed:${encodeURIComponent(base)}:${encodeURIComponent(head)}`;
+}
+
+function loadReviewViewed(base, head) {
+  if (!base || !head) return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(reviewViewedStorageKey(base, head)) || "[]");
+    return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistReviewViewed(base, head, viewed) {
+  if (!base || !head) return;
+  localStorage.setItem(reviewViewedStorageKey(base, head), JSON.stringify(viewed));
+}
+
+function setupReviewKeys() {
+  document.addEventListener("keydown", (event) => {
+    if (get().appMode !== "review") return;
+    const tag = (event.target.tagName || "").toLowerCase();
+    const typing = tag === "input" || tag === "textarea" || tag === "select";
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
+      event.preventDefault();
+      refs.reviewFiles.querySelector(".review-file-search")?.focus();
+      return;
+    }
+    if (!typing && event.key === "/") {
+      event.preventDefault();
+      refs.reviewFiles.querySelector(".review-file-search")?.focus();
+      return;
+    }
+    if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "j" || event.key === "k") {
+      event.preventDefault();
+      actions.moveReviewFile(event.key === "j" ? 1 : -1);
+    } else if (event.key.toLowerCase() === "v") {
+      event.preventDefault();
+      actions.setCurrentReviewViewed(!get().reviewViewed.includes(get().reviewFile));
+    }
+  });
+}
+
 let fileDiffModule;
 let reviewRequestId = 0;
 let reviewFilesRequestId = 0;
@@ -298,6 +344,8 @@ async function mountFileDiff(data) {
   fileDiffModule.mountFileDiff(refs.review, data, {
     onOpenTree: (id) => actions.openFileTree(id),
     ignoreWhitespace: get().reviewIgnoreWhitespace,
+    viewed: get().reviewViewed.includes(get().reviewFile),
+    onViewedChange: (value) => actions.setCurrentReviewViewed(value),
     onIgnoreWhitespaceChange: (value) => {
       if (value === get().reviewIgnoreWhitespace) return;
       set({ reviewIgnoreWhitespace: value, reviewError: "" });
@@ -332,7 +380,7 @@ async function loadReviewFiles({ openFirst = false } = {}) {
     set({ reviewFiles: data, reviewFilesError: "" });
     const first = data.files.find((file) => file.reviewable);
     if (openFirst && !get().reviewFile && first) await loadFileDiff(first.newFile);
-    else status(`${data.files.length} changed C# files · ${data.files.filter((file) => file.reviewable).length} reviewable`);
+    else status(`${data.files.length} changed files · ${data.files.filter((file) => file.reviewable).length} Semantic-ready`);
   } catch (error) {
     if (requestId !== reviewFilesRequestId) return;
     set({ reviewFiles: null, reviewFilesError: error.message });
@@ -433,7 +481,11 @@ async function openReviewQuery(value) {
 
 function openReviewFile(file) {
   const patch = reviewDefaults(file);
-  set({ appMode: "review", ...patch });
+  set({
+    appMode: "review",
+    ...patch,
+    reviewViewed: loadReviewViewed(patch.reviewBase, patch.reviewHead),
+  });
   refs.reviewBase.value = patch.reviewBase;
   refs.reviewHead.value = patch.reviewHead;
   refs.reviewFile.value = patch.reviewFile;
@@ -708,6 +760,40 @@ const actions = {
   openReviewFileEntry(file) {
     if (file.reviewable && file.newFile) loadFileDiff(file.newFile);
   },
+  setReviewFileSearch(value) {
+    set({ reviewFileSearch: value });
+  },
+  setReviewFileFilter(value) {
+    set({ reviewFileFilter: value });
+  },
+  setReviewFileMode(value) {
+    if (value !== "list" && value !== "tree") return;
+    localStorage.setItem("rig-review-file-mode", value);
+    set({ reviewFileMode: value });
+  },
+  setCurrentReviewViewed(value) {
+    const s = get();
+    if (!s.reviewFile || !s.reviewBase || !s.reviewHead) return;
+    const viewed = new Set(s.reviewViewed);
+    if (value) viewed.add(s.reviewFile);
+    else viewed.delete(s.reviewFile);
+    const next = [...viewed];
+    persistReviewViewed(s.reviewBase, s.reviewHead, next);
+    set({ reviewViewed: next });
+  },
+  moveReviewFile(direction) {
+    const s = get();
+    const files = visibleReviewFiles(s).filter((file) => file.reviewable && file.newFile);
+    if (!files.length) {
+      status("no Semantic-ready files match this filter", true);
+      return;
+    }
+    const current = files.findIndex((file) => file.newFile === s.reviewFile);
+    const index = current < 0
+      ? direction > 0 ? 0 : files.length - 1
+      : (current + direction + files.length) % files.length;
+    loadFileDiff(files[index].newFile);
+  },
   // ---- file lens overlay controls ----
   // Filter changes are CLIENT-SIDE and instant; only `intrinsic`/`async` change what the server computed, so
   // only those refetch. That asymmetry is the whole reason the overlay is usable on a store whose cold
@@ -848,7 +934,7 @@ const actions = {
       openFile(get().filePath, get().fileStart);
     if (m === "review") {
       const patch = reviewDefaults();
-      set(patch);
+      set({ ...patch, reviewViewed: loadReviewViewed(patch.reviewBase, patch.reviewHead) });
       refs.reviewBase.value = patch.reviewBase;
       refs.reviewHead.value = patch.reviewHead;
       refs.reviewFile.value = patch.reviewFile;
@@ -891,11 +977,19 @@ const actions = {
     set(which === "base" ? { impactBase: id } : { impactHead: id });
   },
   setReviewStore(which, id) {
-    set(
-      which === "base"
-        ? { reviewBase: id, reviewFile: "", reviewFiles: null, reviewFilesError: "", reviewData: null, reviewError: "" }
-        : { reviewHead: id, reviewFile: "", reviewFiles: null, reviewFilesError: "", reviewData: null, reviewError: "" },
-    );
+    const current = get();
+    const reviewBase = which === "base" ? id : current.reviewBase;
+    const reviewHead = which === "head" ? id : current.reviewHead;
+    set({
+      reviewBase,
+      reviewHead,
+      reviewFile: "",
+      reviewFiles: null,
+      reviewFilesError: "",
+      reviewData: null,
+      reviewError: "",
+      reviewViewed: loadReviewViewed(reviewBase, reviewHead),
+    });
     refs.reviewFile.value = "";
     loadReviewFiles({ openFirst: true });
   },
@@ -1329,14 +1423,31 @@ function setupWatches() {
   );
   watch(
     store,
-    (s) => [s.reviewFiles, s.reviewFilesError, s.reviewFile, s.appMode],
+    (s) => [s.reviewFiles, s.reviewFilesError, s.reviewFile, s.reviewFileSearch, s.reviewFileFilter, s.reviewFileMode, s.reviewViewed, s.appMode],
     (s) => {
-      if (s.appMode === "review") mount(refs.reviewFiles, ReviewFileList(s, actions));
+      if (s.appMode !== "review") return;
+      const active = document.activeElement;
+      const currentSearch = refs.reviewFiles.querySelector(".review-file-search");
+      const searchFocused = active === currentSearch;
+      const start = searchFocused ? currentSearch.selectionStart : null;
+      const end = searchFocused ? currentSearch.selectionEnd : null;
+      mount(refs.reviewFiles, ReviewFileList(s, actions));
+      const nextSearch = refs.reviewFiles.querySelector(".review-file-search");
+      // The query changes on every keystroke. Keep the actual input node alive while replacing the result
+      // list, otherwise a native typing sequence loses its event target after the first character.
+      if (currentSearch && nextSearch) {
+        currentSearch.value = s.reviewFileSearch;
+        nextSearch.replaceWith(currentSearch);
+      }
+      if (searchFocused && currentSearch) {
+        currentSearch.focus();
+        if (start != null && end != null) currentSearch.setSelectionRange(start, end);
+      }
     },
   );
   watch(
     store,
-    (s) => [s.reviewData, s.reviewError, s.appMode],
+    (s) => [s.reviewData, s.reviewError, s.reviewViewed, s.appMode],
     (s) => {
       if (s.appMode !== "review") return;
       if (s.reviewError) {
@@ -1450,10 +1561,12 @@ function setupWatches() {
   mount(document.getElementById("app"), shell.root);
   applyTheme(localStorage.getItem("rig-theme") || "system");
   if (localStorage.getItem("rig-lens-legend") === "0") set({ lensLegend: false });
+  set({ reviewFileMode: localStorage.getItem("rig-review-file-mode") === "tree" ? "tree" : "list" });
   initSplitter();
   setupSearch();
   setupFileSearch();
   setupLensKeys();
+  setupReviewKeys();
   setupWatches();
   // Derivation version first — it keys the cache and purges a stale persisted store before any cached fetch.
   try {
@@ -1470,7 +1583,10 @@ function setupWatches() {
     const runs = await api.runs();
     set({ runs });
     const patch = readUrl(runs, initialSearch); // validate ?store= against known runs
-    set(patch);
+    set({
+      ...patch,
+      reviewViewed: loadReviewViewed(patch.reviewBase, patch.reviewHead),
+    });
     syncControls(get());
     if (patch.appMode === "file") {
       if (patch.filePath) openFile(patch.filePath, patch.fileStart);
