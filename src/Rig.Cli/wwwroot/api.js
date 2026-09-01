@@ -221,9 +221,16 @@ export const api = {
     getJson("/api/file-source" + qs({ store: explicitStore, file, start, count })),
   // Two immutable stores + a validated indexed file produce an exact Git patch and store-native old/new
   // annotations. The derivation version covers the semantic payload; commit-scoped stores cover source.
-  fileDiff: (base, head, file) =>
+  fileDiff: (base, head, file, ignoreWhitespace = false) =>
     cached(
-      `file-diff|${base}|${head}|${file}`,
-      "/api/file-diff" + qs({ base, head, file }),
+      `file-diff|${base}|${head}|${file}|${!!ignoreWhitespace}`,
+      "/api/file-diff" + qs({ base, head, file, ignoreWhitespace: ignoreWhitespace ? true : undefined }),
+    ),
+  // The Git change inventory is cheap but immutable for a pair of commit-scoped stores. It is the review
+  // navigation model; source-file inventories decide which rows the current one-path renderer can open.
+  reviewFiles: (base, head) =>
+    cached(
+      `review-files|${base}|${head}`,
+      "/api/review-files" + qs({ base, head }),
     ),
 };

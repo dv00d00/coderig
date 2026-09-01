@@ -105,6 +105,8 @@ export type FileDiffModel = {
 
 export type FileDiffCallbacks = {
   onOpenTree?: (symbolId: string) => void;
+  ignoreWhitespace?: boolean;
+  onIgnoreWhitespaceChange?: (value: boolean) => void;
 };
 
 type Expanded = {
@@ -293,11 +295,10 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
             highlight: true,
             refractor: syntaxHighlighter,
             language: "csharp",
-            oldSource: model.base.content,
             enhancers: [markEdits(file.hunks)],
           })
         : null,
-    [file, model.base.content],
+    [file],
   );
   const widgets = expanded
     ? {
@@ -328,11 +329,19 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
                 ? "tiers 1–3 partially unavailable"
                 : `${model.base.findings.hazards.length + model.base.findings.amplifications.length + model.base.findings.anchors.length}/${model.head.findings.hazards.length + model.head.findings.amplifications.length + model.head.findings.anchors.length} findings`}
           </span>
+          <label className="rig-diff-whitespace" title="Hide changes that only alter whitespace">
+            <input
+              type="checkbox"
+              checked={callbacks.ignoreWhitespace || false}
+              onChange={(event) => callbacks.onIgnoreWhitespaceChange?.(event.target.checked)}
+            />
+            ignore whitespace
+          </label>
           <button type="button" className={viewType === "unified" ? "on" : ""} onClick={() => setViewType("unified")}>
-            unified
+            one column
           </button>
           <button type="button" className={viewType === "split" ? "on" : ""} onClick={() => setViewType("split")}>
-            split
+            two columns
           </button>
         </div>
       </div>

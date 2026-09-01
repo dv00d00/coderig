@@ -37,10 +37,31 @@ public sealed class FileDiffWebContractTests
         patch.ShouldContain("+        return 2;");
         root.GetProperty("base").GetProperty("store").GetString().ShouldBe(fixture.BaseStore);
         root.GetProperty("head").GetProperty("store").GetString().ShouldBe(fixture.HeadStore);
-        root.GetProperty("base").GetProperty("content").GetString().ShouldNotBeNull().ShouldContain("return 1;");
-        root.GetProperty("head").GetProperty("content").GetString().ShouldNotBeNull().ShouldContain("return 2;");
+        // The renderer receives bounded patch hunks, not both complete files; this keeps a one-line change in
+        // a generated/legacy file proportional to the diff rather than the total source size.
+        root.GetProperty("base").GetProperty("content").GetString().ShouldBe("");
+        root.GetProperty("head").GetProperty("content").GetString().ShouldBe("");
         root.GetProperty("base").GetProperty("effects").GetProperty("file").GetString().ShouldBe(fixture.FilePath);
         root.GetProperty("head").GetProperty("effects").GetProperty("file").GetString().ShouldBe(fixture.FilePath);
+    }
+
+    [Test]
+    public async Task Endpoint_can_ignore_whitespace_only_changes()
+    {
+        using var fixture = await EndpointFixture.CreateAsync(headLine: "        return  1;");
+
+        var (status, body) = await fixture.GetAsync(
+            "/api/file-diff?ignoreWhitespace=true&base="
+                + fixture.BaseStore
+                + "&head="
+                + fixture.HeadStore
+                + "&file="
+                + Uri.EscapeDataString(fixture.FilePath)
+        );
+
+        status.ShouldBe(HttpStatusCode.OK, body);
+        using var json = JsonDocument.Parse(body);
+        json.RootElement.GetProperty("patch").GetString().ShouldBe("");
     }
 
     [Test]
@@ -68,7 +89,7 @@ public sealed class FileDiffWebContractTests
 
         public string HeadStore { get; private set; } = "";
 
-        public static async Task<EndpointFixture> CreateAsync(bool headDirty = false)
+        public static async Task<EndpointFixture> CreateAsync(bool headDirty = false, string headLine = "        return 2;")
         {
             var fixture = new EndpointFixture();
             Git(fixture._root, "init");
@@ -79,7 +100,7 @@ public sealed class FileDiffWebContractTests
             Git(fixture._root, "commit", "-m", "base");
             var baseCommit = Git(fixture._root, "rev-parse", "HEAD");
 
-            await File.WriteAllTextAsync(fixture.FilePath, "class Widget\n{\n    int Value()\n    {\n        return 2;\n    }\n}\n");
+            await File.WriteAllTextAsync(fixture.FilePath, $"class Widget\n{{\n    int Value()\n    {{\n{headLine}\n    }}\n}}\n");
             Git(fixture._root, "add", "Widget.cs");
             Git(fixture._root, "commit", "-m", "head");
             var headCommit = Git(fixture._root, "rev-parse", "HEAD");

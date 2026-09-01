@@ -41,6 +41,9 @@ export const store = createStore({
   reviewFile: "",
   reviewData: null,
   reviewError: "",
+  reviewFiles: null, // Git changed-file inventory for the selected base/head pair
+  reviewFilesError: "",
+  reviewIgnoreWhitespace: false,
   // The lens overlay's own filter — URL-addressable so a tuned view is shareable (see lensToUrl/lensFromUrl).
   // Everything but `intrinsic`/`async` is applied CLIENT-SIDE, which is the point: the underlying query costs
   // ~50s cold, so depth/basis/grain tuning must never refetch.
@@ -176,6 +179,7 @@ export const querySlice = (s) => [
   s.reviewBase,
   s.reviewHead,
   s.reviewFile,
+  s.reviewIgnoreWhitespace,
   s.lensFilter,
   s.impactBase,
   s.impactHead,
@@ -214,6 +218,7 @@ export function serializeUrl(s = get()) {
     if (s.reviewBase) p.set("base", s.reviewBase);
     if (s.reviewHead) p.set("head", s.reviewHead);
     if (s.reviewFile) p.set("file", s.reviewFile);
+    if (s.reviewIgnoreWhitespace) p.set("ws", "1");
   } else if (s.appMode === "impact") {
     p.set("app", "impact");
     if (s.impactBase) p.set("ibase", s.impactBase);
@@ -283,6 +288,7 @@ export function readUrl(runs, search = location.search) {
     reviewBase: runs.some((r) => r.storeId === p.get("base")) ? p.get("base") : "",
     reviewHead: runs.some((r) => r.storeId === p.get("head")) ? p.get("head") : "",
     reviewFile: p.get("file") || "",
+    reviewIgnoreWhitespace: p.get("ws") === "1",
     lensFilter: lensFromUrl(p),
     impactBase: runs.some((r) => r.storeId === p.get("ibase"))
       ? p.get("ibase")

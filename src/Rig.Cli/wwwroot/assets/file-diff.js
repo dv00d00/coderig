@@ -12405,9 +12405,8 @@ function Jo({ model: e, callbacks: t }) {
 		highlight: !0,
 		refractor: Ro,
 		language: "csharp",
-		oldSource: e.base.content,
 		enhancers: [da(l.hunks)]
-	}) : null, [l, e.base.content]), d = i ? { [i.key]: /* @__PURE__ */ (0, m.jsx)(qo, {
+	}) : null, [l]), d = i ? { [i.key]: /* @__PURE__ */ (0, m.jsx)(qo, {
 		expanded: i,
 		insight: (i.side === "old" ? s : c).get(i.line),
 		callbacks: t
@@ -12429,17 +12428,26 @@ function Jo({ model: e, callbacks: t }) {
 						className: "rig-diff-tier-status",
 						children: e.base.findings === void 0 || e.head.findings === void 0 ? "tiers 1–3 loading…" : e.base.findings === null || e.head.findings === null ? "tiers 1–3 partially unavailable" : `${e.base.findings.hazards.length + e.base.findings.amplifications.length + e.base.findings.anchors.length}/${e.head.findings.hazards.length + e.head.findings.amplifications.length + e.head.findings.anchors.length} findings`
 					}),
+					/* @__PURE__ */ (0, m.jsxs)("label", {
+						className: "rig-diff-whitespace",
+						title: "Hide changes that only alter whitespace",
+						children: [/* @__PURE__ */ (0, m.jsx)("input", {
+							type: "checkbox",
+							checked: t.ignoreWhitespace || !1,
+							onChange: (e) => t.onIgnoreWhitespaceChange?.(e.target.checked)
+						}), "ignore whitespace"]
+					}),
 					/* @__PURE__ */ (0, m.jsx)("button", {
 						type: "button",
 						className: n === "unified" ? "on" : "",
 						onClick: () => r("unified"),
-						children: "unified"
+						children: "one column"
 					}),
 					/* @__PURE__ */ (0, m.jsx)("button", {
 						type: "button",
 						className: n === "split" ? "on" : "",
 						onClick: () => r("split"),
-						children: "split"
+						children: "two columns"
 					})
 				]
 			})]

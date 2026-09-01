@@ -29,6 +29,7 @@ import {
   baseName,
   BreadcrumbTrail,
   shortLabel,
+  ReviewFileList,
 } from "./components.js";
 import {
   FileEffectsView,
@@ -54,7 +55,7 @@ function setBusy(on) {
   refs.impact.classList.toggle("busy", on);
   refs.hotspots.classList.toggle("busy", on);
   refs.file.classList.toggle("busy", on);
-  refs.review.classList.toggle("busy", on);
+  refs.reviewWrap.classList.toggle("busy", on);
   refs.go.disabled = on;
   refs.impactGo.disabled = on;
   refs.hotspotGo.disabled = on;
@@ -291,10 +292,17 @@ function setupLensKeys() {
 
 let fileDiffModule;
 let reviewRequestId = 0;
+let reviewFilesRequestId = 0;
 async function mountFileDiff(data) {
   fileDiffModule ||= await import("./assets/file-diff.js");
   fileDiffModule.mountFileDiff(refs.review, data, {
     onOpenTree: (id) => actions.openFileTree(id),
+    ignoreWhitespace: get().reviewIgnoreWhitespace,
+    onIgnoreWhitespaceChange: (value) => {
+      if (value === get().reviewIgnoreWhitespace) return;
+      set({ reviewIgnoreWhitespace: value, reviewError: "" });
+      loadFileDiff();
+    },
   });
 }
 
@@ -306,6 +314,30 @@ function reviewDefaults(file = "") {
     (s.runs.find((run) => run.storeId !== head) || {}).storeId ||
     "";
   return { reviewBase: base, reviewHead: head, reviewFile: file || s.reviewFile };
+}
+
+async function loadReviewFiles({ openFirst = false } = {}) {
+  const { reviewBase: base, reviewHead: head } = get();
+  if (!base || !head || base === head) {
+    set({ reviewFiles: null, reviewFilesError: "" });
+    return;
+  }
+
+  const requestId = ++reviewFilesRequestId;
+  set({ reviewFiles: null, reviewFilesError: "" });
+  status("loading changed files…");
+  try {
+    const data = await api.reviewFiles(base, head);
+    if (requestId !== reviewFilesRequestId) return;
+    set({ reviewFiles: data, reviewFilesError: "" });
+    const first = data.files.find((file) => file.reviewable);
+    if (openFirst && !get().reviewFile && first) await loadFileDiff(first.newFile);
+    else status(`${data.files.length} changed C# files · ${data.files.filter((file) => file.reviewable).length} reviewable`);
+  } catch (error) {
+    if (requestId !== reviewFilesRequestId) return;
+    set({ reviewFiles: null, reviewFilesError: error.message });
+    status("review files: " + error.message, true);
+  }
 }
 
 async function loadFileDiff(file = get().reviewFile) {
@@ -324,7 +356,9 @@ async function loadFileDiff(file = get().reviewFile) {
   }
 
   const requestId = ++reviewRequestId;
-  set({ appMode: "review", reviewFile: file, reviewData: null, reviewError: "" });
+  // Keep the mounted island while the next patch loads. Besides avoiding a blank flash, this preserves the
+  // reader's one/two-column choice across file navigation and whitespace re-diffs.
+  set({ appMode: "review", reviewFile: file, reviewError: "" });
   refs.reviewFile.value = file;
   setBusy(true);
   status("building semantic file diff…");
@@ -336,7 +370,7 @@ async function loadFileDiff(file = get().reviewFile) {
     api.fileFindings(head, head, file).catch(() => null),
   ]);
   try {
-    const data = await api.fileDiff(base, head, file);
+    const data = await api.fileDiff(base, head, file, get().reviewIgnoreWhitespace);
     if (requestId !== reviewRequestId) return;
     set({ reviewData: data, reviewError: "" });
     setBusy(false);
@@ -403,7 +437,10 @@ function openReviewFile(file) {
   refs.reviewBase.value = patch.reviewBase;
   refs.reviewHead.value = patch.reviewHead;
   refs.reviewFile.value = patch.reviewFile;
-  if (patch.reviewBase && patch.reviewHead) loadFileDiff(file);
+  if (patch.reviewBase && patch.reviewHead) {
+    loadReviewFiles();
+    loadFileDiff(file);
+  }
 }
 async function loadHazards() {
   const s = get();
@@ -668,6 +705,9 @@ const actions = {
   openFileQuery,
   openReviewFile,
   openReviewQuery,
+  openReviewFileEntry(file) {
+    if (file.reviewable && file.newFile) loadFileDiff(file.newFile);
+  },
   // ---- file lens overlay controls ----
   // Filter changes are CLIENT-SIDE and instant; only `intrinsic`/`async` change what the server computed, so
   // only those refetch. That asymmetry is the whole reason the overlay is usable on a store whose cold
@@ -790,9 +830,11 @@ const actions = {
     } else if (get().appMode === "file" && get().filePath) {
       set({ fileEffects: null, fileSource: null, fileError: "" });
       openFile(get().filePath, get().fileStart);
-    } else if (get().appMode === "review" && get().reviewFile) {
-      set({ reviewData: null, reviewError: "" });
-      loadFileDiff();
+    } else if (get().appMode === "review") {
+      const hadFile = get().reviewFile;
+      set({ reviewFiles: null, reviewFilesError: "", reviewData: null, reviewError: "" });
+      loadReviewFiles({ openFirst: !hadFile });
+      if (hadFile) loadFileDiff();
     } else if (get().treeFrom) openTree(get().treeFrom);
     else status("cache purged");
   },
@@ -810,6 +852,7 @@ const actions = {
       refs.reviewBase.value = patch.reviewBase;
       refs.reviewHead.value = patch.reviewHead;
       refs.reviewFile.value = patch.reviewFile;
+      if (!get().reviewFiles) loadReviewFiles({ openFirst: !patch.reviewFile });
       if (patch.reviewFile && !get().reviewData) loadFileDiff(patch.reviewFile);
     }
   },
@@ -848,7 +891,13 @@ const actions = {
     set(which === "base" ? { impactBase: id } : { impactHead: id });
   },
   setReviewStore(which, id) {
-    set(which === "base" ? { reviewBase: id, reviewData: null } : { reviewHead: id, reviewData: null });
+    set(
+      which === "base"
+        ? { reviewBase: id, reviewFile: "", reviewFiles: null, reviewFilesError: "", reviewData: null, reviewError: "" }
+        : { reviewHead: id, reviewFile: "", reviewFiles: null, reviewFilesError: "", reviewData: null, reviewError: "" },
+    );
+    refs.reviewFile.value = "";
+    loadReviewFiles({ openFirst: true });
   },
   setImpactFilter(v) {
     set({ impactFilter: v });
@@ -1181,12 +1230,13 @@ function setupFileSearch() {
 
 // ---- impact mode: toggle Tree/Impact UI + populate the base/head store pickers --------------------------
 function applyAppMode(m) {
+  refs.root.classList.toggle("review-mode", m === "review");
   refs.treeToolbar.classList.toggle("hidden", m !== "tree");
   refs.tree.classList.toggle("hidden", m !== "tree");
   refs.fileToolbar.classList.toggle("hidden", m !== "file");
   refs.file.classList.toggle("hidden", m !== "file");
   refs.reviewToolbar.classList.toggle("hidden", m !== "review");
-  refs.review.classList.toggle("hidden", m !== "review");
+  refs.reviewWrap.classList.toggle("hidden", m !== "review");
   refs.impactToolbar.classList.toggle("hidden", m !== "impact");
   refs.impact.classList.toggle("hidden", m !== "impact");
   refs.refsToolbar.classList.toggle("hidden", m !== "refs");
@@ -1275,6 +1325,13 @@ function setupWatches() {
         mount(refs.file, FileEffectsView(s, actions));
         requestAnimationFrame(syncMinimap);
       }
+    },
+  );
+  watch(
+    store,
+    (s) => [s.reviewFiles, s.reviewFilesError, s.reviewFile, s.appMode],
+    (s) => {
+      if (s.appMode === "review") mount(refs.reviewFiles, ReviewFileList(s, actions));
     },
   );
   watch(
@@ -1418,8 +1475,10 @@ function setupWatches() {
     if (patch.appMode === "file") {
       if (patch.filePath) openFile(patch.filePath, patch.fileStart);
     } else if (patch.appMode === "review") {
-      if (patch.reviewBase && patch.reviewHead && patch.reviewFile)
-        loadFileDiff(patch.reviewFile);
+      if (patch.reviewBase && patch.reviewHead) {
+        loadReviewFiles({ openFirst: !patch.reviewFile });
+        if (patch.reviewFile) loadFileDiff(patch.reviewFile);
+      }
     } else if (patch.appMode === "impact") {
       if (patch.impactBase && patch.impactHead) loadImpact();
     } else if (patch.appMode === "refs") {

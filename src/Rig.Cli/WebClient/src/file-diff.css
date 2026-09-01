@@ -41,6 +41,20 @@
   border-color: var(--accent);
 }
 
+.rig-diff-whitespace {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.rig-diff-whitespace input {
+  margin: 0;
+}
+
 .rig-diff-island .diff {
   width: 100%;
   border: 1px solid var(--border);

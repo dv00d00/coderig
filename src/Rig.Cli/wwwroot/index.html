@@ -140,6 +140,13 @@
         grid-template-columns: var(--rail, 300px) 5px 1fr;
         height: calc(100vh - 51px);
       }
+      main.review-mode {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      main.review-mode > aside:first-child,
+      main.review-mode > .splitter {
+        display: none;
+      }
       aside {
         border-right: 1px solid var(--border);
         display: flex;
@@ -2344,6 +2351,105 @@
         overflow: auto;
         margin-top: 4px;
         font-family: ui-monospace, Menlo, Consolas, monospace;
+      }
+      /* Full-screen PR review: a stable changed-file rail plus a bounded diff viewport. The renderer itself
+         only mounts Git hunks, so a tiny edit in a huge source file does not produce a huge DOM. */
+      .review-layout {
+        display: grid;
+        grid-template-columns: minmax(220px, 18vw) minmax(0, 1fr);
+        min-height: 0;
+        height: calc(100vh - 152px);
+        border-top: 1px solid var(--border);
+      }
+      .review-layout.hidden {
+        display: none;
+      }
+      .review-layout.busy {
+        opacity: 0.72;
+      }
+      .review-files {
+        min-width: 0;
+        overflow: auto;
+        border-right: 1px solid var(--border);
+        background: var(--panel);
+      }
+      .review-files-inner {
+        padding: 8px;
+      }
+      .review-files-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 7px 10px;
+        color: var(--fg);
+        font-size: 12px;
+      }
+      .review-files-head span,
+      .review-files-empty {
+        color: var(--muted);
+      }
+      .review-files-empty {
+        padding: 14px;
+        font-size: 12px;
+      }
+      .review-file-row {
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        align-items: start;
+        width: 100%;
+        gap: 6px;
+        border: 0;
+        border-radius: 6px;
+        padding: 7px;
+        color: var(--fg);
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+      .review-file-row:hover,
+      .review-file-row.on {
+        background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+      }
+      .review-file-row.on {
+        box-shadow: inset 3px 0 0 var(--accent);
+      }
+      .review-file-row.unavailable {
+        opacity: 0.52;
+        cursor: not-allowed;
+      }
+      .review-file-status {
+        font: 750 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
+        color: var(--muted);
+      }
+      .review-file-status.status-m,
+      .review-file-status.status-r {
+        color: var(--warn);
+      }
+      .review-file-status.status-a {
+        color: var(--ok);
+      }
+      .review-file-status.status-d {
+        color: var(--danger);
+      }
+      .review-file-path {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
+      }
+      .review-diff {
+        min-width: 0;
+        overflow: auto;
+        padding: 10px;
+      }
+      @media (max-width: 760px) {
+        .review-layout {
+          grid-template-columns: 1fr;
+          grid-template-rows: minmax(110px, 24vh) minmax(0, 1fr);
+        }
+        .review-files {
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
       }
       /* Scrollbars — themed via the tokens so dark mode gets a dark thumb instead of the default light OS
          scrollbar (which read as a bright bar against the dark UI). Token-driven, so light/dark/system all

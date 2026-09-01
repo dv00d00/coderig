@@ -1399,6 +1399,53 @@ export function BreadcrumbTrail(s, actions) {
   );
 }
 
+// GitHub-style changed-file rail for Review. Every Git row stays visible; the disabled rows are an honest
+// boundary of the current one-stable-path renderer (add/delete/rename need a two-path diff contract).
+export function ReviewFileList(s, actions) {
+  if (s.reviewFilesError)
+    return h("div", { class: "review-files-empty err" }, s.reviewFilesError);
+  if (!s.reviewBase || !s.reviewHead)
+    return h("div", { class: "review-files-empty" }, "Choose base and head revisions.");
+  if (!s.reviewFiles)
+    return h("div", { class: "review-files-empty" }, "Loading changed files…");
+  const files = s.reviewFiles.files || [];
+  const reviewable = files.filter((file) => file.reviewable).length;
+  return h(
+    "div",
+    { class: "review-files-inner" },
+    h(
+      "div",
+      { class: "review-files-head" },
+      h("strong", {}, "Changed files"),
+      h("span", {}, `${reviewable}/${files.length}`),
+    ),
+    files.length
+      ? files.map((file) =>
+          h(
+            "button",
+            {
+              class:
+                "review-file-row" +
+                (file.reviewable && s.reviewFile === file.newFile ? " on" : "") +
+                (!file.reviewable ? " unavailable" : ""),
+              disabled: !file.reviewable,
+              title: file.reason || file.path,
+              onClick: () => actions.openReviewFileEntry(file),
+            },
+            h("span", { class: `review-file-status status-${file.status.toLowerCase()}` }, file.status),
+            h(
+              "span",
+              { class: "review-file-path" },
+              file.oldPath && file.newPath && file.oldPath !== file.newPath
+                ? `${file.oldPath} → ${file.newPath}`
+                : file.path,
+            ),
+          ),
+        )
+      : h("div", { class: "review-files-empty" }, "No changed files."),
+  );
+}
+
 // ---- the static Shell (built once) ----------------------------------------------------------------------
 // Returns { root, refs }. refs holds the containers the regions re-render into + the (uncontrolled) inputs.
 // Input events call `actions`; the shell never reads state after construction.
@@ -1723,7 +1770,9 @@ export function Shell(actions) {
   refs.refs = h("div", { class: "tree impact-wrap hidden" }); // refs report content area (mirrors refs.impact)
   refs.hotspots = h("div", { class: "tree impact-wrap hidden" });
   refs.file = h("div", { class: "file-view hidden" });
-  refs.review = h("div", { class: "tree impact-wrap hidden" });
+  refs.reviewFiles = h("aside", { class: "review-files" });
+  refs.review = h("div", { class: "review-diff" });
+  refs.reviewWrap = h("div", { class: "review-layout hidden" }, refs.reviewFiles, refs.review);
   refs.callers = h("div", { class: "callers-mount" }); // reverse-nav drawer mounts here (overlays the tree area)
   refs.crumbs = h("div", { class: "crumbs-mount" }); // pivot-history breadcrumb trail mounts here (see BreadcrumbTrail)
   const section = h(
@@ -1739,7 +1788,7 @@ export function Shell(actions) {
     refs.statusbar,
     refs.tree,
     refs.file,
-    refs.review,
+    refs.reviewWrap,
     refs.impact,
     refs.refs,
     refs.hotspots,
