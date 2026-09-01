@@ -1,6 +1,6 @@
 # The file lens can emit a marked line whose owning method has no method row
 
-**Status:** todo · **Triage:** needs-verification, then ready-for-agent · **Found:** 2026-09-01 by a probe agent
+**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-09-01 by a probe agent
 auditing `rig annotate` · **Family:** file lens (read model)
 
 ## What happens

@@ -49,16 +49,16 @@ Two filters in `Rig.Domain/Functions/FileEffectReadModelIndex.cs` discard the de
 Both are per-line and per-file, so this is not a derivation bug: the effect exists in `derive`, `reaches` and
 the method table, and is lost only in the call-site projection.
 
-## Decision needed, then fix
+## Decision: preserve the untargeted row
 
 The anchoring worry belongs to the CONSUMER, not the read model, and the Rider plugin no longer needs the
 protection: `MatchOnLine` resolves targets first and uses the untargeted arm only when no targeted row matches
 (`experiments/RiderBackendEffectSpike/RigEffectDaemonStage.cs`, after the 2026-08-31 `AllSameTarget` removal).
 
-Preferred fix (O1): **stop dropping.** Keep untargeted rows; let each surface decide. Text renders
+Chosen fix (O1): **stop dropping.** Keep untargeted rows; let each surface decide. Text renders
 `io! io:4` (the lens already merges min-per-family), the browser shows both, Rider prefers the targeted row.
 
-Alternatives, if O1 proves wrong in the editor:
+Rejected alternatives (revisit only if the editor proves O1 wrong):
 
 - O2 fold the untargeted row's depth INTO the targeted row on that line (one row per line; loses "this call
   is itself external I/O").

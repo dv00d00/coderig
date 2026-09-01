@@ -1,7 +1,10 @@
 # A method's file-lens depth disagrees with `rig reaches` for the same family
 
-**Status:** todo · **Triage:** needs-verification (may be a convention difference, not a defect) ·
+**Status:** todo · **Triage:** needs-info ·
 **Found:** 2026-09-01 by a probe agent auditing `rig annotate` · **Family:** file lens / reachability
+
+**Blocked by:** [folding lambda-owned effects onto their owner](./file-lens-omits-effects-owned-by-lambdas.md).
+Re-measure after that change before deciding whether any depth behaviour remains defective.
 
 ## The two observations
 

@@ -1,6 +1,6 @@
 # The file lens omits every effect owned by a lambda — 24% of MedDBase effects
 
-**Status:** todo · **Triage:** needs-decision (fold vs disclose) · **Found:** 2026-08-31 quantifying the Rider
+**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-08-31 quantifying the Rider
 plugin's blind spots; re-confirmed 2026-09-01 by a probe agent on 30 files · **Family:** file lens (read model)
 
 ## What happens
@@ -29,19 +29,19 @@ a `WithDb` lambda gets no line badge, while `rig reaches` reports it as a genuin
 The consequence for an agent or a reader: **absence of a badge is not evidence of no I/O**, which undermines
 the one question the lens is for.
 
-## Options
+## Decision: fold lambdas onto their owning declaration
 
-- **O1 fold lambdas onto their owner** (proposed): canonicalise `…~λN` to its declaring member when building
+- **O1 fold lambdas onto their owner** (chosen): canonicalise `…~λN` to its declaring member when building
   `fileMethodIds` and when keying rows — the precedent is `CollapseInstantiations` / `MonomorphizedNodeId.BaseOf`
   (`:198`), which already folds `~mono` ids onto their base for exactly this reason. A lambda's effects then
   belong to the method that declares it, at the lambda's own source line (which is inside that method's span,
   so the line anchor stays honest). Also fixes `P:Type.Prop~λN` rows, which are cosmetically property-keyed.
-- **O2 disclose only** — print a per-file count of lambda-owned effects that could not be anchored. Cheap,
+- **O2 disclose only** (rejected) — print a per-file count of lambda-owned effects that could not be anchored. Cheap,
   honest, and leaves the badges wrong.
-- **O3 add lambda declarations to the file's method set** as their own rows. Truthful but noisy: the browser and
+- **O3 add lambda declarations to the file's method set** (rejected) as their own rows. Truthful but noisy: the browser and
   the CLI would list `Save~λ0` beside `Save`.
 
-O1 is preferred and matches how the depth math already treats a lambda (the methodGroup edge into the lambda is
+O1 matches how the depth math already treats a lambda (the methodGroup edge into the lambda is
 enclosed by the declaring member, per the accessor fix in `CLAUDE.md`'s effect↔reachability section).
 
 ## Testing expectations

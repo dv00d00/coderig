@@ -1,7 +1,10 @@
 # `rig annotate` output legibility for agent consumers
 
-**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-09-01, probe agent's "hard to read as an agent"
+**Status:** todo · **Triage:** needs-info · **Found:** 2026-09-01, probe agent's "hard to read as an agent"
 notes after 30 files · **Family:** CLI UX / docs
+
+**Needs:** split the small rendering/legend work (items 1, 2, 4 and 7) from the `bus`/`echo` product
+decision (item 3) and the separately scoped `--verify` feature (item 5) before implementation.
 
 ## Items
 

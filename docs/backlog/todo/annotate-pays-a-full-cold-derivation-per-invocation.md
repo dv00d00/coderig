@@ -1,7 +1,7 @@
 # `rig annotate` pays a full cold derivation per invocation — route it to a resident host
 
-**Status:** todo · **Triage:** ready-for-agent (approach chosen 2026-09-01: route to a resident host, "what the
-web does") · **Found:** 2026-09-01, probe agent measured 30 files · **Family:** performance / CLI transport
+**Status:** todo · **Triage:** ready-for-agent · **Found:** 2026-09-01, probe agent measured 30 files ·
+**Family:** performance / CLI transport · **Decision:** route to a resident host, "what the web does"
 
 ## Measured problem
 
