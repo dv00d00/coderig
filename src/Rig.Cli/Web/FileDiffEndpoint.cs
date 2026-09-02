@@ -207,7 +207,7 @@ internal static class FileDiffEndpoint
         var headInventory = await headInventoryTask;
 
         var representative =
-            headInventory.Files.Concat(baseInventory.Files).FirstOrDefault()
+            headInventory.Files.Concat(baseInventory.Files).FirstOrDefault(Path.IsPathRooted)
             ?? headInventory.SolutionPath
             ?? baseInventory.SolutionPath
             ?? throw new InvalidOperationException("Neither store identifies a source path from which to locate the Git work tree.");
@@ -290,6 +290,13 @@ internal static class FileDiffEndpoint
         var result = new Dictionary<string, string>(PathComparer);
         foreach (var file in files)
         {
+            // Source-generator output is recorded as a project-relative pseudo-path with no location on disk, so it
+            // has no Git revision to review. Skip it rather than resolving it against the serve process directory.
+            if (!Path.IsPathRooted(file))
+            {
+                continue;
+            }
+
             var relative = RepoRelativePath(repo, file);
             result.TryAdd(relative, file);
         }
