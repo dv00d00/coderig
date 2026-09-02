@@ -72,7 +72,7 @@ selected call.
 
 ## Independent follow-ons
 
-- [Open every changed-file shape through a two-path contract](../todo/web-review-two-path-file-diffs.md).
+- [Open every changed-file shape through a two-path contract](../progress/web-review-two-path-file-diffs.md).
 - [Add effect-aware per-file inventory and an honest Effects-changed filter](../todo/web-review-effect-aware-file-inventory.md).
 - [Link Impact changes directly into Review](../todo/web-review-impact-deep-links.md).
 - [Expand hunk context on demand without loading full files](../todo/web-review-expand-context.md).

@@ -1,6 +1,6 @@
 # Web Review: open added, deleted, copied, renamed, and non-indexed files
 
-**Status:** todo · **Family:** web review / Git diff contract
+**Status:** progress — implementation started 2026-09-02. · **Family:** web review / Git diff contract
 **Triage:** ready-for-agent
 
 ## Problem
