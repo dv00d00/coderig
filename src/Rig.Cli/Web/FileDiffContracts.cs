@@ -1,23 +1,34 @@
 namespace Rig.Cli.Web;
 
-// One immutable side of a file review. Effects keep their store-native line coordinates; the patch is the
-// only thing that maps those coordinates into visible old/new rows.
-internal sealed record FileDiffRevisionDto(string Store, string Commit, string Content, FileEffectsResponseDto Effects);
+// One immutable side of a file review. Git presence and indexed semantic availability are separate axes:
+// an added/deleted side is not-present, while a text or otherwise unindexed side is present but not-indexed.
+internal sealed record FileDiffRevisionDto(
+    string Store,
+    string Commit,
+    string SemanticState,
+    string? Path,
+    string? File,
+    string Content,
+    FileEffectsResponseDto? Effects
+);
 
 // Renderer-neutral contract: a Git patch plus semantic annotations for both revisions. A browser renderer,
 // Rider adapter, or future GitHub/GitLab transport can consume the same old/new line-keyed facts.
 internal sealed record FileDiffResponseDto(
     string File,
     string RelativePath,
+    string Status,
+    string? OldPath,
+    string? NewPath,
+    string Language,
     string Patch,
     int ContextLines,
     FileDiffRevisionDto Base,
     FileDiffRevisionDto Head
 );
 
-// One Git-changed file matched back to the immutable C# source-file inventories on both sides. The current
-// renderer accepts one stable absolute path, so rename/add/delete rows remain useful navigation context but
-// explicitly disclose why they cannot be opened yet.
+// One Git-changed file matched back to the immutable source-file inventories on both sides. Every Git row
+// is reviewable as text; SemanticReady is the narrower both-sides semantic capability.
 internal sealed record ReviewFileDto(
     string Status,
     string Path,
@@ -26,6 +37,7 @@ internal sealed record ReviewFileDto(
     string? OldFile,
     string? NewFile,
     bool Reviewable,
+    bool SemanticReady,
     string? Reason
 );
 

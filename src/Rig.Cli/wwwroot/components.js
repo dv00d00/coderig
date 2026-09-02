@@ -1404,7 +1404,7 @@ function reviewDisplayPath(file) {
 }
 
 function reviewFileIdentity(file) {
-  return file.newFile || file.oldFile || reviewDisplayPath(file);
+  return reviewDisplayPath(file);
 }
 
 function reviewPathParts(file) {
@@ -1424,10 +1424,8 @@ export function visibleReviewFiles(s) {
     const path = reviewDisplayPath(file);
     const oldPath = file.oldPath || "";
     if (query && !`${path}\n${oldPath}`.toLocaleLowerCase().includes(query)) return false;
-    // Until two-path diffs land, unavailable rows cannot be opened or marked Viewed. Keep them in All,
-    // but do not make an Unreviewed queue that is impossible to finish.
-    if (s.reviewFileFilter === "unreviewed" && (!file.reviewable || viewed.has(reviewFileIdentity(file)))) return false;
-    if (s.reviewFileFilter === "semantic" && !file.reviewable) return false;
+    if (s.reviewFileFilter === "unreviewed" && viewed.has(reviewFileIdentity(file))) return false;
+    if (s.reviewFileFilter === "semantic" && !file.semanticReady) return false;
     return true;
   });
 }
@@ -1436,25 +1434,19 @@ function reviewFileRow(file, s, actions, depth = 0) {
   const path = reviewDisplayPath(file);
   const identity = reviewFileIdentity(file);
   const parts = reviewPathParts(file);
-  const selected = file.reviewable && s.reviewFile === file.newFile;
+  const selected = s.reviewFile === identity;
   const viewed = s.reviewViewed.includes(identity);
   const oldPath = (file.oldPath || file.oldFile || "").replaceAll("\\", "/");
-  const unavailableReason = file.reviewable ? "" : file.reason || "A stable indexed path is required.";
-  const unavailableLabel = file.reviewable
-    ? ""
-    : ["A", "D", "R", "C"].includes(file.status)
-      ? "two-path diff unavailable"
-      : "not indexed in both stores";
+  const pathChange = oldPath && oldPath !== path ? `${oldPath} → ${path}` : "";
+  const semanticLabel = file.semanticReady ? "" : "semantic annotations partial or unavailable";
   return h(
     "button",
     {
       class:
         "review-file-row" +
         (selected ? " on" : "") +
-        (viewed ? " viewed" : "") +
-        (!file.reviewable ? " unavailable" : ""),
-      disabled: !file.reviewable,
-      title: [path, oldPath && oldPath !== path ? `renamed from ${oldPath}` : "", unavailableReason]
+        (viewed ? " viewed" : ""),
+      title: [path, pathChange, file.reason || ""]
         .filter(Boolean)
         .join("\n"),
       style: `--review-depth:${depth}`,
@@ -1470,7 +1462,8 @@ function reviewFileRow(file, s, actions, depth = 0) {
         { class: "review-file-parent", title: parts.parent || path },
         parts.parent || "repository root",
       ),
-      unavailableLabel ? h("span", { class: "review-file-reason" }, unavailableLabel) : null,
+      pathChange ? h("span", { class: "review-file-reason" }, pathChange) : null,
+      semanticLabel ? h("span", { class: "review-file-reason" }, semanticLabel) : null,
     ),
     viewed ? h("span", { class: "review-file-viewed", title: "Viewed" }, "✓") : null,
   );
@@ -1508,8 +1501,8 @@ function reviewFileTree(files, s, actions) {
   return render(root);
 }
 
-// Desktop review work queue. Every Git path remains discoverable; Semantic-ready is deliberately the
-// current indexed stable-path capability, not a claim that an effect changed in that file.
+// Desktop review work queue. Every Git path is openable; Semantic-ready is the narrower both-sides
+// annotation capability, not a claim that an effect changed in that file.
 export function ReviewFileList(s, actions) {
   if (s.reviewFilesError)
     return h("div", { class: "review-files-empty err" }, s.reviewFilesError);
@@ -1519,10 +1512,10 @@ export function ReviewFileList(s, actions) {
     return h("div", { class: "review-files-empty" }, "Loading changed files…");
   const files = s.reviewFiles.files || [];
   const shown = visibleReviewFiles(s);
-  const reviewable = files.filter((file) => file.reviewable).length;
+  const semanticReady = files.filter((file) => file.semanticReady).length;
   const viewed = new Set(s.reviewViewed);
-  const reviewed = files.filter((file) => file.reviewable && viewed.has(reviewFileIdentity(file))).length;
-  const progress = reviewable ? Math.round((reviewed / reviewable) * 100) : 0;
+  const reviewed = files.filter((file) => viewed.has(reviewFileIdentity(file))).length;
+  const progress = files.length ? Math.round((reviewed / files.length) * 100) : 0;
   const reviewFilter = h(
     "select",
     {
@@ -1532,7 +1525,7 @@ export function ReviewFileList(s, actions) {
     },
     h("option", { value: "all" }, `All files · ${files.length}`),
     h("option", { value: "unreviewed" }, "Unreviewed"),
-    h("option", { value: "semantic" }, `Semantic-ready · ${reviewable}`),
+    h("option", { value: "semantic" }, `Semantic-ready · ${semanticReady}`),
   );
   // `h()` assigns properties before appending children; select.value must be set after its options exist.
   reviewFilter.value = s.reviewFileFilter;
@@ -1546,11 +1539,11 @@ export function ReviewFileList(s, actions) {
         "div",
         { class: "review-files-head" },
         h("strong", {}, "Files changed"),
-        h("span", {}, `${reviewed}/${reviewable} viewed`),
+        h("span", {}, `${reviewed}/${files.length} viewed`),
       ),
       h(
         "div",
-        { class: "review-progress", title: `${reviewed} of ${reviewable} Semantic-ready files viewed` },
+        { class: "review-progress", title: `${reviewed} of ${files.length} changed files viewed` },
         h("span", { style: `width:${progress}%` }),
       ),
       h(
@@ -1617,7 +1610,7 @@ export function ReviewFileList(s, actions) {
         "div",
         { class: "review-files-result" },
         h("span", {}, `${shown.length} shown`),
-        h("span", {}, `${reviewable} Semantic-ready`),
+        h("span", {}, `${semanticReady} Semantic-ready`),
       ),
     ),
     shown.length

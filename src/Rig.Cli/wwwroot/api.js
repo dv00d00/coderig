@@ -219,15 +219,15 @@ export const api = {
   // Source may come from the working tree and therefore stays deliberately outside the client cache.
   fileSource: (explicitStore, file, start, count) =>
     getJson("/api/file-source" + qs({ store: explicitStore, file, start, count })),
-  // Two immutable stores + a validated indexed file produce an exact Git patch and store-native old/new
-  // annotations. The derivation version covers the semantic payload; commit-scoped stores cover source.
+  // Two immutable stores + one validated Git-changed identity produce an exact patch. Store-native semantic
+  // annotations join independently per side; unindexed/text/missing sides remain honest nullable projections.
   fileDiff: (base, head, file, ignoreWhitespace = false) =>
     cached(
       `file-diff|${base}|${head}|${file}|${!!ignoreWhitespace}`,
       "/api/file-diff" + qs({ base, head, file, ignoreWhitespace: ignoreWhitespace ? true : undefined }),
     ),
   // The Git change inventory is cheap but immutable for a pair of commit-scoped stores. It is the review
-  // navigation model; source-file inventories decide which rows the current one-path renderer can open.
+  // navigation model; every row opens, while source-file inventories only determine Semantic-ready status.
   reviewFiles: (base, head) =>
     cached(
       `review-files|${base}|${head}`,

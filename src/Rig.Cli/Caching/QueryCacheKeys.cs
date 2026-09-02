@@ -102,6 +102,10 @@ internal static class QueryCacheKeys
     // columns. Same store, same rules, a different ranking.
     internal const int HotspotSchema = 3;
 
+    // v1: every Git-changed file has a two-path, side-optional review payload. This gates the client-cached
+    // /api/review-files and /api/file-diff contracts independently of the per-file semantic projection.
+    internal const int ReviewSchema = 1;
+
     // v1: the per-file semantic effect projection shared by web, annotate and Rider. This gates both the
     // browser derivation token and the resident process LRU, so same-store projection fixes cannot leave
     // either surface serving the pre-fix read model.
@@ -137,7 +141,7 @@ internal static class QueryCacheKeys
     // version — the client can never keep serving an artifact whose server-side schema advanced. This is the
     // desync guard that a single hand-bumped client constant would lack, and it needs no MVID.
     internal static string DerivationSchemaToken() =>
-        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}.{EffectViewSchema}.{EffectsDiffSchema}.{HotspotSchema}.{FileEffectsSchema}";
+        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}.{EffectViewSchema}.{EffectsDiffSchema}.{HotspotSchema}.{ReviewSchema}.{FileEffectsSchema}";
 
     internal static string FileEffectsCacheKey(string storeKey, string rulesHash, string filePath)
     {

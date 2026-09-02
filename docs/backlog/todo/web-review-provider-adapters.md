@@ -28,7 +28,7 @@ portable shape is PR identity, base/head commit, changed-file records, patch hun
 - Local text/semantic rendering is byte-for-byte equivalent to opening the same base/head pair directly.
 - Missing credentials and unavailable commits fail with a useful recovery action.
 
-**Blocked by:** [Two-path file diffs](../progress/web-review-two-path-file-diffs.md), so the provider adapter
+**Unblocked by:** [Two-path file diffs](../done/web-review-two-path-file-diffs.md), so the provider adapter
 does not inherit a local changed-file blind spot.
 
 ## Out of scope

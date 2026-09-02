@@ -33,23 +33,27 @@ public sealed class ReviewFilesWebContractTests
         var modified = files.Single(file => file.GetProperty("path").GetString() == "Widget.cs");
         modified.GetProperty("status").GetString().ShouldBe("M");
         modified.GetProperty("reviewable").GetBoolean().ShouldBeTrue();
+        modified.GetProperty("semanticReady").GetBoolean().ShouldBeTrue();
         modified.GetProperty("oldFile").GetString().ShouldBe(fixture.WidgetPath);
         modified.GetProperty("newFile").GetString().ShouldBe(fixture.WidgetPath);
 
         var added = files.Single(file => file.GetProperty("path").GetString() == "Added.cs");
         added.GetProperty("status").GetString().ShouldBe("A");
-        added.GetProperty("reviewable").GetBoolean().ShouldBeFalse();
-        added.GetProperty("reason").GetString().ShouldNotBeNull().ShouldContain("two-path");
+        added.GetProperty("reviewable").GetBoolean().ShouldBeTrue();
+        added.GetProperty("semanticReady").GetBoolean().ShouldBeFalse();
+        added.GetProperty("reason").GetString().ShouldNotBeNull().ShouldContain("Semantic annotations");
 
         var renamed = files.Single(file => file.GetProperty("path").GetString() == "Moved.cs");
         renamed.GetProperty("status").GetString().ShouldBe("R");
         renamed.GetProperty("oldPath").GetString().ShouldBe("Gone.cs");
         renamed.GetProperty("newPath").GetString().ShouldBe("Moved.cs");
-        renamed.GetProperty("reviewable").GetBoolean().ShouldBeFalse();
+        renamed.GetProperty("reviewable").GetBoolean().ShouldBeTrue();
+        renamed.GetProperty("semanticReady").GetBoolean().ShouldBeTrue();
 
         var documentation = files.Single(file => file.GetProperty("path").GetString() == "README.md");
         documentation.GetProperty("status").GetString().ShouldBe("M");
-        documentation.GetProperty("reviewable").GetBoolean().ShouldBeFalse();
+        documentation.GetProperty("reviewable").GetBoolean().ShouldBeTrue();
+        documentation.GetProperty("semanticReady").GetBoolean().ShouldBeFalse();
     }
 
     private sealed class EndpointFixture : IDisposable

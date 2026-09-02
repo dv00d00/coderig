@@ -87,8 +87,11 @@ type FileFindings = {
 type Revision = {
   store: string;
   commit: string;
+  semanticState: "available" | "not-indexed" | "not-present";
+  path: string | null;
+  file: string | null;
   content: string;
-  effects: FileEffects;
+  effects: FileEffects | null;
   // Loaded independently after the patch, matching the Windows file-lens API boundary. `undefined` means
   // loading; `null` means the slower findings derivation was unavailable and effect badges still remain valid.
   findings?: FileFindings | null;
@@ -97,6 +100,10 @@ type Revision = {
 export type FileDiffModel = {
   file: string;
   relativePath: string;
+  status: string;
+  oldPath: string | null;
+  newPath: string | null;
+  language: "csharp" | "text";
   patch: string;
   contextLines: number;
   base: Revision;
@@ -184,6 +191,7 @@ function changeLine(change: ChangeData, side: "old" | "new"): number | null {
 
 function byLine(revision: Revision): Map<number, LineInsight> {
   const result = new Map<number, LineInsight>();
+  if (!revision.effects) return result;
   const row = (line: number): LineInsight => {
     let current = result.get(line);
     if (!current) {
@@ -313,10 +321,29 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
       { additions: 0, deletions: 0 },
     );
   }, [file]);
-  const effectDelta = model.head.effects.sites.length - model.base.effects.sites.length;
+  const baseAvailable = model.base.semanticState === "available" && model.base.effects !== null;
+  const headAvailable = model.head.semanticState === "available" && model.head.effects !== null;
+  const baseEffectSites = model.base.effects?.sites.length || 0;
+  const headEffectSites = model.head.effects?.sites.length || 0;
+  const baseFindingCount = (model.base.findings?.hazards.length || 0)
+    + (model.base.findings?.amplifications.length || 0)
+    + (model.base.findings?.anchors.length || 0);
+  const headFindingCount = (model.head.findings?.hazards.length || 0)
+    + (model.head.findings?.amplifications.length || 0)
+    + (model.head.findings?.anchors.length || 0);
+  const effectDelta = headEffectSites - baseEffectSites;
+  const semanticSummary = baseAvailable && headAvailable
+    ? `effect sites ${effectDelta > 0 ? "+" : ""}${effectDelta}`
+    : baseAvailable
+      ? "base-only semantics"
+      : headAvailable
+        ? "head-only semantics"
+        : model.language === "text"
+          ? "text-only · semantics unavailable"
+          : "semantics unavailable";
   const tokens = useMemo(
     () =>
-      file
+      file && model.language === "csharp"
         ? tokenize(file.hunks, {
             highlight: true,
             refractor: syntaxHighlighter,
@@ -324,7 +351,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
             enhancers: [markEdits(file.hunks)],
           })
         : null,
-    [file],
+    [file, model.language],
   );
   const widgets = expanded
     ? {
@@ -343,6 +370,9 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
       <div className="rig-diff-head">
         <div className="rig-diff-identity" title={model.relativePath}>
           <div className="rig-diff-file-line">
+            <span className={`rig-diff-status status-${model.status.toLowerCase()}`} title={`Git status ${model.status}`}>
+              {model.status}
+            </span>
             <strong>{path.name}</strong>
             <span className="rig-diff-patch-counts" aria-label={`${patchCounts.additions} additions, ${patchCounts.deletions} deletions`}>
               <b>+{patchCounts.additions}</b>
@@ -350,22 +380,37 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
             </span>
           </div>
           {path.parent ? <span className="rig-diff-parent">{path.parent}</span> : null}
+          {model.oldPath && model.newPath && model.oldPath !== model.newPath
+            ? <span className="rig-diff-path-change">{model.oldPath} → {model.newPath}</span>
+            : model.oldPath && !model.newPath
+              ? <span className="rig-diff-path-change">deleted from {model.oldPath}</span>
+              : !model.oldPath && model.newPath
+                ? <span className="rig-diff-path-change">added as {model.newPath}</span>
+                : null}
           <span className="rig-diff-revisions">{shortSha(model.base.commit)} → {shortSha(model.head.commit)}</span>
         </div>
         <div className="rig-diff-summary">
           <span
             className={`rig-diff-effect-delta ${effectDelta > 0 ? "added" : effectDelta < 0 ? "removed" : "stable"}`}
-            title={`${model.base.effects.sites.length} base effect sites → ${model.head.effects.sites.length} head effect sites`}
+            title={baseAvailable && headAvailable
+              ? `${baseEffectSites} base effect sites → ${headEffectSites} head effect sites`
+              : `base: ${model.base.semanticState}; head: ${model.head.semanticState}`}
           >
-            effect sites {effectDelta > 0 ? "+" : ""}{effectDelta}
+            {semanticSummary}
           </span>
-          <span className="rig-diff-tier-status">
-            {model.base.findings === undefined || model.head.findings === undefined
-              ? "tiers 1–3 loading…"
-              : model.base.findings === null || model.head.findings === null
-                ? "tiers 1–3 partially unavailable"
-                : `${model.base.findings.hazards.length + model.base.findings.amplifications.length + model.base.findings.anchors.length}/${model.head.findings.hazards.length + model.head.findings.amplifications.length + model.head.findings.anchors.length} findings`}
-          </span>
+          {baseAvailable || headAvailable
+            ? <span className="rig-diff-tier-status">
+                {(baseAvailable && model.base.findings === undefined) || (headAvailable && model.head.findings === undefined)
+                  ? "tiers 1–3 loading…"
+                  : (baseAvailable && model.base.findings === null) || (headAvailable && model.head.findings === null)
+                    ? "tiers 1–3 partially unavailable"
+                    : baseAvailable && headAvailable
+                      ? `${baseFindingCount}/${headFindingCount} findings`
+                      : baseAvailable
+                        ? `${baseFindingCount} base findings`
+                        : `${headFindingCount} head findings`}
+              </span>
+            : null}
           <label className="rig-diff-viewed" title="Mark this file as reviewed (V)">
             <input
               type="checkbox"

@@ -12262,7 +12262,9 @@ function Wo(e, t) {
 	return t === "old" ? e.type === "insert" ? null : e.type === "delete" ? e.lineNumber : e.oldLineNumber : e.type === "delete" ? null : e.type === "insert" ? e.lineNumber : e.newLineNumber;
 }
 function Go(e) {
-	let t = /* @__PURE__ */ new Map(), n = (e) => {
+	let t = /* @__PURE__ */ new Map();
+	if (!e.effects) return t;
+	let n = (e) => {
 		let n = t.get(e);
 		return n || (n = {
 			sites: [],
@@ -12417,12 +12419,12 @@ function Yo({ model: e, callbacks: t }) {
 	}) : {
 		additions: 0,
 		deletions: 0
-	}, [l]), f = e.head.effects.sites.length - e.base.effects.sites.length, p = (0, h.useMemo)(() => l ? pa(l.hunks, {
+	}, [l]), f = e.base.semanticState === "available" && e.base.effects !== null, p = e.head.semanticState === "available" && e.head.effects !== null, g = e.base.effects?.sites.length || 0, _ = e.head.effects?.sites.length || 0, v = (e.base.findings?.hazards.length || 0) + (e.base.findings?.amplifications.length || 0) + (e.base.findings?.anchors.length || 0), y = (e.head.findings?.hazards.length || 0) + (e.head.findings?.amplifications.length || 0) + (e.head.findings?.anchors.length || 0), b = _ - g, x = f && p ? `effect sites ${b > 0 ? "+" : ""}${b}` : f ? "base-only semantics" : p ? "head-only semantics" : e.language === "text" ? "text-only · semantics unavailable" : "semantics unavailable", S = (0, h.useMemo)(() => l && e.language === "csharp" ? pa(l.hunks, {
 		highlight: !0,
 		refractor: Ro,
 		language: "csharp",
 		enhancers: [da(l.hunks)]
-	}) : null, [l]), g = i ? { [i.key]: /* @__PURE__ */ (0, m.jsx)(Jo, {
+	}) : null, [l, e.language]), C = i ? { [i.key]: /* @__PURE__ */ (0, m.jsx)(Jo, {
 		expanded: i,
 		insight: (i.side === "old" ? s : c).get(i.line),
 		callbacks: t
@@ -12437,15 +12439,37 @@ function Yo({ model: e, callbacks: t }) {
 				children: [
 					/* @__PURE__ */ (0, m.jsxs)("div", {
 						className: "rig-diff-file-line",
-						children: [/* @__PURE__ */ (0, m.jsx)("strong", { children: u.name }), /* @__PURE__ */ (0, m.jsxs)("span", {
-							className: "rig-diff-patch-counts",
-							"aria-label": `${d.additions} additions, ${d.deletions} deletions`,
-							children: [/* @__PURE__ */ (0, m.jsxs)("b", { children: ["+", d.additions] }), /* @__PURE__ */ (0, m.jsxs)("i", { children: ["−", d.deletions] })]
-						})]
+						children: [
+							/* @__PURE__ */ (0, m.jsx)("span", {
+								className: `rig-diff-status status-${e.status.toLowerCase()}`,
+								title: `Git status ${e.status}`,
+								children: e.status
+							}),
+							/* @__PURE__ */ (0, m.jsx)("strong", { children: u.name }),
+							/* @__PURE__ */ (0, m.jsxs)("span", {
+								className: "rig-diff-patch-counts",
+								"aria-label": `${d.additions} additions, ${d.deletions} deletions`,
+								children: [/* @__PURE__ */ (0, m.jsxs)("b", { children: ["+", d.additions] }), /* @__PURE__ */ (0, m.jsxs)("i", { children: ["−", d.deletions] })]
+							})
+						]
 					}),
 					u.parent ? /* @__PURE__ */ (0, m.jsx)("span", {
 						className: "rig-diff-parent",
 						children: u.parent
+					}) : null,
+					e.oldPath && e.newPath && e.oldPath !== e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
+						className: "rig-diff-path-change",
+						children: [
+							e.oldPath,
+							" → ",
+							e.newPath
+						]
+					}) : e.oldPath && !e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
+						className: "rig-diff-path-change",
+						children: ["deleted from ", e.oldPath]
+					}) : !e.oldPath && e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
+						className: "rig-diff-path-change",
+						children: ["added as ", e.newPath]
 					}) : null,
 					/* @__PURE__ */ (0, m.jsxs)("span", {
 						className: "rig-diff-revisions",
@@ -12459,19 +12483,15 @@ function Yo({ model: e, callbacks: t }) {
 			}), /* @__PURE__ */ (0, m.jsxs)("div", {
 				className: "rig-diff-summary",
 				children: [
-					/* @__PURE__ */ (0, m.jsxs)("span", {
-						className: `rig-diff-effect-delta ${f > 0 ? "added" : f < 0 ? "removed" : "stable"}`,
-						title: `${e.base.effects.sites.length} base effect sites → ${e.head.effects.sites.length} head effect sites`,
-						children: [
-							"effect sites ",
-							f > 0 ? "+" : "",
-							f
-						]
-					}),
 					/* @__PURE__ */ (0, m.jsx)("span", {
-						className: "rig-diff-tier-status",
-						children: e.base.findings === void 0 || e.head.findings === void 0 ? "tiers 1–3 loading…" : e.base.findings === null || e.head.findings === null ? "tiers 1–3 partially unavailable" : `${e.base.findings.hazards.length + e.base.findings.amplifications.length + e.base.findings.anchors.length}/${e.head.findings.hazards.length + e.head.findings.amplifications.length + e.head.findings.anchors.length} findings`
+						className: `rig-diff-effect-delta ${b > 0 ? "added" : b < 0 ? "removed" : "stable"}`,
+						title: f && p ? `${g} base effect sites → ${_} head effect sites` : `base: ${e.base.semanticState}; head: ${e.head.semanticState}`,
+						children: x
 					}),
+					f || p ? /* @__PURE__ */ (0, m.jsx)("span", {
+						className: "rig-diff-tier-status",
+						children: f && e.base.findings === void 0 || p && e.head.findings === void 0 ? "tiers 1–3 loading…" : f && e.base.findings === null || p && e.head.findings === null ? "tiers 1–3 partially unavailable" : f && p ? `${v}/${y} findings` : f ? `${v} base findings` : `${y} head findings`
+					}) : null,
 					/* @__PURE__ */ (0, m.jsxs)("label", {
 						className: "rig-diff-viewed",
 						title: "Mark this file as reviewed (V)",
@@ -12521,8 +12541,8 @@ function Yo({ model: e, callbacks: t }) {
 			viewType: n,
 			diffType: l.type,
 			hunks: l.hunks,
-			tokens: p,
-			widgets: g,
+			tokens: S,
+			widgets: C,
 			renderGutter: ({ change: e, side: t, renderDefault: n, wrapInAnchor: r }) => {
 				let i = Wo(e, t), o = i == null ? void 0 : (t === "old" ? s : c).get(i), l = kr(e);
 				return r(/* @__PURE__ */ (0, m.jsxs)("span", {

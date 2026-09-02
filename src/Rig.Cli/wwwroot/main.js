@@ -368,7 +368,7 @@ async function loadReviewFiles({ openFirst = false } = {}) {
   const { reviewBase: base, reviewHead: head } = get();
   if (!base || !head || base === head) {
     set({ reviewFiles: null, reviewFilesError: "" });
-    return;
+    return null;
   }
 
   const requestId = ++reviewFilesRequestId;
@@ -376,15 +376,17 @@ async function loadReviewFiles({ openFirst = false } = {}) {
   status("loading changed files…");
   try {
     const data = await api.reviewFiles(base, head);
-    if (requestId !== reviewFilesRequestId) return;
+    if (requestId !== reviewFilesRequestId) return null;
     set({ reviewFiles: data, reviewFilesError: "" });
-    const first = data.files.find((file) => file.reviewable);
-    if (openFirst && !get().reviewFile && first) await loadFileDiff(first.newFile);
-    else status(`${data.files.length} changed files · ${data.files.filter((file) => file.reviewable).length} Semantic-ready`);
+    const first = data.files[0];
+    if (openFirst && !get().reviewFile && first) await loadFileDiff(first.path);
+    else status(`${data.files.length} changed files · ${data.files.filter((file) => file.semanticReady).length} Semantic-ready`);
+    return data;
   } catch (error) {
-    if (requestId !== reviewFilesRequestId) return;
+    if (requestId !== reviewFilesRequestId) return null;
     set({ reviewFiles: null, reviewFilesError: error.message });
     status("review files: " + error.message, true);
+    return null;
   }
 }
 
@@ -409,22 +411,24 @@ async function loadFileDiff(file = get().reviewFile) {
   set({ appMode: "review", reviewFile: file, reviewError: "" });
   refs.reviewFile.value = file;
   setBusy(true);
-  status("building semantic file diff…");
-  // The Windows file-lens contract deliberately keeps effect badges and tiers 1-3 separate: findings are a
-  // slower derivation and may fail without taking the source lens down. Review preserves that boundary. Start
-  // both sides immediately, but render the exact Git patch as soon as /api/file-diff answers.
-  const findingsTask = Promise.all([
-    api.fileFindings(base, base, file).catch(() => null),
-    api.fileFindings(head, head, file).catch(() => null),
-  ]);
+  status("building file diff…");
   try {
     const data = await api.fileDiff(base, head, file, get().reviewIgnoreWhitespace);
     if (requestId !== reviewRequestId) return;
-    set({ reviewData: data, reviewError: "" });
+    const identity = data.relativePath || data.file;
+    set({ reviewFile: identity, reviewData: data, reviewError: "" });
+    refs.reviewFile.value = identity;
     setBusy(false);
-    status(
-      `${baseName(file)} · ${data.base.effects.sites.length} base marks · ${data.head.effects.sites.length} head marks · loading findings…`,
-    );
+    const markCount = (side) => side.effects?.sites?.length || 0;
+    const available = (side) => side.semanticState === "available" && side.file;
+    const semanticStatus = `${available(data.base) ? `${markCount(data.base)} base marks` : data.base.semanticState} · ${available(data.head) ? `${markCount(data.head)} head marks` : data.head.semanticState}`;
+    status(`${baseName(identity)} · ${data.status} · ${semanticStatus}`);
+    // Findings are meaningful only when that revision has an indexed physical file. Missing/text-only sides
+    // resolve immediately to null, so the renderer never advertises a tier request that cannot complete.
+    const findingsTask = Promise.all([
+      available(data.base) ? api.fileFindings(base, base, data.base.file).catch(() => null) : Promise.resolve(null),
+      available(data.head) ? api.fileFindings(head, head, data.head.file).catch(() => null) : Promise.resolve(null),
+    ]);
     const [baseFindings, headFindings] = await findingsTask;
     if (requestId !== reviewRequestId) return;
     set({
@@ -436,9 +440,14 @@ async function loadFileDiff(file = get().reviewFile) {
     });
     const findingCount = (side) =>
       side ? side.hazards.length + side.amplifications.length + side.anchors.length : 0;
-    status(
-      `${baseName(file)} · ${data.base.effects.sites.length} base marks · ${data.head.effects.sites.length} head marks · ${findingCount(baseFindings)}/${findingCount(headFindings)} findings`,
-    );
+    const findingsStatus = available(data.base) && available(data.head)
+      ? `${findingCount(baseFindings)}/${findingCount(headFindings)} findings`
+      : available(data.base)
+        ? `${findingCount(baseFindings)} base findings`
+        : available(data.head)
+          ? `${findingCount(headFindings)} head findings`
+          : "";
+    status(`${baseName(identity)} · ${data.status} · ${semanticStatus}${findingsStatus ? ` · ${findingsStatus}` : ""}`);
   } catch (error) {
     if (requestId !== reviewRequestId) return;
     set({ reviewData: null, reviewError: error.message });
@@ -454,21 +463,28 @@ async function openReviewQuery(value) {
     status("enter a file name or path", true);
     return;
   }
-  const head = get().reviewHead;
-  if (!head) {
-    status("pick a head store first", true);
+  const { reviewBase: base, reviewHead: head } = get();
+  if (!base || !head) {
+    status("pick a base and head store first", true);
     return;
   }
   setBusy(true);
-  status("finding indexed file in head…");
+  status("finding changed file…");
   try {
-    const result = await api.files(head, query, 50);
-    const exact = result.files.find(
-      (file) => file.path === query || file.name.toLowerCase() === query.toLowerCase(),
+    const inventory = get().reviewFiles || await loadReviewFiles();
+    if (!inventory) return;
+    const normalized = query.replaceAll("\\", "/").toLowerCase();
+    const basename = (value) => (value || "").replaceAll("\\", "/").split("/").pop().toLowerCase();
+    const exact = inventory.files.find(
+      (file) => [file.path, file.oldPath, file.newPath, file.oldFile, file.newFile]
+        .filter(Boolean)
+        .some((candidate) => candidate.replaceAll("\\", "/").toLowerCase() === normalized),
     );
-    const selected = exact || result.files[0];
+    const selected = exact || inventory.files.find(
+      (file) => [file.path, file.oldPath, file.newPath].some((candidate) => basename(candidate) === query.toLowerCase()),
+    );
     if (!selected) {
-      status(`no indexed file matches '${query}'`, true);
+      status(`no changed file matches '${query}'`, true);
       return;
     }
     await loadFileDiff(selected.path);
@@ -758,7 +774,7 @@ const actions = {
   openReviewFile,
   openReviewQuery,
   openReviewFileEntry(file) {
-    if (file.reviewable && file.newFile) loadFileDiff(file.newFile);
+    loadFileDiff(file.path);
   },
   setReviewFileSearch(value) {
     set({ reviewFileSearch: value });
@@ -783,16 +799,16 @@ const actions = {
   },
   moveReviewFile(direction) {
     const s = get();
-    const files = visibleReviewFiles(s).filter((file) => file.reviewable && file.newFile);
+    const files = visibleReviewFiles(s);
     if (!files.length) {
-      status("no Semantic-ready files match this filter", true);
+      status("no changed files match this filter", true);
       return;
     }
-    const current = files.findIndex((file) => file.newFile === s.reviewFile);
+    const current = files.findIndex((file) => file.path === s.reviewFile);
     const index = current < 0
       ? direction > 0 ? 0 : files.length - 1
       : (current + direction + files.length) % files.length;
-    loadFileDiff(files[index].newFile);
+    loadFileDiff(files[index].path);
   },
   // ---- file lens overlay controls ----
   // Filter changes are CLIENT-SIDE and instant; only `intrinsic`/`async` change what the server computed, so

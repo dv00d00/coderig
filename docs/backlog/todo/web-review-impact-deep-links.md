@@ -24,7 +24,7 @@ already carry store identities and symbol locations.
 - Ambiguous/missing locations have no dead link and disclose why.
 - Browser back/forward preserves the Impact → Review pivot.
 
-**Blocked by:** [Two-path file diffs](../progress/web-review-two-path-file-diffs.md) for added, deleted, and
+**Unblocked by:** [Two-path file diffs](../done/web-review-two-path-file-diffs.md), including added, deleted, and
 renamed locations.
 
 ## Out of scope

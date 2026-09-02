@@ -49,6 +49,7 @@
 }
 
 .rig-diff-parent,
+.rig-diff-path-change,
 .rig-diff-revisions {
   display: block;
   min-width: 0;
@@ -59,6 +60,36 @@
 
 .rig-diff-parent {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rig-diff-path-change {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem !important;
+}
+
+.rig-diff-status {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.55rem;
+  padding: 0.12rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font: 750 0.72rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rig-diff-status.status-a {
+  color: var(--ok);
+}
+
+.rig-diff-status.status-d {
+  color: var(--danger);
+}
+
+.rig-diff-status.status-m,
+.rig-diff-status.status-r,
+.rig-diff-status.status-c {
+  color: var(--warn);
 }
 
 .rig-diff-revisions {
