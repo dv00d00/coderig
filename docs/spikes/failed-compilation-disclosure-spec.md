@@ -8,7 +8,7 @@ compile must be **prefixed with a disclosure** rather than presented as sound, a
 **Branch:** `live-background-index`. **Family:** disclosure / extraction provenance.
 **Raised by:** [equivalence-test-matrix.md](equivalence-test-matrix.md) § "Non-compiling tree — flagged for the
 human, not decided here" (row 7 of its matrix).
-**Depends on / feeds:** [live-background-index](../backlog/progress/live-background-index.md) Slice 5
+**Depends on / feeds:** [live-background-index](../backlog/done/live-background-index.md) Slice 5
 (staleness disclosure). This spec is the **cold-store half** that Slice 5's baseline-relative mode needs.
 
 ---
@@ -21,7 +21,7 @@ is **silent at query time**: the only signal is a per-index stderr warning
 persisted, so a `rig reaches` run an hour later cannot know the store was built from a broken tree. A dropped
 call edge then reads as "nothing calls this" — a confident, plausible, wrong answer, which is the exact failure
 mode the whole disclosure convention exists to prevent
-(`CLAUDE.md` § "Two-stage design"; `progress/live-background-index.md` § "Constraints any design must respect").
+(`CLAUDE.md` § "Two-stage design"; `done/live-background-index.md` § "Constraints any design must respect").
 
 ---
 
@@ -305,7 +305,7 @@ DeepChain (all seven sources read; `playgrounds/DeepChain/`):
 
 **Propagating to dependents is measurably fatal.** Transitive-dependent distribution over MedDBase's 187
 in-source assemblies: median **6**, mean 24, p90 **68**, max **164**; 23 % of projects have 51+
-(`progress/live-background-index.md` § "The measured constraint that sizes the work"). One broken hub file
+(`done/live-background-index.md` § "The measured constraint that sizes the work"). One broken hub file
 would flag most of the store.
 
 **Propagating to sibling files in the project is also fatal.** Two projects hold **66 %** of MedDBase's 2.44 M
@@ -352,7 +352,7 @@ alone is honest.
    non-compiling file into `playgrounds/` — `tests/Rig.Tests/Fixtures/AnalyzedPlaygrounds.cs` builds each
    playground **once per session and shares it**, so a checked-in broken file poisons every unrelated test
    (that shared-fixture fragility is already the diagnosed shape of
-   [flaky-clientpage-proxy-extraction](../backlog/todo/flaky-clientpage-proxy-extraction.md)).
+   [flaky-clientpage-proxy-extraction](../backlog/needs-review/flaky-clientpage-proxy-extraction.md)).
    `DeepChainPlayground.CreateAsync()` (`tests/Rig.Tests/Fixtures/DeepChainPlayground.cs:25-38`) and
    `TempPlayground.CreateAsync` (`tests/Rig.Tests/Fixtures/TempPlayground.cs:32-45`) both copy to a temp dir —
    mutate **there**.
@@ -382,13 +382,13 @@ failure it catches.
 |---|---|---|---|---|---|
 | **1** | **Syntax error mid-method** | DeepChain `Foundation/Db.cs`: insert a stray `}` inside `Query`'s body, so `Result<T>` (`Db.cs:11-16`) falls outside `Db` | `source_files[Foundation/Db.cs].CompileErrorCount ≥ 1`, codes include a `CS1xxx` parse code; **and** `DataAccess/PatientRepository.cs` flagged (its `Db.Query` call at `:15` now errors). Footer: 2 files. Chip on both files' lines | `T:Foundation.Result\`1` and/or `M:Foundation.Db.Query(System.String)` missing or re-parented; the `Db.Query` invocation ref from `DataAccess` gone or `!:`-targeted | That parse recovery, not just binding, is covered — and that a same-project sibling gets its **own** diagnostic (the §4.1 argument, in the one case where it is least obvious) |
 | **2** | **Missing type** | DeepChain `DataAccess/PatientRepository.cs`: `PatientDto` → `PatientDtoo` | flagged set == exactly `{DataAccess/PatientRepository.cs}` (CS0246, plus CS0535 for the now-unimplemented interface). Footer: 1 file | `M:DataAccess.PatientRepository.GetById(System.Int32)`'s `Signature` changes (error return type); the `new PatientDto{…}` typeUse becomes `!:PatientDtoo`; **the impl `DispatchFact` `IPatientRepository.GetById → PatientRepository.GetById` disappears** | The headline case, **and** the §4.2(1) blind spot in the same fixture: `rig reaches "Db.Query"` from `Web.HomePage.Show` loses the hop while `Web/HomePage.cs` carries **no chip** — assert the footer fires anyway |
-| **3** | **Ambiguous type across two assemblies** | DeepChain, **new runtime fixture**: write `Foundation/DuplicateDto.cs` declaring `namespace Contracts; public sealed class PatientDto {…}`. `DataAccess` sees both `Contracts` and (transitively) `Foundation` | CS0433/CS0104 in every file resolving `PatientDto` while seeing both identities — expect `DataAccess/PatientRepository.cs` and `Business/BookingService.cs`; footer ≥ 2 files | `ReferenceFact.TargetAssembly` for the `PatientDto` typeUse becomes the wrong/ambiguous identity, or the ref becomes `!:PatientDto` | **The one case where a WRONG-but-plausible answer is possible without any fact going missing.** This is the duplicate-assembly-identity signature the spike already hit (`progress/live-background-index.md` § "What the spike killed": 43 errors, first `System.Object is not defined`) and the regression a resident workspace can reintroduce. `TargetAssembly`/`TargetInSource` (`ReferenceFactEntity.cs`) are the fields to assert on — the equivalence matrix (§ 1) names them as its highest-value comparison addition for exactly this reason |
+| **3** | **Ambiguous type across two assemblies** | DeepChain, **new runtime fixture**: write `Foundation/DuplicateDto.cs` declaring `namespace Contracts; public sealed class PatientDto {…}`. `DataAccess` sees both `Contracts` and (transitively) `Foundation` | CS0433/CS0104 in every file resolving `PatientDto` while seeing both identities — expect `DataAccess/PatientRepository.cs` and `Business/BookingService.cs`; footer ≥ 2 files | `ReferenceFact.TargetAssembly` for the `PatientDto` typeUse becomes the wrong/ambiguous identity, or the ref becomes `!:PatientDto` | **The one case where a WRONG-but-plausible answer is possible without any fact going missing.** This is the duplicate-assembly-identity signature the spike already hit (`done/live-background-index.md` § "What the spike killed": 43 errors, first `System.Object is not defined`) and the regression a resident workspace can reintroduce. `TargetAssembly`/`TargetInSource` (`ReferenceFactEntity.cs`) are the fields to assert on — the equivalence matrix (§ 1) names them as its highest-value comparison addition for exactly this reason |
 | **4** | **Deleted member others still call** | DeepChain `Domain/IBookingService.cs`: delete `Book` (leaves a legal empty interface) | flagged set == exactly `{ApiGateway/BookingController.cs}` (CS1061). **`Domain/IBookingService.cs` itself must NOT be flagged.** Footer: 1 file | `M:Domain.IBookingService.Book(System.Int32)` gone; its impl `DispatchFact` gone; `ApiGateway.BookingController.Book`'s invocation ref gone or error-targeted; `Web.HomePage.Show` no longer reaches `Db.Query` | The **asymmetry**: the file the agent edited is clean, the flagged file is a different one. An implementation that flags "the file I edited" passes every other row and fails here |
 | **5** | **A file fails while its dependents do not** (must-not-cascade) | DeepChain `Foundation/Db.cs`: inside `Query`, reference an undefined local (CS0103). Public surface untouched | flagged set == exactly `{Foundation/Db.cs}`. **Zero chips anywhere in `DataAccess`/`Business`/`ApiGateway`/`Web`**, four projects unflagged | Everything outside `Db.cs` **byte-identical** to the clean baseline; `rig reaches "Db.Query"` output byte-identical except the footer/chip | The negative control for §4.1. Mirrors the role row 1 of the equivalence matrix plays for the surface-hash gate: proof the scope *declines* to fire, which nothing else in the suite tests |
 | **6a** | **A project that fails ENTIRELY (no compilation)** | DeepChain: corrupt `Contracts/Contracts.csproj` into invalid XML so the design-time build yields no compilation (`SolutionSourceLoader.cs:238-241`) | **No `source_files` rows exist for `Contracts` at all** → the per-file channel sees nothing. `runs.PartialProjects` must contain `Contracts:no_compilation`, and the footer must emit the second note of §3.2 | Zero facts from `Contracts`; `T:Contracts.PatientDto` and `M:Contracts.IPatientRepository.GetById` absent; dependents' refs to them unresolved | **The highest-severity case**: zero facts read as "nothing declares/calls this". Proves the project channel is not optional. An implementation with only the per-file channel is **silent** here |
 | **6b** | **A project's whole surface removed** | DeepChain: delete `Contracts/PatientDto.cs` outright | 4-5 files flagged across `Contracts`/`DataAccess`/`Business`/`ApiGateway`/`Web`; footer names the count | `T:Contracts.PatientDto` gone; every signature mentioning it re-keys; `M:ApiGateway.BookingController.Book(Contracts.PatientDto)` DocID changes | Multi-project fan of *located* diagnostics — the contrast arm to 6a, and equivalence-matrix row 7's "delete a whole type others reference" |
 | **7a** | **Partially-generated generator output** | `LegacyNet48Web`: break `Pages/Proxies/InvoiceEditProxy.cs` (the checked-in `ClientPage` subclass the generator keys on) with CS0246 | The **source** file flagged; the generated `*_RequestProxy.g.cs` / `*_ResponseProxy.g.cs` for that page absent or malformed. **Generated `source_files` rows (`Basis="generated"`, `SolutionSourceLoader.cs:1338-1350`) must never be silently dropped**; a diagnostic located in a generated document flags that generated row **and** rolls up to the project channel | The generated proxy type + its `Show`/`ShowDialog`/`Redirect` members missing | The case where "which file changed" is a **generator input**, not the generated output. Note `diagnostics: out _` at `:1502` discards generator diagnostics today — this row is the reason to stop discarding them |
-| **7b** | **Generator run fails entirely** | `LegacyNet48Web`: force `RunSourceGeneratorsAsync`'s `catch` (`:1533-1541`) — e.g. delete `Stubs/MedDBaseStubs.cs`'s `MMS.Web.UI.ClientPage` so `GetTypeByMetadataName` returns null (`RequestResponseProxyGenerator.cs:22-23`), or make the generator throw | `runs.PartialProjects` contains `LegacyNet48Web:generator_run`; footer emits the recall note. **No per-file signal exists** (no diagnostic, no rows) | **Zero** generated documents; `LoginProxy` and every other proxy type absent from the store | The other location-less class. **Bonus:** this is also a diagnosis channel for the long-standing ClientPage flake — the `GetTypeByMetadataName`-returns-null-on-ambiguity lead in `progress/live-background-index.md` § "Lead on the long-standing ClientPage flake" and [flaky-clientpage-proxy-extraction](../backlog/todo/flaky-clientpage-proxy-extraction.md). Today that failure is *invisible in the store*; after this slice it is a recorded fact |
+| **7b** | **Generator run fails entirely** | `LegacyNet48Web`: force `RunSourceGeneratorsAsync`'s `catch` (`:1533-1541`) — e.g. delete `Stubs/MedDBaseStubs.cs`'s `MMS.Web.UI.ClientPage` so `GetTypeByMetadataName` returns null (`RequestResponseProxyGenerator.cs:22-23`), or make the generator throw | `runs.PartialProjects` contains `LegacyNet48Web:generator_run`; footer emits the recall note. **No per-file signal exists** (no diagnostic, no rows) | **Zero** generated documents; `LoginProxy` and every other proxy type absent from the store | The other location-less class. **Bonus:** this is also a diagnosis channel for the long-standing ClientPage flake — the `GetTypeByMetadataName`-returns-null-on-ambiguity lead in `done/live-background-index.md` § "Lead on the long-standing ClientPage flake" and [flaky-clientpage-proxy-extraction](../backlog/needs-review/flaky-clientpage-proxy-extraction.md). Today that failure is *invisible in the store*; after this slice it is a recorded fact |
 | **8** | **broken → fixed → broken across successive incremental edits** | DeepChain over **one retained `RigWorkspace`**, via the existing seams `SolutionAnalyzer.AnalyzeRetainingWorkspaceAsync` (`src/Rig.Analysis/SolutionAnalyzer.cs:81`) + `ExtractFromSolutionAsync` (`:126`) + `Solution.WithDocumentText`, exactly as `tests/Rig.Tests/Analysis/IncrementalExtractionSpikeTests.cs:66-71` does. E0 clean → E1 break `Foundation/Db.cs` (CS0103) → E2 revert to the **original text** → E3 break again | E0: ∅. E1: `{Foundation/Db.cs}`. **E2: ∅** — the flag must CLEAR. E3: `{Foundation/Db.cs}` with codes identical to E1 | E2's fact set **SET-EQUAL** to E0 (same `BodyHash`, same `Line`/`EndLine`, no residual line shift) — the same revert property as equivalence-matrix row 20. E3 == E1 | **Two distinct sticking bugs.** (a) The flag accumulated in a resident set and never cleared → sticks forever; that lies "safe", which is worse, because it trains the reader to ignore the marker (§6). (b) Diagnostics memoized per file path rather than recomputed from the **current** compilation. Neither is visible to a single-edit test by construction |
 | **9** | **Warnings only must NOT fire** | DeepChain `Web/HomePage.cs`: add an unused local / `#warning` | `CompileErrorCount == 0`; no chip; **no footer at all** | none | Guards `d.Severity == DiagnosticSeverity.Error` (`SolutionSourceLoader.cs:244`) against being loosened to `>= Warning`, which on a real index would flag nearly everything |
 | **10** | **Error inside an excluded `#if` region must NOT fire** | DeepChain `Foundation/Db.cs`: wrap syntactic garbage in `#if NEVER_DEFINED … #endif` | no flag, no chip, no footer | none | A naive "does the file contain something that looks broken" implementation. Also pins the INFERRED claim in §4.3 to a test rather than to a belief |
@@ -464,7 +464,7 @@ Three knobs, in the order they should be turned:
    tier, the base commit store is known-good, so the high-signal question is not "does this file have errors"
    but "does this file have errors it did **not** have at the indexed commit". Firing rate then ≈ the number
    of files the agent just touched — the actual question, at the actual granularity. That is
-   [live-background-index](../backlog/progress/live-background-index.md) **Slice 5**, and this spec's
+   [live-background-index](../backlog/done/live-background-index.md) **Slice 5**, and this spec's
    `source_files` columns are exactly the baseline it diffs against. **Do not build Slice 5's mode here**; do
    make the columns sufficient for it (they are: per-file count + codes).
 
@@ -508,7 +508,7 @@ decide whether to warn is a notice that goes silent exactly when the query is ch
 **Web slice** (per CLAUDE.md's CLI-vs-web design gate): the `/api/meta` block + DTO fields + the banner are
 **in scope for this feature**, not a follow-on. Serving the disclosure only on the CLI would make the web UI
 the surface that hides it, which is the same defect as
-[web-api-seed-and-effect-disclosure-parity](../backlog/todo/web-api-seed-and-effect-disclosure-parity.md).
+[web-api-seed-and-effect-disclosure-parity](../backlog/todo/cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md).
 
 ---
 
@@ -531,7 +531,7 @@ disclosure would fire on **every** pre-existing store — the fires-on-everythin
 the very mechanism meant to prevent it. The repo's stated philosophy is tripwire-not-migration
 (`SchemaVersion.cs:3-6`: *"a TRIPWIRE, not a migration system"*), and the add-without-bump path is documented
 as the trap that already bit them (`SchemaGate.cs:50-56`). **Cost, stated honestly:** every store must be
-re-indexed once — ~253 s on MedDBase (`progress/live-background-index.md` § "Why").
+re-indexed once — ~253 s on MedDBase (`done/live-background-index.md` § "Why").
 
 ### 8.2 Cache axes
 
@@ -553,7 +553,7 @@ re-indexed once — ~253 s on MedDBase (`progress/live-background-index.md` § "
   removed 2026-07-06). Nothing in this design needs one.
 - Note for the reviewer: `/api/meta`'s `derivationVersion` **already** lacks a store-identity axis — a
   separate live bug, tracked at
-  [api-meta-derivation-version-lacks-store-identity](../backlog/todo/api-meta-derivation-version-lacks-store-identity.md).
+  [api-meta-derivation-version-lacks-store-identity](../backlog/todo/cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md).
   This feature does not fix it and does not depend on it, but a browser on a re-indexed same-commit store will
   serve a stale disclosure until it lands. **Say so in review; do not silently rely on the bump above to cover
   it.**
@@ -681,7 +681,7 @@ rig files --compile-errors --format tsv | ForEach-Object { ($_ -split "`t")[0] }
   granularity buys nothing the chip can render and re-opens the join-fragmentation question of §2.1.
 - **Fixing any of the errors**, and any `--fail-on-compile-errors` exit code. This is disclosure, not a gate.
 - **The baseline-relative mode** — that is Slice 5 of
-  [live-background-index](../backlog/progress/live-background-index.md); this spec supplies the columns it
+  [live-background-index](../backlog/done/live-background-index.md); this spec supplies the columns it
   diffs against (§6.2(3)).
 - **Disclosing `!:` prevalence.** A separate marker with a separate calibration (§3.3). Do not fold it in.
 - **Fixing `/api/meta`'s missing store-identity axis** — separate backlog item, §8.2.

@@ -3,7 +3,7 @@
 **Status:** SHIPPED 2026-08-21 · **Priority: HIGH** (silent under-reporting of hazard context in rig's most-used commands; the
 SQL fast path and the whole-store path disagree about the SAME store, so the answer depends on which internal
 loader ran) · **Found:** 2026-08-21, on MedDBase, by comparing a live-served `reaches` answer against the
-store-served one ([live-background-index](../progress/live-background-index.md) slice 6b) ·
+store-served one ([live-background-index](../done/live-background-index.md) slice 6b) ·
 **Family:** query correctness / effects
 
 ## The bug
@@ -78,7 +78,7 @@ loss applies to each, and the audit is one read of the two projections side by s
 
 ## Related
 
-- Same failure class as [`/api/meta` derivationVersion](api-meta-derivation-version-lacks-store-identity.md):
+- Same failure class as [`/api/meta` derivationVersion](cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md):
   two surfaces silently disagreeing about one store.
 - Found by the live/store equality gate in `tests/Rig.Tests/Live/LiveReachesTests.cs`. That gate compares
   playground answers, where the divergence does NOT reproduce (no playground has a lock held across IO) — it

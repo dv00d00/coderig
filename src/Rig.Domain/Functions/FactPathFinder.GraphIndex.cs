@@ -364,6 +364,11 @@ public static partial class FactPathFinder
         public readonly ConcurrentDictionary<string, bool> DispatchCapableCache = new(StringComparer.Ordinal);
         public HashSet<string> Nodes = new(StringComparer.Ordinal);
 
+        // Monomorphized instantiation nodes (`{base}~mono⟨…⟩`) grouped by the BASE method they instantiate.
+        // Empty on every graph the monomorphizer did not materialize. Read by the reverse seeding in
+        // ReachedByAny / ReachedByLabelledSeeds; see SeedsFor for why a base seed needs them.
+        public Dictionary<string, List<string>> InstantiationsByBase = new(StringComparer.Ordinal);
+
         // ADMITTED EXTERNAL LEAVES (MethodRef.IsExternal — external-node admission): library/BCL call
         // targets that are graph nodes but have no indexed body. They are LEAVES by construction (nothing
         // inside the external DLL was indexed, so they own no adjacency) and DispatchTargets refuses them
@@ -449,8 +454,8 @@ public static partial class FactPathFinder
             }
 
             list.Add(edge);
-            index.Nodes.Add(edge.Caller);
-            index.Nodes.Add(edge.Callee);
+            AddNode(index, edge.Caller);
+            AddNode(index, edge.Callee);
         }
 
         // Sort each adjacency list ONCE here — total order: call-site line (primary, preserves source
@@ -535,7 +540,7 @@ public static partial class FactPathFinder
         }
         foreach (var method in graph.Methods)
         {
-            index.Nodes.Add(method.SymbolId);
+            AddNode(index, method.SymbolId);
             if (method.IsExternal)
             {
                 index.ExternalLeaves.Add(method.SymbolId);
@@ -543,6 +548,24 @@ public static partial class FactPathFinder
         }
 
         return index;
+    }
+
+    // Registers a traversal node, indexing a monomorphized id under its base method on the way in. Gated on
+    // the HashSet insert, so the marker test runs once per DISTINCT node rather than once per edge endpoint.
+    private static void AddNode(GraphIndex index, string id)
+    {
+        if (!index.Nodes.Add(id) || !MonomorphizedNodeId.IsMonomorphized(id))
+        {
+            return;
+        }
+
+        var baseId = MonomorphizedNodeId.BaseOf(id);
+        if (!index.InstantiationsByBase.TryGetValue(baseId, out var instantiations))
+        {
+            index.InstantiationsByBase[baseId] = instantiations = new List<string>();
+        }
+
+        instantiations.Add(id);
     }
 
     // Builds the context-bound dispatch maps from the configured rules: for each base edge of the form

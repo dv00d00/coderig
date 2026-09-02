@@ -382,7 +382,8 @@ public static class GraphMaterializer
                 HandoffDispatcher TEXT,
                 DeliveryPrecision TEXT,
                 NonVirtual INTEGER,
-                EnclosingGuards TEXT
+                EnclosingGuards TEXT,
+                Column INTEGER
             );
             """,
             cancellationToken
@@ -434,8 +435,8 @@ public static class GraphMaterializer
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType, HandoffDispatcher, DeliveryPrecision, NonVirtual, EnclosingGuards) "
-            + "VALUES ($from, $to, $kind, $file, $line, $loopKind, $loopDetail, $receiver, $handoff, $precision, $nonVirtual, $enclosingGuards);";
+            "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType, HandoffDispatcher, DeliveryPrecision, NonVirtual, EnclosingGuards, Column) "
+            + "VALUES ($from, $to, $kind, $file, $line, $loopKind, $loopDetail, $receiver, $handoff, $precision, $nonVirtual, $enclosingGuards, $column);";
         var pFrom = AddParam(command, "$from");
         var pTo = AddParam(command, "$to");
         var pKind = AddParam(command, "$kind");
@@ -448,6 +449,7 @@ public static class GraphMaterializer
         var pPrecision = AddParam(command, "$precision");
         var pNonVirtual = AddParam(command, "$nonVirtual");
         var pEnclosingGuards = AddParam(command, "$enclosingGuards");
+        var pColumn = AddParam(command, "$column");
 
         var count = 0;
         foreach (var edge in FactPathFinder.AllCallEdges(graph))
@@ -464,6 +466,7 @@ public static class GraphMaterializer
             pPrecision.Value = (object?)edge.DeliveryPrecision ?? DBNull.Value;
             pNonVirtual.Value = edge.NonVirtual ? 1 : 0;
             pEnclosingGuards.Value = (object?)edge.EnclosingGuards ?? DBNull.Value;
+            pColumn.Value = edge.Column;
             await command.ExecuteNonQueryAsync(cancellationToken);
             if (++count % InsertBatchSize == 0)
             {

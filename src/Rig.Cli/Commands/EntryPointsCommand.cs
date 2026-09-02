@@ -2,7 +2,6 @@ using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
-using Rig.Storage.Queries;
 using static Rig.Cli.EntryPoints.EntryPointContext;
 using static Rig.Cli.Graph.TraversalGraphLoader;
 using static Rig.Cli.Rendering.EntryPointListRenderer;
@@ -61,21 +60,28 @@ internal static class EntryPointsCommand
         var tsv = CommonOptions.IsTsv(opts.Format);
         var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded (this IS the listing)
 
-        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
+        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules, loadedPaths: out var loadedRulePaths);
         await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
 
-        var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var epSet = await DeriveEntryPointsAsync(context, epData, rules);
-
-        // (file,line) -> handler DocID, so each EP line/row can carry the queryable FQN beside its slash route.
-        var docIdBySite = MethodDocIdBySite(epData);
+        // The whole-store EP record set, through the SAME artifact-cache entry `callers --entrypoints` uses —
+        // this listing IS that derivation with no question attached, so it must not pay it per invocation
+        // (see EntryPointContext.LoadOrDeriveEntryPointRecordsAsync).
+        var source = Live.StoreQueryFactSource.Borrowing(context, io.WorkspaceLocation);
+        using var epCache = source.OpenArtifactCache(useCache: true);
+        var epRecords = await LoadOrDeriveEntryPointRecordsAsync(
+            source: source,
+            cache: epCache,
+            rulesHash: RulesFingerprint.ComputeFromPaths(loadedRulePaths),
+            rules: rules
+        );
 
         // The full entry-point set: rule-detected EPs + promoted async-handoff origins (what callers
         // --entrypoints / impact seed from), deduped + sorted by (kind, route) for a stable listing.
-        var eps = epSet
-            .Derived.Concat(epSet.PromotedOrigins)
+        // The group key IS four of the record's six fields and DocId is a function of the other two, so
+        // First() is the same row the old projection rebuilt field-by-field off the key.
+        var eps = epRecords
             .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
-            .Select(g => (g.Key.Kind, g.Key.Route, g.Key.FilePath, g.Key.Line, g.First().Requires))
+            .Select(g => g.First())
             .OrderBy(e => e.Kind, StringComparer.Ordinal)
             .ThenBy(e => e.Route, StringComparer.Ordinal)
             .ToList();
@@ -93,7 +99,7 @@ internal static class EntryPointsCommand
                 var loaded = deployments.ServicesForFile(e.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
                 io.TextOutput.Output.WriteLine(
-                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)}"
+                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{FqnOrRoute(e)}"
                 );
             }
 
@@ -113,7 +119,7 @@ internal static class EntryPointsCommand
                     filePath: e.FilePath,
                     line: e.Line,
                     requires: e.Requires,
-                    fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)
+                    fqn: FqnOrRoute(e)
                 );
             }
 

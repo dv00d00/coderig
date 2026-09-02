@@ -2,7 +2,7 @@
 
 **Status:** SHIPPED 2026-08-23 (Slice 7B1) · **Priority: was MEDIUM** (a disclosure line that can be false; no wrong FACTS, but rig's whole
 contract is that its disclosures are trustworthy) · **Found:** 2026-08-21, measured while building live query
-serving ([live-background-index](../progress/live-background-index.md) slice 6b) · **Family:** disclosure / reaches
+serving ([live-background-index](../done/live-background-index.md) slice 6b) · **Family:** disclosure / reaches
 
 ## The bug
 

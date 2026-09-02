@@ -2,7 +2,7 @@
 
 **Status:** SPEC (read-only analysis; no code changed). Branch `live-background-index`. Implements
 `docs/memory-optimization-strategies.md` §A1 as **Slice 2** of
-[live-background-index](../backlog/progress/live-background-index.md). §A2 (sliding-window
+[live-background-index](../backlog/done/live-background-index.md). §A2 (sliding-window
 `Compilation` lifetime) is explicitly OUT of scope here — see §6.
 
 Roslyn is pinned at **5.6.0** (`Directory.Packages.props:12-13`). Every Roslyn claim below is from
@@ -403,7 +403,7 @@ Never `CliApplicationTests.cs`. TUnit on Microsoft.Testing.Platform — run a su
 3. `Generated_documents_are_still_extracted` — over `playgrounds/LegacyNet48Web` (the proxy-generator
    playground), assert the generated proxy facts are present (§4.5). **Assert presence only** — this is
    the playground implicated in the long-standing ClientPage flake
-   (`docs/backlog/todo/flaky-clientpage-proxy-extraction.md`); do not add a count assertion that the flake
+   (`docs/backlog/needs-review/flaky-clientpage-proxy-extraction.md`); do not add a count assertion that the flake
    can trip.
 4. `IncrementalExtractionSpikeTests` must pass **with its assertions untouched**. If it needs editing, the
    change has altered extraction semantics — stop and report, do not adjust the test.

@@ -1,6 +1,6 @@
 # Slice 4 — the surface-hash cascade gate
 
-**Design, read-only.** Slice 4 of [live-background-index](../backlog/progress/live-background-index.md).
+**Design, read-only.** Slice 4 of [live-background-index](../backlog/done/live-background-index.md).
 The gate that decides whether an edit cascades to a project's dependents. Roslyn's cascade is
 dependency-shaped and surface-BLIND ([roslyn-incrementality-findings](roslyn-incrementality-findings.md) §2:
 skeleton references are cross-language only, `SolutionCompilationState.cs:1312-1330`, and rig hard-codes

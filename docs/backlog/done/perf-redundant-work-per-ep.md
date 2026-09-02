@@ -6,7 +6,7 @@ F5 NOT-A-REDUNDANCY (investigated), residuals: `TruncationCause` split DONE (`86
 routing WON'T DO (2026-06-23 decision, recorded below). No open actionable work remains; kept as the
 redundancy-pattern ledger. Follow-on structural work lives in
 [redundant-graph-index-rebuild-per-query](redundant-graph-index-rebuild-per-query.md) and
-[warm-graph-across-queries](../todo/warm-graph-across-queries.md).
+[warm-graph-across-queries](../todo/derivation-cache-5-warm-graph-across-queries.md).
 
 Found by running `rig` on its own store and reading every EP's `--format llm` call tree (the `x-phase` flag
 makes a re-reached node a first-class row). One command calling the same heavy load more than once in a

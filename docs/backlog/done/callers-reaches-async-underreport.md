@@ -19,4 +19,4 @@ Real-store: `Master.GetCompany` sync 14 → "+14 more" → `--async` 28; `Master
 Note the backlog's "handoff-skipped count already computed in FactPathFinder" was WRONG — no such count is
 exposed; the async re-probe (the proven 0-case pattern) was used instead.
 
-**Residual follow-ups:** see `docs/backlog/todo/callers-reaches-underreport-followups.md`.
+**Residual follow-ups:** see `docs/backlog/needs-review/callers-reaches-underreport-followups.md`.

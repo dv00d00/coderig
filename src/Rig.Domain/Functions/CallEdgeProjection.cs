@@ -28,10 +28,10 @@ namespace Rig.Domain.Functions;
 public static class CallEdgeProjection
 {
     // The reference_facts columns a CallEdge is a function of: TargetSymbolId, RefKind, EnclosingSymbolId,
-    // FilePath, Line, EnclosingLoopKind, EnclosingLoopDetail, ReceiverType, TypeArguments, DelegateConsumer,
-    // DeclaringTypeArgBinding, MethodTypeArgBinding, NonVirtual, EnclosingGuards. A loader that supplies
-    // placeholders for the REST of the ReferenceFact (TargetAssembly / TargetInSource — consumed by the
-    // caller's own WHERE, not by this mapping — and the invocation-only argument/scope columns) is correct.
+    // FilePath, Line, Column, EnclosingLoopKind, EnclosingLoopDetail, ReceiverType, TypeArguments,
+    // DelegateConsumer, DeclaringTypeArgBinding, MethodTypeArgBinding, NonVirtual, EnclosingGuards. A loader
+    // that supplies placeholders for the REST of the ReferenceFact (TargetAssembly / TargetInSource — consumed
+    // by the caller's own WHERE, not by this mapping — and the invocation-only argument/scope columns) is correct.
     //
     // HandoffDispatcher and DeliveryPrecision are always null here BY CONSTRUCTION: neither is a fact. The
     // handoff dispatcher is attached later by HandoffClassifier.Classify (which both callers run over the
@@ -54,6 +54,7 @@ public static class CallEdgeProjection
             MethodTypeArgBinding: r.MethodTypeArgBinding,
             DeliveryPrecision: null,
             NonVirtual: r.NonVirtual,
-            EnclosingGuards: r.EnclosingGuards
+            EnclosingGuards: r.EnclosingGuards,
+            Column: r.Column
         );
 }

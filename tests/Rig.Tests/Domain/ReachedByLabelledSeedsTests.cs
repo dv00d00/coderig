@@ -215,6 +215,40 @@ public sealed class ReachedByLabelledSeedsTests
         singleTarget[0].Keys.ShouldNotContain("M:N.Caller.Go");
     }
 
+    // A seed stands for its monomorphized instantiations too, because Materialize REPLACES the callee of a
+    // fully-concrete call edge with the instantiation node: the base id keeps its body but loses that caller.
+    // Effects only ever carry the base id, so without the expansion a materialized effectful generic has no
+    // reverse reach at all. Pinned on BOTH walks so the equivalence above stays a real constraint.
+    [Test]
+    public void A_base_seed_also_admits_the_monomorphized_instantiations_of_that_base()
+    {
+        const string caller = "M:N.Caller.Go";
+        const string generic = "M:N.Ext.Fill``1(N.List{``0})";
+        var raw = new FactGraphData(
+            [new CallEdge(caller, generic, "invocation", "f.cs", 1, ReceiverType: "N.RowList", MethodTypeArgBinding: """["C:N.Row"]""")],
+            Array.Empty<ImplementsEdge>(),
+            [new MethodRef(caller, "Go", "T:N.Caller"), new MethodRef(generic, "Fill", "T:N.Ext")]
+        );
+        var shaped = FactPathFinder.ShapeGraph(
+            raw,
+            [],
+            [],
+            [],
+            monomorphizeSignatures: new Dictionary<string, string>(StringComparer.Ordinal) { [generic] = "void Fill<T>(List<T> list)" }
+        );
+
+        var instantiation = MonomorphizedNodeId.For(generic, [], ["N.Row"]);
+        shaped.CallEdges.ShouldContain(edge => edge.Caller == caller && edge.Callee == instantiation);
+        shaped.CallEdges.ShouldNotContain(edge => edge.Caller == caller && edge.Callee == generic);
+
+        var separate = FactPathFinder.ReachedByAny(shaped, [generic], maxDepth: int.MaxValue, maxNodes: int.MaxValue);
+        separate[generic].ShouldBe(0);
+        separate[instantiation].ShouldBe(0);
+        separate[caller].ShouldBe(1);
+
+        ShouldEqualSeparateWalks(shaped, [generic]);
+    }
+
     [Test]
     public void No_labels_is_an_empty_result_and_over_sixty_four_is_refused()
     {

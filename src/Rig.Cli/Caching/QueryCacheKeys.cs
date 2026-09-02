@@ -115,7 +115,9 @@ internal static class QueryCacheKeys
     // v3->v4: badges carry the amplification tier (Looped).
     // v4->v5: ViaDispatchOnly fires only for a dispatch hop with MORE THAN ONE candidate target; a single-candidate
     // hop is now an ordinary reach, so a warm v4 blob would keep hedging every one-implementation service call.
-    internal const int FileEffectsSchema = 5;
+    // v5->v6: the reverse walk now expands a base seed to its monomorphized instantiations, so a warm v5 blob
+    // would keep serving rows/hedges/depths computed over the un-expanded seed set.
+    internal const int FileEffectsSchema = 6;
 
     // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)

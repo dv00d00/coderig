@@ -1102,6 +1102,24 @@ public static partial class FactPathFinder
         return depthOf;
     }
 
+    // A reverse seed stands for its monomorphized INSTANTIATIONS as well as itself: an instantiation's body is
+    // a clone of the base body, so it performs the base's effects. The reverse twin of the forward
+    // MonomorphCollapse — and load-bearing, because Materialize REPLACES the callee of a fully-concrete call
+    // edge with the instantiation node, leaving a base-keyed seed with no callers to walk at all.
+    private static IEnumerable<string> SeedsFor(GraphIndex index, string seed)
+    {
+        yield return seed;
+        if (!index.InstantiationsByBase.TryGetValue(seed, out var instantiations))
+        {
+            yield break;
+        }
+
+        foreach (var instantiation in instantiations)
+        {
+            yield return instantiation;
+        }
+    }
+
     // Multi-source reverse reachability — like ReachedBy, but seeded from a SET of EXACT SymbolIds
     // (not a substring pattern), returning the union of everything that can reach ANY of them keyed
     // to its shortest reverse hop count to the nearest seed. Mirrors ReachableFromAll's exact-id
@@ -1125,12 +1143,16 @@ public static partial class FactPathFinder
         var queue = new Queue<string>();
         foreach (var seed in seeds)
         {
-            // Seed by EXACT id (the changed methods are concrete DocIDs). A seed absent from the graph
-            // (e.g. a method with no edges either way) is simply not a traversal node — skip it.
-            if (index.Nodes.Contains(seed) && !depthOf.ContainsKey(seed))
+            // Seed by EXACT id (the changed methods are concrete DocIDs), plus that id's instantiations
+            // (SeedsFor). A seed absent from the graph (e.g. a method with no edges either way) is simply
+            // not a traversal node — skip it.
+            foreach (var node in SeedsFor(index, seed))
             {
-                depthOf[seed] = 0;
-                queue.Enqueue(seed);
+                if (index.Nodes.Contains(node) && !depthOf.ContainsKey(node))
+                {
+                    depthOf[node] = 0;
+                    queue.Enqueue(node);
+                }
             }
         }
 
@@ -1224,22 +1246,25 @@ public static partial class FactPathFinder
         for (var label = 0; label < labels; label++)
         {
             // A seed absent from the graph (a method with no edges either way) is not a traversal node —
-            // skipped, exactly as ReachedByAny does.
+            // skipped, exactly as ReachedByAny does. Instantiations expand the same way too (SeedsFor).
             foreach (var seed in seedsByLabel[label])
             {
-                if (!index.Nodes.Contains(seed))
+                foreach (var node in SeedsFor(index, seed))
                 {
-                    continue;
-                }
+                    if (!index.Nodes.Contains(node))
+                    {
+                        continue;
+                    }
 
-                var slot = Slot(seed);
-                if (slot[label] == 0)
-                {
-                    continue;
-                }
+                    var slot = Slot(node);
+                    if (slot[label] == 0)
+                    {
+                        continue;
+                    }
 
-                slot[label] = 0;
-                queue.Enqueue((seed, 1UL << label));
+                    slot[label] = 0;
+                    queue.Enqueue((node, 1UL << label));
+                }
             }
         }
 
@@ -1373,7 +1398,10 @@ public static partial class FactPathFinder
         bool NonVirtual,
         // CFG control-dependence guard set of the call SITE (CallEdge.EnclosingGuards) — materialized into
         // the derived call_edges view so the SQL-bounded graph load round-trips it (the tree --guards glyph).
-        string? EnclosingGuards
+        string? EnclosingGuards,
+        // 1-based start column of the call SITE (CallEdge.Column) — materialized into call_edges so the
+        // stored edge identifies which of several calls on one line it came from.
+        int Column
     )> AllCallEdges(FactGraphData graph)
     {
         foreach (var edge in graph.CallEdges)
@@ -1390,7 +1418,8 @@ public static partial class FactPathFinder
                 edge.HandoffDispatcher,
                 edge.DeliveryPrecision,
                 edge.NonVirtual,
-                edge.EnclosingGuards
+                edge.EnclosingGuards,
+                edge.Column
             );
         }
     }

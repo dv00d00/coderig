@@ -249,9 +249,12 @@ export function lensModel(dto, findings) {
 
 // ---- the filter ---------------------------------------------------------------------------------------
 
-// Every field here is URL-addressable (see store.js). CLIENT-SIDE fields re-render instantly, which matters
-// a great deal when the underlying query costs ~50s on a cold store: a reader tunes depth and basis without
-// ever refetching. Only `intrinsic` and `async` change what the SERVER computes, and the UI says so.
+// Every field here is URL-addressable (see store.js) and CLIENT-SIDE: /api/file-effects takes no filter
+// params (`file`, `store` only — see FileEffectsEndpoint.cs), so every field here re-renders instantly from
+// the one resident payload and none of them ever refetches. `intrinsic`/`async` toggles were removed from
+// this filter (2026-09-02): the endpoint has no such parameter, so they changed nothing and the "CHANGES THE
+// QUERY, refetches" label was a lie. A cache-key axis for them, if built, is tracked separately —
+// docs/backlog/todo/cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md §7.
 export const LENS_FILTER_DEFAULTS = {
   mode: "none", // none | only | exclude   (provider / provider:operation tokens)
   tokens: [],
@@ -265,12 +268,9 @@ export const LENS_FILTER_DEFAULTS = {
   grain: "family", // family | provider
   distant: "fold", // fold | expand | hide  (what happens to the depth>0 fan-out)
   outlineSort: "line", // line | severity   (view preference, not a filter — never counts as "filtered")
-  intrinsic: false, // SERVER — refetch
-  async: false, // SERVER — refetch
 };
 export const lensFilterDefaults = () => ({ ...LENS_FILTER_DEFAULTS, tokens: [] });
 
-const SERVER_KEYS = ["intrinsic", "async"];
 // `outlineSort` is a VIEW preference, not a filter — sorting the index differently hides nothing, so it must
 // never trip the FILTERED disclosure. Everything else in the defaults does hide something.
 const FILTER_KEYS = Object.keys(LENS_FILTER_DEFAULTS).filter((k) => k !== "outlineSort");
@@ -280,7 +280,6 @@ export const isFilterActive = (f) =>
       ? [...(f[k] || [])].sort().join(",") !== [...LENS_FILTER_DEFAULTS[k]].sort().join(",")
       : f[k] !== LENS_FILTER_DEFAULTS[k],
   );
-export const serverFilterChanged = (a, b) => SERVER_KEYS.some((k) => a[k] !== b[k]);
 
 const tokenMatch = (b, t) => {
   const low = t.toLowerCase();
@@ -800,10 +799,6 @@ function FilterBar(s, actions, model, result) {
       seg("⟳ tier 2", tierOn("amp") ? "on" : "HIDDEN", "amplification — the effect on this line runs once per iteration (looped_effect)", toggleTier("amp"), !tierOn("amp")),
       seg("⟳↓ tier 3", tierOn("xm") ? "on" : "HIDDEN", "cross-method amplification — the loop is on this line, the I/O is beneath the call", toggleTier("xm"), !tierOn("xm")),
       seg("tier 3 ≥", f.tier3Min, "minimum anchor confidence. `low` anchors are leads, not findings — raise this to medium to see only the ones worth acting on.", cycle("tier3Min", ["low", "medium", "high"]), f.tier3Min !== "low"),
-      h("span", { class: "fsep" }, "│"),
-      h("span", { class: "fseg-lbl" }, "server"),
-      seg("intrinsic", f.intrinsic ? "on" : "off", "include language-intrinsic alloc/throw effects — CHANGES THE QUERY, refetches", () => set({ intrinsic: !f.intrinsic }), f.intrinsic),
-      seg("async", f.async ? "on" : "off", "walk async / scheduled handoffs — CHANGES THE QUERY, refetches", () => set({ async: !f.async }), f.async),
       isFilterActive(f)
         ? h("button", { class: "fclear", onClick: () => actions.resetLensFilter() }, "clear filters")
         : null,

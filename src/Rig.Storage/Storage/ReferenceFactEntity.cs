@@ -11,6 +11,12 @@ public sealed class ReferenceFactEntity
     public bool TargetInSource { get; set; }
     public string FilePath { get; set; } = "";
     public int Line { get; set; }
+
+    // 1-based start column of the reference (ReferenceFact.Column), the same convention as Line — the
+    // coordinate that separates two call sites sharing one line. Added with schema index v8 (version-gated,
+    // so there is no read-as-0 compatibility path to preserve).
+    public int Column { get; set; }
+
     public string? ReceiverType { get; set; }
     public string? FirstArgumentTemplate { get; set; }
     public string? FirstArgumentType { get; set; }

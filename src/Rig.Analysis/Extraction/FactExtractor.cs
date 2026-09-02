@@ -788,6 +788,7 @@ internal static class FactExtractor
             }
 
             var invokerId = EnclosingSymbolId(invocation, model, lambdaIds, enclosingCache, symbolCache);
+            var slotStart = tree.GetLineSpan(invocation.Span).StartLinePosition;
             references.Add(
                 new ReferenceFact(
                     TargetSymbolId: slot,
@@ -796,7 +797,8 @@ internal static class FactExtractor
                     TargetAssembly: assemblyName,
                     TargetInSource: true,
                     FilePath: tree.FilePath,
-                    Line: tree.GetLineSpan(invocation.Span).StartLinePosition.Line + 1
+                    Line: slotStart.Line + 1,
+                    Column: slotStart.Character + 1
                 )
             );
 
@@ -992,7 +994,8 @@ internal static class FactExtractor
             );
 
             // release: at the closing brace of the block (or the embedded statement's last line).
-            var releaseLine = tree.GetLineSpan(lockStmt.Statement.Span).EndLinePosition.Line + 1;
+            var releaseEnd = tree.GetLineSpan(lockStmt.Statement.Span).EndLinePosition;
+            var releaseLine = releaseEnd.Line + 1;
 
             AddReference(
                 references,
@@ -1004,6 +1007,7 @@ internal static class FactExtractor
                 structural: structural,
                 allowRuntime: true,
                 lineOverride: releaseLine,
+                columnOverride: releaseEnd.Character + 1,
                 symbolCache: symbolCache
             );
         }
@@ -1271,6 +1275,7 @@ internal static class FactExtractor
         string? firstArgumentName = null,
         string? delegateConsumer = null,
         int? lineOverride = null,
+        int? columnOverride = null,
         string? argumentTemplates = null,
         string? argumentNames = null,
         SymbolStringCache? symbolCache = null,
@@ -1339,6 +1344,12 @@ internal static class FactExtractor
             return;
         }
 
+        // Both coordinates come from ONE line span. An override retargets the ref to a position the `node`
+        // does not occupy (the lock RELEASE is pinned to the locked body's closing brace), so the line and
+        // the column must be overridden together — a node-derived column on an overridden line points at
+        // unrelated text.
+        var start = tree.GetLineSpan(node.Span).StartLinePosition;
+
         references.Add(
             new ReferenceFact(
                 TargetSymbolId: docId,
@@ -1347,7 +1358,7 @@ internal static class FactExtractor
                 TargetAssembly: assembly,
                 TargetInSource: inSource,
                 FilePath: tree.FilePath,
-                Line: lineOverride ?? tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
+                Line: lineOverride ?? start.Line + 1,
                 ReceiverType: receiverType,
                 FirstArgumentTemplate: Interned(firstArgumentTemplate),
                 FirstArgumentType: firstArgumentType,
@@ -1373,7 +1384,8 @@ internal static class FactExtractor
                 EnclosingGuards: Interned(enclosingGuards),
                 EnclosingLoopElementType: structural.LoopElementType,
                 EnclosingLoopBindType: structural.LoopBindType,
-                InExpressionTree: structural.InExpressionTree
+                InExpressionTree: structural.InExpressionTree,
+                Column: columnOverride ?? start.Character + 1
             )
         );
     }
@@ -2846,7 +2858,8 @@ internal static class FactExtractor
                 // Resolved in the CFG that CONTAINS the literal: for a lambda nested in another lambda that
                 // is the outer lambda's sub-CFG, so the inner one is correctly unguarded relative to its own
                 // body. BuildGuardGraphs collects pre-order, so the enclosing CFG always matches first.
-                EnclosingGuards: symbolCache.Intern(EncodedGuardsFor(lambda, model, cfgGuardCache))
+                EnclosingGuards: symbolCache.Intern(EncodedGuardsFor(lambda, model, cfgGuardCache)),
+                Column: lineSpan.StartLinePosition.Character + 1
             )
         );
 

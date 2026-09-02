@@ -5,7 +5,7 @@
 **Priority: HIGH** (silent wrong/incomplete answers at exactly the moment rig is most used — right after an
 edit; the failure is a confident "nothing calls this", not an error) · **Found:** 2026-08-20, raised by the
 [equivalence-test-matrix](../../spikes/equivalence-test-matrix.md) § "Non-compiling tree" while specifying the
-[live-background-index](../progress/live-background-index.md) spike pool · **Family:** disclosure / extraction
+[live-background-index](../done/live-background-index.md) spike pool · **Family:** disclosure / extraction
 provenance
 
 **Decision:** the **product owner chose the prefix-with-disclosure approach on 2026-08-20** — facts derived
@@ -83,7 +83,7 @@ thing in one line — *"Silently answering about pre-edit code is the failure th
 `/api/meta` gains a `compileErrors: { files, total, projects[] }` block; the tree/reaches/hazards/path/impact
 DTOs gain `bindingHealth`, mirroring `SourceResponseDto.StoreDirty` (`SourceContracts.cs:33-37`); the SPA
 renders a banner. Shipping CLI-only would make the web UI the surface that **hides** the disclosure — the same
-defect as [web-api-seed-and-effect-disclosure-parity](web-api-seed-and-effect-disclosure-parity.md).
+defect as [web-api-seed-and-effect-disclosure-parity](cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md).
 
 ## Stress test — the point of the item, not a garnish
 
@@ -127,7 +127,7 @@ Mitigations, in order: (1) **measure before shipping** — one MedDBase index, `
 known; (2) a **project-saturation rollup** — above ~50 % of a project's indexed files (floor 10), suppress
 per-line chips and emit one project-level footer line instead (threshold provisional, set it from the
 histogram); (3) the real fix is **baseline-relative** firing in the resident tier — flag files whose error set
-is *new* relative to the indexed commit, which is [live-background-index](../progress/live-background-index.md)
+is *new* relative to the indexed commit, which is [live-background-index](../done/live-background-index.md)
 Slice 5 and is exactly what these columns are the baseline for.
 
 Known false negatives, accepted and covered by the unconditional footer rather than by widening the scope: a
@@ -138,7 +138,7 @@ location-less project failures have no rows; Roslyn's cascade suppression under-
 
 The project channel gives the long-standing **ClientPage generator flake** a recorded diagnosis channel — a
 generator run that fails today is invisible in the store, which is why
-[flaky-clientpage-proxy-extraction](flaky-clientpage-proxy-extraction.md) can only be chased through test
+[flaky-clientpage-proxy-extraction](../needs-review/flaky-clientpage-proxy-extraction.md) can only be chased through test
 flakiness. After this slice, `runs.PartialProjects` names it.
 
 ---

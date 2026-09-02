@@ -87,7 +87,7 @@ method"), `FileEffectLensFilterTests` (13). Full suite 1332/1332.
 ## Extracted follow-up — provider grain
 
 The independently shippable provider-grain design and its 66-label calibration gate now live in
-[file-lens-provider-grain](../todo/file-lens-provider-grain.md). This completed delivery record no longer owns
+[file-lens-provider-grain](../todo/file-lens-grain-2-provider-grain.md). This completed delivery record no longer owns
 that open scope.
 
 ## Delivered — slice C (tiers 1-3 are real data)
@@ -141,8 +141,8 @@ counts the fixture carried, derived independently. Cold 71s (the hazard pass), w
 
 ## Extracted follow-ups
 
-- Lazy witness resolution: [file-lens-lazy-witness-path](../todo/file-lens-lazy-witness-path.md).
-- Rider finding visuals: [Rider plugin minimal product](../progress/rider-plugin-minimal-product.md).
+- Lazy witness resolution: [file-lens-lazy-witness-path](../todo/file-lens-grain-5-lazy-witness-path.md).
+- Rider finding visuals: [Rider plugin minimal product](../done/rider-plugin-minimal-product.md).
 
 ## Original slice C notes, kept for the record
 

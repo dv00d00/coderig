@@ -73,8 +73,8 @@ health belongs in the same line.
   evidence and the resident-specific requirements.
 - The recurring family this program keeps hitting: a disclosure computed from an artefact of the query plan
   rather than from the answer ([intrinsic hint](intrinsic-hint-counted-before-reachability-filter.md),
-  [baked call_edges](baked-call-edges-ignore-rules-edits.md),
-  [path disclosures](path-disclosures-computed-off-the-loaded-subgraph.md)). This one is worse in kind: the
+  [baked call_edges](question-vs-plan-1-baked-call-edges-ignore-rules-edits.md),
+  [path disclosures](question-vs-plan-2-path-disclosures-computed-off-the-loaded-subgraph.md)). This one is worse in kind: the
   disclosure is not merely mis-scoped, it is absent while a health claim is made in its place.
 
 ## SHIPPED 2026-08-21 — commit `78581485`

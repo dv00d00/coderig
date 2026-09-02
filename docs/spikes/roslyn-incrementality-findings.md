@@ -1,7 +1,7 @@
 # Roslyn incrementality — what `AdhocWorkspace` actually gives us
 
 **Spike, read-only.** Answers the five questions the resident-index plan
-([live-background-index](../backlog/progress/live-background-index.md)) rests on, against the *pinned*
+([live-background-index](../backlog/done/live-background-index.md)) rests on, against the *pinned*
 Roslyn, not against folklore.
 
 ## Provenance of every citation below

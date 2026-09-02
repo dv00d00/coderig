@@ -32,3 +32,11 @@ schema bump before any warm store reflects it).
     indexed store — none of them stay valid across the schema change.
 - Until this lands, the PSI-resolve fallback in `MatchOnLine` is the only mitigation, and it does not cover
   the same-target-twice-on-one-line case above.
+
+## Related
+
+- [`tree --full` suppresses a distinct call leaf sharing a line with an effect](./tree-full-suppresses-call-leaves-sharing-a-line-with-an-effect.md)
+  — a second surface with the same root cause, blocked on this card. `TreeCommand.cs:693,707,708` key
+  suppression and dedup on `(Enclosing, Line)` and `(Enclosing, Target, Line)`; both keys widen to include the
+  column once it exists.
+

@@ -56,8 +56,8 @@ export const store = createStore({
   reviewFolderCollapse: { normal: {}, search: {} }, // base/head pair -> collapsed directory paths
   reviewViewed: [], // exact changed paths marked Viewed for the active base/head pair
   // The lens overlay's own filter — URL-addressable so a tuned view is shareable (see lensToUrl/lensFromUrl).
-  // Everything but `intrinsic`/`async` is applied CLIENT-SIDE, which is the point: the underlying query costs
-  // ~50s cold, so depth/basis/grain tuning must never refetch.
+  // Every field is applied CLIENT-SIDE, which is the point: the underlying query costs ~50s cold, so
+  // depth/basis/grain tuning must never refetch.
   lensFilter: lensFilterDefaults(),
   // Legend starts OPEN and remembers being dismissed (main.js owns the localStorage side, as with theme):
   // the grammar is four axes, and a reader meeting it for the first time should not have to hunt for the key.
@@ -154,8 +154,6 @@ const LENS_URL_KEYS = {
   grain: "lgrain",
   distant: "lbelow",
   outlineSort: "lsort",
-  intrinsic: "lintrinsic",
-  async: "lasync",
 };
 function lensToUrl(p, f) {
   for (const [key, param] of Object.entries(LENS_URL_KEYS)) {
@@ -187,8 +185,6 @@ export function lensFromUrl(p) {
   int("lmax", "maxDepth");
   f.directOnly = p.get("lhere") === "1";
   f.loopedOnly = p.get("lloop") === "1";
-  f.intrinsic = p.get("lintrinsic") === "1";
-  f.async = p.get("lasync") === "1";
   f.tokens = (p.get("ltok") || "").split(",").map((t) => t.trim()).filter(Boolean);
   const tiers = p.get("ltiers");
   if (tiers !== null)

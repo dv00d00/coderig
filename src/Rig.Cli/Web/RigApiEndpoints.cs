@@ -46,9 +46,10 @@ internal static class RigApiEndpoints
                 {
                     var location = new WorkspaceLocation(workingDirectory, NullIfBlank(store));
                     var storeDirectory = StoreLayout.ResolveReadStoreDir(location);
+                    var storeKey = QueryCacheKeys.StoreKey(Path.Combine(storeDirectory, StoreLayout.DbFileName));
                     return Results.Json(
                         new RigMetaResponseDto(
-                            DerivationVersion(workingDirectory),
+                            DerivationVersion(workingDirectory, storeKey),
                             Path.GetFullPath(workingDirectory),
                             Path.GetFullPath(storeDirectory),
                             Path.GetFileName(storeDirectory) ?? ""
@@ -339,20 +340,24 @@ internal static class RigApiEndpoints
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     // The cache-invalidation version for DERIVED output. A store's facts are immutable, but tree/effects/
-    // hazards/impact also depend on (a) the derivation LOGIC/payload schema and (b) the rule set — so the client
-    // must key its cache by more than the store id. The token folds the rule fingerprint (changes on any rule
-    // edit) with QueryCacheKeys.DerivationSchemaToken (every per-artifact schema version) — so a bump to ANY
-    // server-side cache schema also moves this, keeping the client in lockstep and never serving an artifact
-    // whose server schema advanced. Loaded fresh per call so a mid-session rig.rules.json edit is caught.
+    // hazards/impact also depend on (a) the STORE ITSELF (a reindex of the same commit moves rig.db size/mtime
+    // with no directory-name change — StoreLayout.NewStoreId is stable per commit), (b) the derivation
+    // LOGIC/payload schema, and (c) the rule set — so the client must key its cache by more than the store id.
+    // The token folds `storeKey` (QueryCacheKeys.StoreKey — the same rig.db size+mtime primitive every
+    // server-side cache key already uses) with the rule fingerprint (changes on any rule edit) and
+    // QueryCacheKeys.DerivationSchemaToken (every per-artifact schema version) — so a reindex, a rule edit, or
+    // a bump to ANY server-side cache schema all move this, keeping the client in lockstep and never serving a
+    // pre-reindex tree/effects/hazards/impact forever. Loaded fresh per call so a mid-session rig.rules.json
+    // edit or reindex is caught.
     // (This deliberately does NOT hash the assembly MVID: the MVID moved on every recompile and purged the
     // whole client cache — including >1 MB trees — on any unrelated edit. The schema token moves only on a
     // deliberate logic/schema bump, matching how the server keys already invalidate.)
-    private static string DerivationVersion(string workingDirectory)
+    private static string DerivationVersion(string workingDirectory, string storeKey)
     {
         RuleSetLoader.Load(workingDirectory, extraRules: [], loadedPaths: out var loadedPaths);
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedPaths);
         var schema = QueryCacheKeys.DerivationSchemaToken();
-        var bytes = System.Text.Encoding.UTF8.GetBytes(schema + "|" + rulesHash);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(storeKey + "|" + schema + "|" + rulesHash);
         return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes))[..16];
     }
 }

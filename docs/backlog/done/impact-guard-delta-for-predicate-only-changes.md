@@ -153,7 +153,7 @@ would otherwise read "no behavioural change" and stop. `--expect-no-guard-narrow
 - An edge present on only ONE side is skipped — that is an added/removed call, owned by the effect-set and
   reach diffs, not a predicate change. This is what keeps the signal specific.
 - **The web `/api/impact` does not carry this signal** — same renderer-vs-engine split as the other two
-  disclosures. Folded into [[web-api-seed-and-effect-disclosure-parity]].
+  disclosures. Folded into [[cli-web-parity-1-web-api-seed-and-effect-disclosure-parity]].
 
 **Cache:** `ImpactSchema` 3 -> 4 (payload gained the deltas); `GuardConditions` is nullable in the DTO so an
 older blob decodes as "no deltas" rather than failing the read. Filtering is render-side, so `--only`

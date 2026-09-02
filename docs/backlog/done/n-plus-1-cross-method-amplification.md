@@ -4,9 +4,9 @@
 (anchor × witness) dataset instrument, 2026-08-03), step 2 (two stratified hand audits + the schema-v5 FP
 fixes), step 3 (`cross_method_amplification` as a DISPLAYED anchor-grain finding tier, `b82af7cb` + `0fd62eb8`,
 93% TP+TP-weak, all-IO witness gate). The cross-method gap this item names is no longer invisible.
-Residual follow-ups: [amplification-context-propagation](../progress/amplification-context-propagation.md)
+Residual follow-ups: [amplification-context-propagation](../done/amplification-context-propagation.md)
 (CLI tree fold, the two remaining FP classes) and
-[cross-method-hazards-cache](../todo/cross-method-hazards-cache.md).
+[cross-method-hazards-cache](../todo/derivation-cache-2-cross-method-hazards-cache.md).
 The *key propagation* half described below was NOT built — depth-tiered confidence replaced it, and
 calibration says that was enough · **Found:** 2026-08-03, measuring FR-3 recall against preprod runtime data after shipping
 [n-plus-1-iteration-contexts-beyond-loop-statements](./n-plus-1-iteration-contexts-beyond-loop-statements.md)

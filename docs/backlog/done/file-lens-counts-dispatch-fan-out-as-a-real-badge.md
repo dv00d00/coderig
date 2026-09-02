@@ -103,7 +103,7 @@ ImageEdit.Save                    cache:3? db! echo:2? io:12 rpc:9?
 ```
 
 That last line closes most of
-[a method badge no line admits to](../todo/annotate-method-badge-with-no-line-that-admits-it.md): the `echo:1`
+[a method badge no line admits to](../todo/file-lens-grain-3-method-badge-with-no-line-that-admits-it.md): the `echo:1`
 that no line admitted to was a dispatch-derived reach, and now says so.
 
 Not done here, deliberately: the web and Rider surfaces receive the flag but still render it as plain text /
@@ -120,9 +120,9 @@ effect in the body's own line is never flagged, because every effect owner is se
 
 ## Related
 
-- [A method badge no line admits to](../todo/annotate-method-badge-with-no-line-that-admits-it.md) — same file lens,
+- [A method badge no line admits to](../todo/file-lens-grain-3-method-badge-with-no-line-that-admits-it.md) — same file lens,
   probably the same root cause; verify together.
-- [`web-api-seed-and-effect-disclosure-parity`](../todo/web-api-seed-and-effect-disclosure-parity.md) — the same
+- [`web-api-seed-and-effect-disclosure-parity`](../todo/cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md) — the same
   disclosure question for the web API's other endpoints.
 - [dispatch-fans](./dispatch-precision-substrate.md) is the calibration substrate for how large the
   un-narrowed surface is.

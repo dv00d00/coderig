@@ -180,7 +180,14 @@ public sealed record ReferenceFact(
     // handed to a provider (translated to SQL/whatever), it NEVER executes as C#: a nav-property getter in a
     // `where p.Nav.X == y` clause is a SQL join, not a call. Effect and iteration-anchor derivation skip such
     // references (a semantic property of the language, not a rule). False on stores indexed before this flag.
-    bool InExpressionTree = false
+    bool InExpressionTree = false,
+    // 1-BASED start column of the reference's syntax node — Roslyn's 0-based LinePosition.Character + 1, the
+    // same convention Line uses (Line is .Line + 1), so the two coordinates read alike. Line alone collapses
+    // two calls on ONE source line into indistinguishable facts; with the column a call site is identified
+    // exactly. 0 == unknown: stores indexed before this field existed, synthetic refs, and the read paths
+    // whose column set does not select it. Appended (not placed beside Line) so existing POSITIONAL
+    // constructions keep their meaning.
+    int Column = 0
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -307,7 +314,11 @@ public sealed record CallEdge(
     // ReferenceFact.EnclosingGuards): the branch predicates gating whether this call runs. Null == must-run
     // (unconditional in the caller). Carried onto the reached node so the renderer can mark a guarded
     // subtree (the ⎇ analog of 🔁). Intra-method only; null on synthesized dispatch hops and pre-flag stores.
-    string? EnclosingGuards = null
+    string? EnclosingGuards = null,
+    // 1-based start column of the call SITE (ReferenceFact.Column, same convention as Line), so two calls on
+    // one line are distinct edges instead of one collapsed fact. 0 == unknown: synthesized dispatch/delivery
+    // hops, pre-flag stores, and the bounded call_edges loaders that do not select the column.
+    int Column = 0
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).

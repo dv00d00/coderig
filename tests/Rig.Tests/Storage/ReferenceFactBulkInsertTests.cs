@@ -85,6 +85,7 @@ public sealed class ReferenceFactBulkInsertTests
             EnclosingGuards: "isEnabled",
             EnclosingLoopElementType: "T:Ns.Row",
             EnclosingLoopBindType: "T:Ns.Rows",
-            InExpressionTree: true
+            InExpressionTree: true,
+            Column: 17
         );
 }

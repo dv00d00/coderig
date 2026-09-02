@@ -1,6 +1,11 @@
 ## Web Review: the effect gutter says the wrong thing, and the delta is not rendered at all
 
-**Status:** progress — method delta, inline/gutter/off presentation, focus mode and folder disclosure shipped locally 2026-09-02; findings delta and context follow-ups remain ·
+**Status:** progress — the one card still ACTIVELY IN FLIGHT (worked 2026-09-02); everything else that was in
+`progress/` was unbundled into `done/` plus its tail on 2026-09-02. Method delta, inline/gutter/off
+presentation, focus mode, folder disclosure and full-file reading shipped locally 2026-09-02, followed by
+commit `a1cfe485` — unconditional method-declaration reach lanes, a sticky in-table lane-key row, a lane
+origin fixed to grid tracks, row hover, and review history crumbs (see "Reach lanes, lane key and review
+history" below); findings delta and context follow-ups remain ·
 **Family:** web review / file effect lens
 
 **Source:** dogfooding the review surface against a real 104-file MedDBase merge request (portal courses
@@ -358,6 +363,23 @@ resource pressure; they are **not** recorded as passing for this slice. Packagin
 did not finish, so the existing local server still runs the previous installed version. This is a
 user-requested push checkpoint, not a completed release gate; remaining checks must run before release.
 
+### Reach lanes, lane key and review history — 2026-09-02 (`a1cfe485`)
+
+Shipped after the sections above, and not yet reflected in their prose:
+
+- **Method-declaration reach lanes are now unconditional.** A method declaration row carries its reach lane
+  whether or not the declaration line itself owns an effect, so the lane's absence no longer reads as
+  "no reach" when it only meant "nothing on this exact line".
+- **A sticky lane-key row inside the table.** The eight-slot key travels with the diff instead of scrolling
+  away, so the `D C B Q E I R S` vocabulary is readable at any scroll position without the legend competing
+  with the code.
+- **The lane origin is fixed to grid tracks.** The lane no longer shifts horizontally with line-number
+  width, so a file with four-digit line numbers renders its lanes in the same column as one with two.
+- **Row hover**, so the reader can tie a lane back to its source row on a dense file.
+- **Review history crumbs**, so a review pivot is retraceable the way the tree pivots already were.
+
+Cache note: these are render-side, so no `*Schema` was bumped.
+
 ### Acceptance
 
 - A method whose reached family set changed is marked on its header in both unified and split, and the
@@ -373,14 +395,14 @@ user-requested push checkpoint, not a completed release gate; remaining checks m
 ### Out of scope
 
 - Posting to GitLab/GitHub, or any remote provider URL in the review surface (unchanged from
-  `../progress/web-review-impact-deep-links.md`).
+  `../done/web-review-impact-deep-links.md`).
 - A second effect model for review. The gutter consumes the same projection as File view and
   `rig annotate`; `Web/FileDiffEndpoint.cs` routes through `FileEffectsQueryService.BuildResidentAsync`
   deliberately and that must not fork.
 
 ### Related
 
-- `../progress/web-review-impact-deep-links.md` — the Impact → Review pivot, and the no-dead-link rule.
+- `../done/web-review-impact-deep-links.md` — the Impact → Review pivot, and the no-dead-link rule.
 - The source-generator pseudo-path guard in `Web/FileDiffEndpoint.cs` (`RelativeFileMap`,
   `LoadReviewInventoryAsync`): MedDBase stores carry project-relative `.g.cs` paths with no location on
   disk, which resolved against the serve process directory and failed the whole review inventory closed.

@@ -30,7 +30,7 @@ The bundled audit has been implemented where it was one rendering concern and sp
    `rig reaches` by hand. A `--verify` flag (re-derive the badge families for the rendered methods through the
    forward walk and mark any disagreement) would make that a single command — and would have settled
    [the depth disagreement](./file-lens-method-depth-disagrees-with-reaches.md) without manual work.
-   Follow-up: [`annotate --verify`](../todo/annotate-verify-badges.md).
+   Follow-up: [`annotate --verify`](../todo/file-lens-grain-4-annotate-verify-badges.md).
 
 6. **Target names print CLR backtick arity** (`` Fill``1 ``) — split out into
    [its own completed card](./short-names-leak-clr-backtick-arity.md).
@@ -60,5 +60,5 @@ TSV remains byte-for-byte the same shape. Synthetic projection and rendering con
 The unrelated decisions were separated rather than hidden in this completed rendering card:
 
 - [`bus` versus `echo` family policy](../todo/effect-family-bus-echo-policy.md)
-- [`annotate --verify`](../todo/annotate-verify-badges.md)
+- [`annotate --verify`](../todo/file-lens-grain-4-annotate-verify-badges.md)
 - [resident-host latency](./annotate-pays-a-full-cold-derivation-per-invocation.md)

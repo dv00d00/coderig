@@ -129,7 +129,7 @@ the complementary items below.
 - **Disk-caching the shared closures** in `.rig/cache.db` (keyed store + rules + `FileEffectsSchema`) would fix
   the cold floor itself rather than routing around it. Needs
   [the missing schema constant](./file-effects-artifact-has-no-cache-schema-constant.md) first.
-- [Warm graph across queries](../todo/warm-graph-across-queries.md) is the same underlying problem for
+- [Warm graph across queries](../todo/derivation-cache-5-warm-graph-across-queries.md) is the same underlying problem for
   `callers`/`reaches`; this card deliberately reuses the resident host it already concluded with instead of
   introducing a daemon.
 

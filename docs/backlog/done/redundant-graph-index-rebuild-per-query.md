@@ -1,7 +1,7 @@
 # Redundant `GraphIndex` rebuild per traversal — `impact` pays it 6× / run
 
 **Status:** todo — re-verified against code 2026-07-19 · **Found:** 2026-06-28 · **Family:** perf / query-path-redundancy
-**Related:** [[warm-graph-across-queries]] (the across-command structural lever) · `perf-redundant-work-per-ep.md` (F1–F9, the already-mined micro-redundancy seam) · fed by [[alloc-effect-detector]] (the detector that would surface this class automatically)
+**Related:** [[derivation-cache-5-warm-graph-across-queries]] (the across-command structural lever) · `perf-redundant-work-per-ep.md` (F1–F9, the already-mined micro-redundancy seam) · fed by [[alloc-effect-detector]] (the detector that would surface this class automatically)
 
 ## The finding (CONFIRMED against the code)
 `FactPathFinder.BuildIndex(graph)` (`FactPathFinder.GraphIndex.cs:280`) is rebuilt on **every** traversal call — its ~13 callers are essentially the whole query surface (`BuildTree`, `Find`, `Reaches*`, `ReachableFromAll`, `ReachedBy*`, `EntryRootsReaching`, `DispatchFanReport`, `AllDispatchEdges`, `BuildReverseMaps`). Each rebuild does the full adjacency build + four-key sort of every adjacency list + `MethodsByStrippedType`/`ImplsByInterface`/`StrippedBaseEdges`/context-families/mined-dispatch construction.
@@ -19,7 +19,7 @@ batch method constructs its own private `GraphIndex`, so the same graph pays thr
   index is already safe to share across the parallel per-seed walks (`DescendantsCache` is concurrent).
 
 ## What this is NOT
-- NOT the across-command cold-graph LOAD (`warm-graph-across-queries.md`) — that's the ~5s/~1.5 GB-disk structural lever and dwarfs this. This card is the *within-`impact`* CPU waste of rebuilding the index over an already-loaded graph.
+- NOT the across-command cold-graph LOAD (`derivation-cache-5-warm-graph-across-queries.md`) — that's the ~5s/~1.5 GB-disk structural lever and dwarfs this. This card is the *within-`impact`* CPU waste of rebuilding the index over an already-loaded graph.
 - NOT the seed micro-redundancies (duplicate graph/EP/rule loads in one command): the investigation confirmed those are **already fixed** (F1–F9 in `perf-redundant-work-per-ep.md`; the "3–4× LoadFactGraphAsync" was mutually-exclusive `⎇` branches, not repeats). No ROI left there.
 
 ## Needs measurement
@@ -56,6 +56,6 @@ by its 15.3 GB graph load + effect derivation.
 
 **This card's own "Needs measurement" section called it correctly: the graph load dominates.** Two loads read
 **~30 GB** of disk (15.1 + 15.3) and peak at 20.3 GB RAM. The remaining lever is therefore
-[[warm-graph-across-queries]] (and [[impact-base-store-double-load]], fixed in the same pass, which removed a
+[[derivation-cache-5-warm-graph-across-queries]] (and [[impact-base-store-double-load]], fixed in the same pass, which removed a
 duplicate base EP read worth 1.9 GB of disk out of the head phase). Do not expect further wins from
 per-query CPU redundancy — that seam is now closed.

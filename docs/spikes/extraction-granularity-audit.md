@@ -1,6 +1,6 @@
 # Extraction granularity audit — what is whole-solution-coupled
 
-**Workstream 4 of [live-background-index](../backlog/progress/live-background-index.md).** Read-only audit,
+**Workstream 4 of [live-background-index](../backlog/done/live-background-index.md).** Read-only audit,
 2026-08-20. Question: if we re-extract only the project(s) whose files changed, over a resident
 `AdhocWorkspace`, what breaks or silently corrupts facts?
 
@@ -145,7 +145,7 @@ Narrow the source set and `inSource` flips false, and `Reads.LoadFactGraphAsync`
 
 The GATE spike already measured this on DeepChain: all 7 projects as source → 42 references; `Business`
 alone with deps as metadata → **2 references, 43 errors**
-([live-background-index](../backlog/progress/live-background-index.md) §"What the spike killed").
+([live-background-index](../backlog/done/live-background-index.md) §"What the spike killed").
 
 Good news: this is a constraint the resident-workspace plan already satisfies by construction — the whole
 solution stays live, only the *read+extract* pass narrows. **This is a hard invariant to write down and
@@ -178,7 +178,7 @@ Four distinct problems, all in the generator path.
    of incremental generators — is thrown away. Also, the generated trees' semantic models are bound
    against `generatedCompilation` (`SolutionSourceLoader.cs:1482`), a *different* `Compilation` instance
    from the one hand-written trees use, so retaining either pins both.
-4. **The generator output is already nondeterministic.** `docs/backlog/todo/flaky-clientpage-proxy-extraction.md`
+4. **The generator output is already nondeterministic.** `docs/backlog/needs-review/flaky-clientpage-proxy-extraction.md`
    — the ClientPage proxy generator intermittently fails to contribute, and
    `RunSourceGeneratorsAsync` swallows every exception (`SolutionSourceLoader.cs:1499-1503`). That makes
    "did project P change?" unanswerable from content alone: a flaked run silently drops P's generated file
@@ -285,7 +285,7 @@ So `GetDiagnostics` = parse + declaration + **every method body bound**. Three o
 1. **The errors rig actually reports and acts on are declaration-phase.** The degraded-extraction
    signatures in this repo's own record are `'System.Object' is not defined`, missing references, CS0246
    — all symbol-declaration/metadata-import failures (see the DeepChain metadata-partition result in
-   [live-background-index](../backlog/progress/live-background-index.md)). The method-body third produces
+   [live-background-index](../backlog/done/live-background-index.md)). The method-body third produces
    diagnostics that are counted and printed but never change behaviour.
 2. **The method-body third is redundant with extraction.** *(INFERRED — Roslyn internals, not verified in
    this repo.)* `Compilation.GetDiagnostics` binds bodies through a throwaway compilation state; the bound

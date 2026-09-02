@@ -40,7 +40,6 @@ import {
   FileEffectsView,
   setFileFindings,
   lensFilterDefaults,
-  serverFilterChanged,
   navTargets,
 } from "./filelens.js";
 
@@ -890,17 +889,11 @@ const actions = {
     loadFileDiff(files[index].path);
   },
   // ---- file lens overlay controls ----
-  // Filter changes are CLIENT-SIDE and instant; only `intrinsic`/`async` change what the server computed, so
-  // only those refetch. That asymmetry is the whole reason the overlay is usable on a store whose cold
+  // Every filter field is CLIENT-SIDE and instant — /api/file-effects takes no filter params, so there is
+  // nothing here that ever refetches. That is the whole reason the overlay is usable on a store whose cold
   // file-effects query costs ~50s: a reader tunes depth, basis and grain without ever waiting.
   setLensFilter(patch) {
-    const before = get().lensFilter;
-    const lensFilter = { ...before, ...patch };
-    set({ lensFilter });
-    if (serverFilterChanged(before, lensFilter) && get().filePath) {
-      status("lens: server-side flag changed — refetching…");
-      openFile(get().filePath, get().fileStart);
-    }
+    set({ lensFilter: { ...get().lensFilter, ...patch } });
   },
   resetLensFilter() {
     set({ lensFilter: { ...lensFilterDefaults(), outlineSort: get().lensFilter.outlineSort } });

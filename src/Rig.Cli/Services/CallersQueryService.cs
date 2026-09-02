@@ -69,13 +69,14 @@ public static class CallersQueryService
         IReadOnlyList<string>? extraRules = null
     )
     {
-        var rules = RuleSetLoader.Load(workingDirectory, extraRules ?? []);
+        // loadedRulePaths: the cascade RuleSetLoader just resolved, reused for the --entrypoints cache key's
+        // rule-fingerprint axis instead of re-running the merge to re-discover the same files.
+        var rules = RuleSetLoader.Load(workingDirectory, extraRules ?? [], loadedPaths: out var loadedRulePaths);
         // --raw parity: zero the graph-shaping rules so the reverse walk runs over the exact unfiltered graph.
         var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = await OpenReadContextGatedAsync(
-            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
-        );
+        var ws = new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef);
+        await using var context = await OpenReadContextGatedAsync(ws);
 
         var traversalMode = CommonOptions.Mode(async: async);
         var maxDepth = CommonOptions.DepthOrUnbounded(depth);
@@ -99,7 +100,17 @@ public static class CallersQueryService
             // Load the deployment attribution once (file-path → owning service, from deployments.json) so each
             // reverse-reachable EP is annotated with where it runs — the "which services can trigger this" lens.
             var deploy = await DeploymentAttributionLookup.LoadAsync(context, workingDirectory);
-            return await BuildEntryPointsAsync(context, graph, fromPattern, maxDepth, traversalMode, rules, raw, deploy);
+            return await BuildEntryPointsAsync(
+                Live.StoreQueryFactSource.Borrowing(context, ws),
+                RulesFingerprint.ComputeFromPaths(loadedRulePaths),
+                graph,
+                fromPattern,
+                maxDepth,
+                traversalMode,
+                rules,
+                raw,
+                deploy
+            );
         }
 
         return BuildRoots(graph, fromPattern, maxDepth, traversalMode, raw);
@@ -159,7 +170,8 @@ public static class CallersQueryService
     // CallersCommand.RunEntryPointsAsync does. Each confirmed EP is annotated with its owning deployed
     // service(s) via `deploy` (file-path attribution; loaded-in upper bound — see DeploymentAttributionLookup).
     private static async Task<CallersResult> BuildEntryPointsAsync(
-        RigDbContext context,
+        Live.IQueryFactSource source,
+        string rulesHash,
         FactGraphData graph,
         string toPattern,
         int maxDepth,
@@ -180,15 +192,19 @@ public static class CallersQueryService
         // from the already-loaded graph's method nodes rather than a second whole-method-table scan.
         var reachableSites = graph.Methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
 
-        var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, rules);
-        var docIdBySite = MethodDocIdBySite(epData);
+        // The whole-store EP record set, through the SAME artifact-cache entry the CLI's
+        // `callers --entrypoints` uses (EntryPointContext.LoadOrDeriveEntryPointRecordsAsync): a pure function
+        // of (store + rules) that does not scale with the question, so /api/callers must not re-derive it per
+        // request. ONE code path and ONE key with the CLI arm.
+        using var epCache = source.OpenArtifactCache(useCache: true);
+        var epRecords = await LoadOrDeriveEntryPointRecordsAsync(source: source, cache: epCache, rulesHash: rulesHash, rules: rules);
 
-        var touching = derivedEps
-            .Concat(promoted)
+        var touching = epRecords
             .Where(e => reachableSites.Contains((e.FilePath, e.Line)))
             .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
-            .Select(g => (g.Key.Kind, g.Key.Route, g.Key.FilePath, g.Key.Line))
+            // The group key IS four of the record's six fields and DocId is a function of the other two, so
+            // First() is the same row the old projection rebuilt field-by-field off the key.
+            .Select(g => g.First())
             .OrderBy(e => e.Kind, StringComparer.Ordinal)
             .ThenBy(e => e.Route, StringComparer.Ordinal)
             .ToList();
@@ -230,13 +246,7 @@ public static class CallersQueryService
             .Select(e =>
             {
                 var file = string.IsNullOrEmpty(e.FilePath) ? null : e.FilePath;
-                var view = new EntryPointService.EntryPointView(
-                    Kind: e.Kind,
-                    Route: e.Route,
-                    Fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite),
-                    File: file,
-                    Line: e.Line
-                );
+                var view = new EntryPointService.EntryPointView(Kind: e.Kind, Route: e.Route, Fqn: FqnOrRoute(e), File: file, Line: e.Line);
                 return new CallersEntryPoint(view, deploy.IsEmpty ? [] : deploy.ServicesWithKindFor(file));
             })
             .ToList();

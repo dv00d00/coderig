@@ -12,7 +12,7 @@ scoping to stitch once the solutions were `--merge`-indexed into one store.
 **Caveat on the card's original verification query:** `rig reaches "SubmitToHealthcode" --only queue`
 returns 0 — but that is a RULES question, not a stitch question: `ExportQueue` methods derive only
 `throw`/`io` effects (no `queue`-provider rule matches them). If ExportQueue should classify as `queue`,
-that's a candidate for [rules-only-effect-gaps](../todo/rules-only-effect-gaps.md).
+that's a candidate for [rules-only-effect-gaps](../needs-review/rules-only-effect-gaps.md).
 **Source:** extracted from `docs/rig-review-issues.md`, 2026-06-25 (F5 from the audit register)
 
 ### Finding

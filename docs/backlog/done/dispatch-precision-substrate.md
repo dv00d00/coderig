@@ -4,7 +4,7 @@
 receiver narrowing, disclosure, and generic monomorphization are shipped. The additive persisted-`~mono`
 proposal was measured and rejected below because it does not shrink the dispatch-inflated SQL closure.
 Bounded warm reuse is independently tracked in
-[warm-graph-across-queries.md](../todo/warm-graph-across-queries.md); heavy receiver-narrowed persistence is
+[derivation-cache-5-warm-graph-across-queries.md](../todo/derivation-cache-5-warm-graph-across-queries.md); heavy receiver-narrowed persistence is
 not approved work and should get a new design card only if current measurements justify it.
 
 **Shipped record + spec:** [../done/dispatch-precision-substrate-shipped.md]. The core landed (dispatch-fan
@@ -91,7 +91,7 @@ narrowing later prunes to a handful. Two real options remain:
   walk AND both reference_facts reads). Context-sensitive dispatch persistence — hard, `dispatch_edges`
   blow-up risk, schema bump. The only thing that attacks the 1.1 GB floor.
 - **Amortize instead of cut: bounded warm graph in `rig serve`**
-  ([warm-graph-across-queries.md](../todo/warm-graph-across-queries.md)).
+  ([derivation-cache-5-warm-graph-across-queries.md](../todo/derivation-cache-5-warm-graph-across-queries.md)).
   Since the cold load is structurally ~5s and hard to cut cheaply, holding the graph warm across queries (pay
   it once) regains priority over trying to shrink it. The earlier "stateless-first" ordering was predicated on
   materialization cheaply cutting the cold load — the spike shows it can't, so the bounded/stateful tradeoff

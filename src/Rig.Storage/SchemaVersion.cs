@@ -21,7 +21,10 @@ public static class SchemaVersion
     // v5->v6: persist the exact emitter FilePath on type_relation_facts and dispatch_facts, making resident
     //         overlays replace these emissions per file instead of retaining deleted edges as ghosts.
     // v6->v7: persist symbol SurfaceHash/IsIterator and the project aggregate assemblies.SurfaceHash.
-    public const int Index = 7;
+    // v7->v8: persist reference_facts.Column (1-based start column of the reference, the same convention as
+    //         Line) — the coordinate that separates two call sites sharing ONE source line, which Line alone
+    //         collapses into indistinguishable facts.
+    public const int Index = 8;
 
     // Bump when the GRAPH shape changes (call_edges / dispatch_edges / nodes / the symbol_fts /
     // ref_target_fts virtual tables — all built by GraphMaterializer).

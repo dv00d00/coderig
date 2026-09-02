@@ -172,6 +172,73 @@ public sealed class FileEffectReadModelCorrectnessTests
         }
     }
 
+    // MedDBase's LocationsHandler: GetData and ValueToJson both call GetList, which calls the effectful
+    // generic TypedListExtension.Fill<T> with a fully concrete binding. The store path monomorphizes, so that
+    // one edge's callee is REPLACED by the instantiation node — and a reverse walk seeded on the base id (the
+    // only id an effect carries) then found no callers at all: the line badge survived because the call-site
+    // key tests the base id, but GetList's two callers lost their method rows entirely.
+    [Test]
+    public void Monomorphizing_an_effectful_generic_keeps_the_method_rows_of_its_concrete_callers()
+    {
+        const string getData = "M:Fixture.Handler.GetData()";
+        const string valueToJson = "M:Fixture.Handler.ValueToJson()";
+        const string getList = "M:Fixture.Handler.GetList()";
+        const string fill = "M:Fixture.TypedListExtension.Fill``1(Fixture.TypedListBase{``0})";
+        const string execute = "M:Database.Execute()";
+        var raw = Graph([
+            new CallEdge(getData, getList, EdgeKinds.Invocation, File, 57),
+            new CallEdge(valueToJson, getList, EdgeKinds.Invocation, File, 70),
+            new CallEdge(
+                getList,
+                fill,
+                EdgeKinds.Invocation,
+                File,
+                64,
+                ReceiverType: "Fixture.LocationTypedList",
+                MethodTypeArgBinding: """["C:Fixture.LocationRow"]"""
+            ),
+            new CallEdge(fill, execute, EdgeKinds.Invocation, OwnersFile, 70),
+        ]);
+        var shaped = FactPathFinder.ShapeGraph(
+            raw,
+            [],
+            [],
+            [],
+            monomorphizeSignatures: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [fill] = "void Fill<T>(TypedListBase<T> list)",
+            }
+        );
+        var symbols = new[]
+        {
+            Method(getData, File, 55),
+            Method(valueToJson, File, 68),
+            Method(getList, File, 60),
+            Method(fill, OwnersFile, 64),
+        };
+        var effects = new[] { Effect("ado", fill, OwnersFile, 70) };
+
+        // The precondition the regression depends on: shaping really did redirect the concrete edge away
+        // from the base id, while keeping the base body as a node.
+        var instantiation = MonomorphizedNodeId.For(fill, [], ["Fixture.LocationRow"]);
+        shaped.CallEdges.ShouldContain(edge => edge.Caller == getList && edge.Callee == instantiation);
+        shaped.CallEdges.ShouldNotContain(edge => edge.Caller == getList && edge.Callee == fill);
+        shaped.CallEdges.ShouldContain(edge => edge.Caller == fill && edge.Callee == execute);
+
+        var model = Build(shaped, symbols, effects, SqlSelector).Find(File).ShouldNotBeNull();
+
+        model.Methods.Select(Row).ShouldBe([(getData, "sql", 2), (getList, "sql", 1), (valueToJson, "sql", 2)]);
+        model
+            .CallSites.Select(Site)
+            .ShouldBe([(getData, getList, 57, "sql", 1), (getList, fill, 64, "sql", 0), (valueToJson, getList, 70, "sql", 1)]);
+
+        // Shaping is a traversal-precision device, not a change of answer: the same file must project
+        // identically whether or not the generic was monomorphized.
+        var unshaped = Build(raw, symbols, effects, SqlSelector).Find(File).ShouldNotBeNull();
+        model.Methods.Select(Row).ShouldBe(unshaped.Methods.Select(Row));
+        model.CallSites.Select(Site).ShouldBe(unshaped.CallSites.Select(Site));
+    }
+
     private static readonly FileEffectSelector SqlSelector = new("sql", [new EffectPredicate("ado")]);
 
     private static FileEffectReadModelIndex Build(
