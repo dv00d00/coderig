@@ -254,9 +254,26 @@ while the language's own rule says removal renders struck-grey and never green.
   CodeRig: 41 lanes in unified/split, all eight-slot, zero gutter-containment violations; added
   `AnnotateCommand.cs` carried 43 head marks and zero false moved slots; console clean.
 
-Still open from the ranked list: collapsible/path-compressed file tree, hazard delta, eager effect-before-finding
+Still open from the ranked list: path-compressed file tree, hazard delta, eager effect-before-finding
 loading, ranged hunk expansion, and a dedicated full-screen mode. Unchanged reach deliberately stays visible but
 muted — the editorial decision requested above is closed.
+
+### Folder disclosure — 2026-09-02
+
+Review tree folders now have full-row disclosure buttons with Enter/Space support and `aria-expanded`.
+Collapsed state uses the full directory path, scoped to the review's base/head pair, and survives file
+selection, Viewed updates, filters and List/Tree switching within the session. Nested folders preserve their
+own state when an ancestor closes. Folder toggles neither navigate nor request the diff/semantic APIs.
+
+Path search uses a temporary expanded tree so matches are visible; users can collapse search results too.
+Editing the query reveals matching branches again; clearing it restores the ordinary collapsed state.
+Disclosure focus is retained across sidebar rebuilds. Page reload starts expanded; persistent collapse,
+path compression and expand/collapse-all controls are not part of this slice.
+
+Validation: 7 new behavioral tree tests (18 frontend tests total), TypeScript check and the 1,350-test
+local release gate pass. Chrome smoke on the real 37-file CodeRig review covers mouse/keyboard disclosure,
+focus retention, nested and same-name directories, List/Tree, Viewed, search restoration, queue filters and
+ordered-pair isolation. Toggle-only interactions made zero API requests and left the review URL unchanged.
 
 ### Acceptance
 

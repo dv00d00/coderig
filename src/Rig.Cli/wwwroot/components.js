@@ -5,6 +5,7 @@
 
 import { h, mount } from "./lib.js";
 import { highlightCSharp } from "./highlight.js";
+import { collapsedReviewFolders, reviewTreeRows } from "./review-tree.js";
 
 export const baseName = (p) => (p ? p.split(/[\\/]/).pop() : "");
 
@@ -1528,35 +1529,25 @@ function reviewFileRow(file, s, actions, depth = 0) {
 }
 
 function reviewFileTree(files, s, actions) {
-  const root = { dirs: new Map(), files: [] };
-  for (const file of files) {
-    const segments = reviewDisplayPath(file).replaceAll("\\", "/").split("/").filter(Boolean);
-    segments.pop();
-    let node = root;
-    for (const segment of segments) {
-      if (!node.dirs.has(segment)) node.dirs.set(segment, { dirs: new Map(), files: [] });
-      node = node.dirs.get(segment);
-    }
-    node.files.push(file);
-  }
-
-  const render = (node, depth = 0) => [
-    ...[...node.dirs.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .flatMap(([name, child]) => [
-        h(
-          "div",
-          { class: "review-tree-folder", style: `--review-depth:${depth}`, title: name },
-          h("span", { "aria-hidden": "true" }, "⌄"),
-          h("span", {}, name),
+  return reviewTreeRows(files, collapsedReviewFolders(s), reviewDisplayPath).map((row) =>
+    row.kind === "file"
+      ? reviewFileRow(row.file, s, actions, row.depth)
+      : h(
+          "button",
+          {
+            class: "review-tree-folder",
+            type: "button",
+            style: `--review-depth:${row.depth}`,
+            title: row.path,
+            "data-review-folder": row.path,
+            "aria-label": `${row.expanded ? "Collapse" : "Expand"} folder ${row.path}`,
+            "aria-expanded": String(row.expanded),
+            onClick: () => actions.toggleReviewFolder(row.path),
+          },
+          h("span", { class: "review-folder-chevron", "aria-hidden": "true" }),
+          h("span", {}, row.name),
         ),
-        ...render(child, depth + 1),
-      ]),
-    ...node.files
-      .sort((a, b) => reviewDisplayPath(a).localeCompare(reviewDisplayPath(b)))
-      .map((file) => reviewFileRow(file, s, actions, depth)),
-  ];
-  return render(root);
+  );
 }
 
 // Desktop review work queue. Every Git path is openable; Semantic-ready is the narrower both-sides

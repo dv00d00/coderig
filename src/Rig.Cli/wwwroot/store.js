@@ -51,6 +51,7 @@ export const store = createStore({
   reviewFileSearch: "",
   reviewFileFilter: "all", // all | unreviewed | semantic
   reviewFileMode: "list", // list | tree
+  reviewFolderCollapse: { normal: {}, search: {} }, // base/head pair -> collapsed directory paths
   reviewViewed: [], // exact changed paths marked Viewed for the active base/head pair
   // The lens overlay's own filter — URL-addressable so a tuned view is shareable (see lensToUrl/lensFromUrl).
   // Everything but `intrinsic`/`async` is applied CLIENT-SIDE, which is the point: the underlying query costs

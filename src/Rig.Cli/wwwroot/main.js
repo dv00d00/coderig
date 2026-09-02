@@ -4,6 +4,7 @@
 
 import { h, mount, watch } from "./lib.js";
 import { api, setCacheVersion, purgeCache } from "./api.js";
+import { setReviewFolderSearch, toggleReviewFolder } from "./review-tree.js";
 import {
   store,
   get,
@@ -795,7 +796,10 @@ const actions = {
     loadFileDiff(file.path);
   },
   setReviewFileSearch(value) {
-    set({ reviewFileSearch: value });
+    set(setReviewFolderSearch(get(), value));
+  },
+  toggleReviewFolder(path) {
+    set(toggleReviewFolder(get(), path));
   },
   setReviewFileFilter(value) {
     set({ reviewFileFilter: value });
@@ -1464,12 +1468,13 @@ function setupWatches() {
   );
   watch(
     store,
-    (s) => [s.reviewFiles, s.reviewFilesError, s.reviewFile, s.reviewFileSearch, s.reviewFileFilter, s.reviewFileMode, s.reviewViewed, s.appMode],
+    (s) => [s.reviewFiles, s.reviewFilesError, s.reviewBase, s.reviewHead, s.reviewFile, s.reviewFileSearch, s.reviewFileFilter, s.reviewFileMode, s.reviewFolderCollapse, s.reviewViewed, s.appMode],
     (s) => {
       if (s.appMode !== "review") return;
       const active = document.activeElement;
       const currentSearch = refs.reviewFiles.querySelector(".review-file-search");
       const searchFocused = active === currentSearch;
+      const focusedFolder = refs.reviewFiles.contains(active) ? active?.getAttribute("data-review-folder") : null;
       const start = searchFocused ? currentSearch.selectionStart : null;
       const end = searchFocused ? currentSearch.selectionEnd : null;
       mount(refs.reviewFiles, ReviewFileList(s, actions));
@@ -1483,6 +1488,12 @@ function setupWatches() {
       if (searchFocused && currentSearch) {
         currentSearch.focus();
         if (start != null && end != null) currentSearch.setSelectionRange(start, end);
+      } else if (focusedFolder) {
+        // Buttons are rebuilt with the result list too. Restore disclosure focus for repeated Enter/Space
+        // toggles without scrolling the sidebar; do not steal focus from outside the file queue.
+        [...refs.reviewFiles.querySelectorAll("[data-review-folder]")]
+          .find((button) => button.getAttribute("data-review-folder") === focusedFolder)
+          ?.focus({ preventScroll: true });
       }
     },
   );

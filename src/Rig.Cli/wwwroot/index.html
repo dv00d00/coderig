@@ -2610,9 +2610,34 @@
         align-items: center;
         gap: 3px;
         min-width: 0;
+        width: 100%;
+        border: 0;
+        border-radius: 6px;
         padding: 5px 6px 3px calc(7px + var(--review-depth, 0) * 12px);
         color: var(--muted);
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
         font: 10px/1.2 ui-monospace, Menlo, Consolas, monospace;
+      }
+      .review-tree-folder:hover {
+        background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+        color: var(--fg);
+      }
+      .review-tree-folder:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+      }
+      .review-folder-chevron {
+        width: 5px;
+        height: 5px;
+        margin-left: 2px;
+        border-right: 1.5px solid currentColor;
+        border-bottom: 1.5px solid currentColor;
+        transform: rotate(-45deg);
+      }
+      .review-tree-folder[aria-expanded="true"] .review-folder-chevron {
+        transform: translateY(-2px) rotate(45deg);
       }
       .review-tree-folder span:last-child {
         overflow: hidden;
