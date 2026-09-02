@@ -138,7 +138,7 @@ internal static class RigApiEndpoints
                 try
                 {
                     var art = await ImpactQueryService.DiffAsync(workingDirectory, baseRef: @base, headRef: head, async: async ?? false);
-                    return Results.Json(ImpactMapper.ToResponse(art));
+                    return Results.Json(await ImpactMapper.ToResponseAsync(workingDirectory, @base, head, art));
                 }
                 catch (Exception ex)
                 {

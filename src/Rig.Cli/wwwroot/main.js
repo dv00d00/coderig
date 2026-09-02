@@ -343,6 +343,9 @@ async function mountFileDiff(data) {
   fileDiffModule ||= await import("./assets/file-diff.js");
   fileDiffModule.mountFileDiff(refs.review, data, {
     onOpenTree: (id) => actions.openFileTree(id),
+    focusLine: get().reviewLine > 0
+      ? { side: get().reviewSide === "base" ? "old" : "new", line: get().reviewLine }
+      : null,
     ignoreWhitespace: get().reviewIgnoreWhitespace,
     viewed: get().reviewViewed.includes(get().reviewFile),
     onViewedChange: (value) => actions.setCurrentReviewViewed(value),
@@ -379,7 +382,10 @@ async function loadReviewFiles({ openFirst = false } = {}) {
     if (requestId !== reviewFilesRequestId) return null;
     set({ reviewFiles: data, reviewFilesError: "" });
     const first = data.files[0];
-    if (openFirst && !get().reviewFile && first) await loadFileDiff(first.path);
+    if (openFirst && !get().reviewFile && first) {
+      set({ reviewLine: 0, reviewSide: "head" });
+      await loadFileDiff(first.path);
+    }
     else status(`${data.files.length} changed files · ${data.files.filter((file) => file.semanticReady).length} Semantic-ready`);
     return data;
   } catch (error) {
@@ -487,6 +493,7 @@ async function openReviewQuery(value) {
       status(`no changed file matches '${query}'`, true);
       return;
     }
+    set({ reviewLine: 0, reviewSide: "head" });
     await loadFileDiff(selected.path);
   } catch (error) {
     status("review files: " + error.message, true);
@@ -500,6 +507,8 @@ function openReviewFile(file) {
   set({
     appMode: "review",
     ...patch,
+    reviewLine: 0,
+    reviewSide: "head",
     reviewViewed: loadReviewViewed(patch.reviewBase, patch.reviewHead),
   });
   refs.reviewBase.value = patch.reviewBase;
@@ -549,6 +558,7 @@ function loadImpact() {
     return;
   }
   setBusy(true);
+  set({ impactReviewFiles: null });
   status("diffing…");
   // Stream live phase progress over SSE (the stream ALSO warms the disk cache); on `done`, GET the now-warm
   // /api/impact for the data. Warm cache → `cache hit` → `done` almost immediately. (Hacky but "not sad".)
@@ -573,9 +583,16 @@ function loadImpact() {
   es.addEventListener("done", () =>
     finish(async () => {
       try {
-        set({
-          impactData: await api.impact(impactBase, impactHead, impactAsync),
-        });
+        const impactData = await api.impact(impactBase, impactHead, impactAsync);
+        set({ impactData });
+        api
+          .reviewFiles(impactBase, impactHead)
+          .then((impactReviewFiles) => {
+            const current = get();
+            if (current.impactBase === impactBase && current.impactHead === impactHead)
+              set({ impactReviewFiles });
+          })
+          .catch(() => {}); // Impact remains useful when Git attribution cannot produce review links.
         const d = get().impactData;
         status(
           `impact: ${d.perEp.length.toLocaleString()} behavioral change(s), +${d.addedEps.length}/−${d.removedEps.length} EPs`,
@@ -774,6 +791,7 @@ const actions = {
   openReviewFile,
   openReviewQuery,
   openReviewFileEntry(file) {
+    set({ reviewLine: 0, reviewSide: "head" });
     loadFileDiff(file.path);
   },
   setReviewFileSearch(value) {
@@ -808,6 +826,7 @@ const actions = {
     const index = current < 0
       ? direction > 0 ? 0 : files.length - 1
       : (current + direction + files.length) % files.length;
+    set({ reviewLine: 0, reviewSide: "head" });
     loadFileDiff(files[index].path);
   },
   // ---- file lens overlay controls ----
@@ -990,7 +1009,11 @@ const actions = {
     refsFilterTimer = setTimeout(loadRefs, 300);
   },
   setImpactStore(which, id) {
-    set(which === "base" ? { impactBase: id } : { impactHead: id });
+    set({
+      ...(which === "base" ? { impactBase: id } : { impactHead: id }),
+      impactData: null,
+      impactReviewFiles: null,
+    });
   },
   setReviewStore(which, id) {
     const current = get();
@@ -1000,6 +1023,8 @@ const actions = {
       reviewBase,
       reviewHead,
       reviewFile: "",
+      reviewLine: 0,
+      reviewSide: "head",
       reviewFiles: null,
       reviewFilesError: "",
       reviewData: null,
@@ -1463,7 +1488,7 @@ function setupWatches() {
   );
   watch(
     store,
-    (s) => [s.reviewData, s.reviewError, s.reviewViewed, s.appMode],
+    (s) => [s.reviewData, s.reviewError, s.reviewViewed, s.reviewLine, s.reviewSide, s.appMode],
     (s) => {
       if (s.appMode !== "review") return;
       if (s.reviewError) {
@@ -1544,7 +1569,7 @@ function setupWatches() {
   );
   watch(
     store,
-    (s) => [s.impactData, s.impactFilter, s.appMode, s.impactAsync],
+    (s) => [s.impactData, s.impactReviewFiles, s.impactFilter, s.appMode, s.impactAsync],
     (s) => {
       if (s.appMode === "impact") mount(refs.impact, ImpactView(s, actions));
     },

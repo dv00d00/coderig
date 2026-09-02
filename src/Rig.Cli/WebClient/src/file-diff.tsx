@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   Diff,
@@ -112,6 +112,7 @@ export type FileDiffModel = {
 
 export type FileDiffCallbacks = {
   onOpenTree?: (symbolId: string) => void;
+  focusLine?: { side: "old" | "new"; line: number } | null;
   ignoreWhitespace?: boolean;
   onIgnoreWhitespaceChange?: (value: boolean) => void;
   viewed?: boolean;
@@ -301,8 +302,10 @@ function EffectWidget({ expanded, insight, callbacks }: { expanded: Expanded; in
 }
 
 function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: FileDiffCallbacks }) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const [viewType, setViewType] = useState<ViewType>("unified");
   const [expanded, setExpanded] = useState<Expanded | null>(null);
+  const [focusFound, setFocusFound] = useState<boolean | null>(null);
   const files = useMemo(() => (model.patch.trim() ? parseDiff(model.patch) : []), [model.patch]);
   const oldLines = useMemo(() => byLine(model.base), [model.base]);
   const newLines = useMemo(() => byLine(model.head), [model.head]);
@@ -362,11 +365,28 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
             callbacks={callbacks}
           />
         ),
-      }
+    }
     : {};
 
+  useEffect(() => {
+    const focus = callbacks.focusLine;
+    if (!focus) {
+      setFocusFound(null);
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const gutter = rootRef.current?.querySelector(
+        `.rig-diff-gutter[data-rig-side="${focus.side}"][data-rig-line="${focus.line}"]`,
+      );
+      setFocusFound(!!gutter);
+      gutter?.closest("tr")?.scrollIntoView({ block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [callbacks.focusLine?.line, callbacks.focusLine?.side, model.patch, viewType]);
+
   return (
-    <div className="rig-diff-island">
+    <div className="rig-diff-island" ref={rootRef}>
       <div className="rig-diff-head">
         <div className="rig-diff-identity" title={model.relativePath}>
           <div className="rig-diff-file-line">
@@ -457,6 +477,11 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
           </details>
         </div>
       </div>
+      {callbacks.focusLine && focusFound === false
+        ? <div className="rig-diff-focus-note">
+            {callbacks.focusLine.side === "old" ? "Base" : "Head"} line {callbacks.focusLine.line} is outside the changed hunks and their {model.contextLines}-line context.
+          </div>
+        : null}
       {!file ? (
         <div className="rig-diff-empty">No textual changes in this file.</div>
       ) : (
@@ -470,8 +495,13 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
             const line = changeLine(change, side);
             const insight = line == null ? undefined : (side === "old" ? oldLines : newLines).get(line);
             const key = getChangeKey(change);
+            const focused = callbacks.focusLine?.side === side && callbacks.focusLine.line === line;
             return wrapInAnchor(
-              <span className="rig-diff-gutter">
+              <span
+                className={`rig-diff-gutter${focused ? " focus" : ""}`}
+                data-rig-side={side}
+                data-rig-line={line ?? undefined}
+              >
                 {insight ? (
                   <button
                     type="button"

@@ -39,6 +39,8 @@ export const store = createStore({
   reviewBase: "",
   reviewHead: "",
   reviewFile: "",
+  reviewLine: 0, // optional Impact/File deep-link target inside the exact Git patch
+  reviewSide: "head", // base | head — line numbers are revision-native
   reviewData: null,
   reviewError: "",
   reviewFiles: null, // Git changed-file inventory for the selected base/head pair
@@ -62,6 +64,7 @@ export const store = createStore({
   impactHead: "", // head store id
   impactAsync: false, // --async for the diff: walk async/scheduled handoffs (changes the diff → refetch)
   impactData: null, // /api/impact response
+  impactReviewFiles: null, // same-pair Git inventory; enables only proven Impact → Review links
   impactFilter: "", // filter over per-EP deltas (route / effect substring)
   // refs mode (assembly-reference analysis — a GLOBAL report, no from-pattern; fetched like the EP inventory)
   refsTab: "unused", // unused | usage  (which report)
@@ -185,6 +188,8 @@ export const querySlice = (s) => [
   s.reviewBase,
   s.reviewHead,
   s.reviewFile,
+  s.reviewLine,
+  s.reviewSide,
   s.reviewIgnoreWhitespace,
   s.lensFilter,
   s.impactBase,
@@ -224,6 +229,8 @@ export function serializeUrl(s = get()) {
     if (s.reviewBase) p.set("base", s.reviewBase);
     if (s.reviewHead) p.set("head", s.reviewHead);
     if (s.reviewFile) p.set("file", s.reviewFile);
+    if (s.reviewLine > 0) p.set("line", String(s.reviewLine));
+    if (s.reviewLine > 0 && s.reviewSide === "base") p.set("side", "base");
     if (s.reviewIgnoreWhitespace) p.set("ws", "1");
   } else if (s.appMode === "impact") {
     p.set("app", "impact");
@@ -294,6 +301,8 @@ export function readUrl(runs, search = location.search) {
     reviewBase: runs.some((r) => r.storeId === p.get("base")) ? p.get("base") : "",
     reviewHead: runs.some((r) => r.storeId === p.get("head")) ? p.get("head") : "",
     reviewFile: p.get("file") || "",
+    reviewLine: Math.max(0, Number.parseInt(p.get("line") || "0", 10) || 0),
+    reviewSide: p.get("side") === "base" ? "base" : "head",
     reviewIgnoreWhitespace: p.get("ws") === "1",
     lensFilter: lensFromUrl(p),
     impactBase: runs.some((r) => r.storeId === p.get("ibase"))

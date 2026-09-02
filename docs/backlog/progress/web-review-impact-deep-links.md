@@ -1,6 +1,6 @@
 # Web Review: deep-link Impact changes into the exact file diff
 
-**Status:** progress — honest EP-site slice started 2026-09-02 · **Family:** impact / web review navigation
+**Status:** progress — effect-site slice shipped 2026-09-02; guard/predicate sites remain · **Family:** impact / web review navigation
 
 ## Problem
 
@@ -20,6 +20,28 @@ The first slice is deliberately narrower than symbol-location enrichment: a beha
 link only when its already-attributed EP source site is itself in the Git changed-file inventory. Deep callee
 effects do not receive guessed links from their parameter-free enclosing names. That preserves the “no dead
 link” rule while proving the cross-mode URL/focus contract; exact effect/guard-site enrichment remains below.
+
+## Shipped slice
+
+- `/api/impact` effect and hazard rows now carry a revision-native source location only when their parameter-free
+  enclosing identity resolves to one unique method declaration. Overload ambiguity fails closed (`file=null`).
+- The Impact client joins those locations to the exact `/api/review-files` inventory and renders `review :line`
+  only for files in the selected Git diff. Entry-point sites win; added effects/hazards use head coordinates and
+  removed rows use base coordinates.
+- The link is a normal shareable URL (`app=review&base=…&head=…&file=…&line=…&side=base` when needed), so browser
+  Back returns to Impact without a bespoke history emulation.
+- Review focuses the exact old/new diff row when it is in a hunk or the 20-line context. If not, it says the
+  requested revision line is outside the rendered hunks rather than scrolling to a fabricated match.
+- Dogfood on CodeRig's 15-card Impact report produced 15 valid Review links; `AnnotateCommand.cs:32` focused in an
+  added-file diff, Back restored Impact, and an out-of-hunk target disclosed the limit. Browser console clean;
+  local release gate 1350/1350.
+
+## Remaining
+
+- Guard-condition deltas are not in the web Impact contract and the current guard diff deliberately has no
+  file/line identity. Predicate-only Impact → Review therefore still needs an explicit edge-site projection.
+- Added/removed entry-point inventory is summary-only in the web response; expose its attributed sites before
+  claiming direct Review links for those rows.
 
 ## Acceptance
 

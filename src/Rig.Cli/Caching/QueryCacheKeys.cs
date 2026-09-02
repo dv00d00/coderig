@@ -104,7 +104,8 @@ internal static class QueryCacheKeys
 
     // v1: every Git-changed file has a two-path, side-optional review payload. This gates the client-cached
     // /api/review-files and /api/file-diff contracts independently of the per-file semantic projection.
-    internal const int ReviewSchema = 1;
+    // v1->v2: Impact effect/hazard rows gained unique source locations for honest changed-file deep links.
+    internal const int ReviewSchema = 2;
 
     // v1: the per-file semantic effect projection shared by web, annotate and Rider. This gates both the
     // browser derivation token and the resident process LRU, so same-store projection fixes cannot leave

@@ -7,9 +7,9 @@ namespace Rig.Cli.Web;
 
 internal sealed record ImpactProvenanceDto(string? Branch, string? Commit, string Label);
 
-internal sealed record ImpactEffectDto(string Provider, string Operation, string Resource, string Enclosing);
+internal sealed record ImpactEffectDto(string Provider, string Operation, string Resource, string Enclosing, string? File, int Line);
 
-internal sealed record ImpactHazardDto(string Type, string Cell, string Enclosing, string Confidence);
+internal sealed record ImpactHazardDto(string Type, string Cell, string Enclosing, string Confidence, string? File, int Line);
 
 // The AMPLIFICATION tier's per-EP delta entry (from Impact.EpAmplification): a provider:operation whose effect is
 // now reached INSIDE an iteration context (or no longer is), with the reachable site count. A SEPARATE dto and

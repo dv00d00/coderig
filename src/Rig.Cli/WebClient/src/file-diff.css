@@ -4,6 +4,25 @@
   min-width: 0;
 }
 
+.rig-diff-focus-note {
+  border: 1px solid var(--border);
+  border-top: 0;
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
+  color: var(--muted);
+  padding: 0.55rem 1rem;
+  font-size: 0.78rem;
+}
+
+.rig-diff-island tr:has(.rig-diff-gutter.focus) td {
+  box-shadow: inset 0 1px color-mix(in srgb, var(--accent) 75%, transparent),
+    inset 0 -1px color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.rig-diff-gutter.focus {
+  color: var(--accent);
+  font-weight: 800;
+}
+
 .rig-diff-head {
   display: flex;
   align-items: center;

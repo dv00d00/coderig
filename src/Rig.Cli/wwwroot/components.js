@@ -796,7 +796,52 @@ function HazLine(sign, hz) {
     h("span", { class: "eencl" }, " " + shortEncl(hz.enclosing)),
   );
 }
-function EpDeltaCard(p, actions) {
+const normalizedReviewPath = (value) => (value || "").replaceAll("\\", "/").toLocaleLowerCase();
+
+// Join only revision-native locations to the exact Git inventory. The EP site wins when it changed directly;
+// otherwise the server may provide a unique declaration site for an effect/hazard. Ambiguous parameter-free
+// symbol stems deliberately arrive without a location, so the client never fabricates a file/line deep link.
+export function impactReviewTarget(p, inventory) {
+  if (!inventory?.files) return null;
+  const locate = (sourceFile, line, side) => {
+    if (!sourceFile || !line) return null;
+    const source = normalizedReviewPath(sourceFile);
+    const key = side === "head" ? "newFile" : "oldFile";
+    const changed = inventory.files.find((file) => normalizedReviewPath(file[key]) === source);
+    return changed ? { path: changed.path, line, side } : null;
+  };
+
+  // The EP source is already branch-attributed and therefore the strongest target when it changed directly.
+  const entryPoint = locate(p.file, p.line, "head") || locate(p.file, p.line, "base");
+  if (entryPoint) return entryPoint;
+
+  // Otherwise choose the first UNIQUE source location the server resolved from an effect/hazard enclosing
+  // symbol. Added rows are head-native; removed rows are base-native. Ambiguous stems arrive with file=null
+  // and therefore never become a dead or guessed link.
+  for (const item of [...p.added, ...p.hazardsAdded]) {
+    const target = locate(item.file, item.line, "head");
+    if (target) return target;
+  }
+  for (const item of [...p.removed, ...p.hazardsRemoved]) {
+    const target = locate(item.file, item.line, "base");
+    if (target) return target;
+  }
+  return null;
+}
+
+export function impactReviewHref(s, target) {
+  const query = new URLSearchParams({
+    app: "review",
+    base: s.impactBase,
+    head: s.impactHead,
+    file: target.path,
+    line: String(target.line),
+  });
+  if (target.side === "base") query.set("side", "base");
+  return `?${query}`;
+}
+
+function EpDeltaCard(p, actions, reviewTarget, state) {
   const hazN = p.hazardsAdded.length + p.hazardsRemoved.length;
   // Cards start COLLAPSED — with 200 shown, the headers ARE the scannable blast-radius index; the effect
   // list opens on demand. Head click toggles the body; a separate "↗ tree" button cross-links to the tree.
@@ -814,6 +859,18 @@ function EpDeltaCard(p, actions) {
     },
     "↗ diff tree",
   );
+  const reviewLink = reviewTarget
+    ? h(
+        "a",
+        {
+          class: "epd-open epd-review",
+          href: impactReviewHref(state, reviewTarget),
+          title: `review changed ${reviewTarget.side} source at line ${reviewTarget.line}`,
+          onClick: (e) => e.stopPropagation(),
+        },
+        `↗ review :${reviewTarget.line}`,
+      )
+    : null;
   const head = h(
     "div",
     {
@@ -852,6 +909,7 @@ function EpDeltaCard(p, actions) {
         )
       : null,
     openBtn,
+    reviewLink,
   );
   const body = h(
     "div",
@@ -968,7 +1026,7 @@ export function ImpactView(s, actions) {
     h(
       "div",
       {},
-      match.slice(0, CAP).map((p) => EpDeltaCard(p, actions)),
+      match.slice(0, CAP).map((p) => EpDeltaCard(p, actions, impactReviewTarget(p, s.impactReviewFiles), s)),
     ),
   );
 }

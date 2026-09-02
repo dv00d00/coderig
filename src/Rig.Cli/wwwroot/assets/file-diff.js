@@ -12410,7 +12410,7 @@ function Jo({ expanded: e, insight: t, callbacks: n }) {
 	});
 }
 function Yo({ model: e, callbacks: t }) {
-	let [n, r] = (0, h.useState)("unified"), [i, a] = (0, h.useState)(null), o = (0, h.useMemo)(() => e.patch.trim() ? le(e.patch) : [], [e.patch]), s = (0, h.useMemo)(() => Go(e.base), [e.base]), c = (0, h.useMemo)(() => Go(e.head), [e.head]), l = o[0], u = (0, h.useMemo)(() => Bo(e.relativePath || e.file), [e.relativePath, e.file]), d = (0, h.useMemo)(() => l ? l.hunks.reduce((e, t) => {
+	let n = (0, h.useRef)(null), [r, i] = (0, h.useState)("unified"), [a, o] = (0, h.useState)(null), [s, c] = (0, h.useState)(null), l = (0, h.useMemo)(() => e.patch.trim() ? le(e.patch) : [], [e.patch]), u = (0, h.useMemo)(() => Go(e.base), [e.base]), d = (0, h.useMemo)(() => Go(e.head), [e.head]), f = l[0], p = (0, h.useMemo)(() => Bo(e.relativePath || e.file), [e.relativePath, e.file]), g = (0, h.useMemo)(() => f ? f.hunks.reduce((e, t) => {
 		for (let n of t.changes) n.type === "insert" ? e.additions += 1 : n.type === "delete" && (e.deletions += 1);
 		return e;
 	}, {
@@ -12419,154 +12419,187 @@ function Yo({ model: e, callbacks: t }) {
 	}) : {
 		additions: 0,
 		deletions: 0
-	}, [l]), f = e.base.semanticState === "available" && e.base.effects !== null, p = e.head.semanticState === "available" && e.head.effects !== null, g = e.base.effects?.sites.length || 0, _ = e.head.effects?.sites.length || 0, v = (e.base.findings?.hazards.length || 0) + (e.base.findings?.amplifications.length || 0) + (e.base.findings?.anchors.length || 0), y = (e.head.findings?.hazards.length || 0) + (e.head.findings?.amplifications.length || 0) + (e.head.findings?.anchors.length || 0), b = _ - g, x = f && p ? `effect sites ${b > 0 ? "+" : ""}${b}` : f ? "base-only semantics" : p ? "head-only semantics" : e.language === "text" ? "text-only · semantics unavailable" : "semantics unavailable", S = (0, h.useMemo)(() => l && e.language === "csharp" ? pa(l.hunks, {
+	}, [f]), _ = e.base.semanticState === "available" && e.base.effects !== null, v = e.head.semanticState === "available" && e.head.effects !== null, y = e.base.effects?.sites.length || 0, b = e.head.effects?.sites.length || 0, x = (e.base.findings?.hazards.length || 0) + (e.base.findings?.amplifications.length || 0) + (e.base.findings?.anchors.length || 0), S = (e.head.findings?.hazards.length || 0) + (e.head.findings?.amplifications.length || 0) + (e.head.findings?.anchors.length || 0), C = b - y, w = _ && v ? `effect sites ${C > 0 ? "+" : ""}${C}` : _ ? "base-only semantics" : v ? "head-only semantics" : e.language === "text" ? "text-only · semantics unavailable" : "semantics unavailable", T = (0, h.useMemo)(() => f && e.language === "csharp" ? pa(f.hunks, {
 		highlight: !0,
 		refractor: Ro,
 		language: "csharp",
-		enhancers: [da(l.hunks)]
-	}) : null, [l, e.language]), C = i ? { [i.key]: /* @__PURE__ */ (0, m.jsx)(Jo, {
-		expanded: i,
-		insight: (i.side === "old" ? s : c).get(i.line),
+		enhancers: [da(f.hunks)]
+	}) : null, [f, e.language]), E = a ? { [a.key]: /* @__PURE__ */ (0, m.jsx)(Jo, {
+		expanded: a,
+		insight: (a.side === "old" ? u : d).get(a.line),
 		callbacks: t
 	}) } : {};
-	return /* @__PURE__ */ (0, m.jsxs)("div", {
+	return (0, h.useEffect)(() => {
+		let e = t.focusLine;
+		if (!e) {
+			c(null);
+			return;
+		}
+		let r = requestAnimationFrame(() => {
+			let t = n.current?.querySelector(`.rig-diff-gutter[data-rig-side="${e.side}"][data-rig-line="${e.line}"]`);
+			c(!!t), t?.closest("tr")?.scrollIntoView({ block: "center" });
+		});
+		return () => cancelAnimationFrame(r);
+	}, [
+		t.focusLine?.line,
+		t.focusLine?.side,
+		e.patch,
+		r
+	]), /* @__PURE__ */ (0, m.jsxs)("div", {
 		className: "rig-diff-island",
-		children: [/* @__PURE__ */ (0, m.jsxs)("div", {
-			className: "rig-diff-head",
-			children: [/* @__PURE__ */ (0, m.jsxs)("div", {
-				className: "rig-diff-identity",
-				title: e.relativePath,
-				children: [
-					/* @__PURE__ */ (0, m.jsxs)("div", {
-						className: "rig-diff-file-line",
-						children: [
-							/* @__PURE__ */ (0, m.jsx)("span", {
-								className: `rig-diff-status status-${e.status.toLowerCase()}`,
-								title: `Git status ${e.status}`,
-								children: e.status
-							}),
-							/* @__PURE__ */ (0, m.jsx)("strong", { children: u.name }),
-							/* @__PURE__ */ (0, m.jsxs)("span", {
-								className: "rig-diff-patch-counts",
-								"aria-label": `${d.additions} additions, ${d.deletions} deletions`,
-								children: [/* @__PURE__ */ (0, m.jsxs)("b", { children: ["+", d.additions] }), /* @__PURE__ */ (0, m.jsxs)("i", { children: ["−", d.deletions] })]
-							})
-						]
-					}),
-					u.parent ? /* @__PURE__ */ (0, m.jsx)("span", {
-						className: "rig-diff-parent",
-						children: u.parent
-					}) : null,
-					e.oldPath && e.newPath && e.oldPath !== e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
-						className: "rig-diff-path-change",
-						children: [
-							e.oldPath,
-							" → ",
-							e.newPath
-						]
-					}) : e.oldPath && !e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
-						className: "rig-diff-path-change",
-						children: ["deleted from ", e.oldPath]
-					}) : !e.oldPath && e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
-						className: "rig-diff-path-change",
-						children: ["added as ", e.newPath]
-					}) : null,
-					/* @__PURE__ */ (0, m.jsxs)("span", {
-						className: "rig-diff-revisions",
-						children: [
-							zo(e.base.commit),
-							" → ",
-							zo(e.head.commit)
-						]
-					})
-				]
-			}), /* @__PURE__ */ (0, m.jsxs)("div", {
-				className: "rig-diff-summary",
-				children: [
-					/* @__PURE__ */ (0, m.jsx)("span", {
-						className: `rig-diff-effect-delta ${b > 0 ? "added" : b < 0 ? "removed" : "stable"}`,
-						title: f && p ? `${g} base effect sites → ${_} head effect sites` : `base: ${e.base.semanticState}; head: ${e.head.semanticState}`,
-						children: x
-					}),
-					f || p ? /* @__PURE__ */ (0, m.jsx)("span", {
-						className: "rig-diff-tier-status",
-						children: f && e.base.findings === void 0 || p && e.head.findings === void 0 ? "tiers 1–3 loading…" : f && e.base.findings === null || p && e.head.findings === null ? "tiers 1–3 partially unavailable" : f && p ? `${v}/${y} findings` : f ? `${v} base findings` : `${y} head findings`
-					}) : null,
-					/* @__PURE__ */ (0, m.jsxs)("label", {
-						className: "rig-diff-viewed",
-						title: "Mark this file as reviewed (V)",
-						children: [/* @__PURE__ */ (0, m.jsx)("input", {
-							type: "checkbox",
-							checked: t.viewed || !1,
-							onChange: (e) => t.onViewedChange?.(e.target.checked)
-						}), "Viewed"]
-					}),
-					/* @__PURE__ */ (0, m.jsxs)("details", {
-						className: "rig-diff-settings",
-						children: [/* @__PURE__ */ (0, m.jsx)("summary", {
-							"aria-label": "Diff settings",
-							title: "Diff settings",
-							children: "⚙"
-						}), /* @__PURE__ */ (0, m.jsxs)("div", {
-							className: "rig-diff-settings-menu",
-							children: [/* @__PURE__ */ (0, m.jsxs)("fieldset", { children: [
-								/* @__PURE__ */ (0, m.jsx)("legend", { children: "Diff display" }),
-								/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
-									type: "radio",
-									name: "rig-diff-display",
-									value: "unified",
-									checked: n === "unified",
-									onChange: () => r("unified")
-								}), "Unified"] }),
-								/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
-									type: "radio",
-									name: "rig-diff-display",
-									value: "split",
-									checked: n === "split",
-									onChange: () => r("split")
-								}), "Split"] })
-							] }), /* @__PURE__ */ (0, m.jsxs)("label", {
-								className: "rig-diff-settings-check",
-								children: [/* @__PURE__ */ (0, m.jsx)("input", {
-									type: "checkbox",
-									checked: t.ignoreWhitespace || !1,
-									onChange: (e) => t.onIgnoreWhitespaceChange?.(e.target.checked)
-								}), "Hide whitespace changes"]
+		ref: n,
+		children: [
+			/* @__PURE__ */ (0, m.jsxs)("div", {
+				className: "rig-diff-head",
+				children: [/* @__PURE__ */ (0, m.jsxs)("div", {
+					className: "rig-diff-identity",
+					title: e.relativePath,
+					children: [
+						/* @__PURE__ */ (0, m.jsxs)("div", {
+							className: "rig-diff-file-line",
+							children: [
+								/* @__PURE__ */ (0, m.jsx)("span", {
+									className: `rig-diff-status status-${e.status.toLowerCase()}`,
+									title: `Git status ${e.status}`,
+									children: e.status
+								}),
+								/* @__PURE__ */ (0, m.jsx)("strong", { children: p.name }),
+								/* @__PURE__ */ (0, m.jsxs)("span", {
+									className: "rig-diff-patch-counts",
+									"aria-label": `${g.additions} additions, ${g.deletions} deletions`,
+									children: [/* @__PURE__ */ (0, m.jsxs)("b", { children: ["+", g.additions] }), /* @__PURE__ */ (0, m.jsxs)("i", { children: ["−", g.deletions] })]
+								})
+							]
+						}),
+						p.parent ? /* @__PURE__ */ (0, m.jsx)("span", {
+							className: "rig-diff-parent",
+							children: p.parent
+						}) : null,
+						e.oldPath && e.newPath && e.oldPath !== e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
+							className: "rig-diff-path-change",
+							children: [
+								e.oldPath,
+								" → ",
+								e.newPath
+							]
+						}) : e.oldPath && !e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
+							className: "rig-diff-path-change",
+							children: ["deleted from ", e.oldPath]
+						}) : !e.oldPath && e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
+							className: "rig-diff-path-change",
+							children: ["added as ", e.newPath]
+						}) : null,
+						/* @__PURE__ */ (0, m.jsxs)("span", {
+							className: "rig-diff-revisions",
+							children: [
+								zo(e.base.commit),
+								" → ",
+								zo(e.head.commit)
+							]
+						})
+					]
+				}), /* @__PURE__ */ (0, m.jsxs)("div", {
+					className: "rig-diff-summary",
+					children: [
+						/* @__PURE__ */ (0, m.jsx)("span", {
+							className: `rig-diff-effect-delta ${C > 0 ? "added" : C < 0 ? "removed" : "stable"}`,
+							title: _ && v ? `${y} base effect sites → ${b} head effect sites` : `base: ${e.base.semanticState}; head: ${e.head.semanticState}`,
+							children: w
+						}),
+						_ || v ? /* @__PURE__ */ (0, m.jsx)("span", {
+							className: "rig-diff-tier-status",
+							children: _ && e.base.findings === void 0 || v && e.head.findings === void 0 ? "tiers 1–3 loading…" : _ && e.base.findings === null || v && e.head.findings === null ? "tiers 1–3 partially unavailable" : _ && v ? `${x}/${S} findings` : _ ? `${x} base findings` : `${S} head findings`
+						}) : null,
+						/* @__PURE__ */ (0, m.jsxs)("label", {
+							className: "rig-diff-viewed",
+							title: "Mark this file as reviewed (V)",
+							children: [/* @__PURE__ */ (0, m.jsx)("input", {
+								type: "checkbox",
+								checked: t.viewed || !1,
+								onChange: (e) => t.onViewedChange?.(e.target.checked)
+							}), "Viewed"]
+						}),
+						/* @__PURE__ */ (0, m.jsxs)("details", {
+							className: "rig-diff-settings",
+							children: [/* @__PURE__ */ (0, m.jsx)("summary", {
+								"aria-label": "Diff settings",
+								title: "Diff settings",
+								children: "⚙"
+							}), /* @__PURE__ */ (0, m.jsxs)("div", {
+								className: "rig-diff-settings-menu",
+								children: [/* @__PURE__ */ (0, m.jsxs)("fieldset", { children: [
+									/* @__PURE__ */ (0, m.jsx)("legend", { children: "Diff display" }),
+									/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
+										type: "radio",
+										name: "rig-diff-display",
+										value: "unified",
+										checked: r === "unified",
+										onChange: () => i("unified")
+									}), "Unified"] }),
+									/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
+										type: "radio",
+										name: "rig-diff-display",
+										value: "split",
+										checked: r === "split",
+										onChange: () => i("split")
+									}), "Split"] })
+								] }), /* @__PURE__ */ (0, m.jsxs)("label", {
+									className: "rig-diff-settings-check",
+									children: [/* @__PURE__ */ (0, m.jsx)("input", {
+										type: "checkbox",
+										checked: t.ignoreWhitespace || !1,
+										onChange: (e) => t.onIgnoreWhitespaceChange?.(e.target.checked)
+									}), "Hide whitespace changes"]
+								})]
 							})]
-						})]
-					})
+						})
+					]
+				})]
+			}),
+			t.focusLine && s === !1 ? /* @__PURE__ */ (0, m.jsxs)("div", {
+				className: "rig-diff-focus-note",
+				children: [
+					t.focusLine.side === "old" ? "Base" : "Head",
+					" line ",
+					t.focusLine.line,
+					" is outside the changed hunks and their ",
+					e.contextLines,
+					"-line context."
 				]
-			})]
-		}), l ? /* @__PURE__ */ (0, m.jsx)(hi, {
-			viewType: n,
-			diffType: l.type,
-			hunks: l.hunks,
-			tokens: S,
-			widgets: C,
-			renderGutter: ({ change: e, side: t, renderDefault: n, wrapInAnchor: r }) => {
-				let i = Wo(e, t), o = i == null ? void 0 : (t === "old" ? s : c).get(i), l = kr(e);
-				return r(/* @__PURE__ */ (0, m.jsxs)("span", {
-					className: "rig-diff-gutter",
-					children: [o ? /* @__PURE__ */ (0, m.jsx)("button", {
-						type: "button",
-						className: "rig-diff-mark-button",
-						title: "Show effects and open their call trees",
-						onClick: (e) => {
-							e.preventDefault(), e.stopPropagation(), a((e) => e?.key === l && e.side === t ? null : {
-								key: l,
-								side: t,
-								line: i
-							});
-						},
-						children: /* @__PURE__ */ (0, m.jsx)(qo, { insight: o })
-					}) : null, n()]
-				}));
-			},
-			children: (e) => e.map((e) => /* @__PURE__ */ (0, m.jsx)(ui, { hunk: e }, e.content))
-		}) : /* @__PURE__ */ (0, m.jsx)("div", {
-			className: "rig-diff-empty",
-			children: "No textual changes in this file."
-		})]
+			}) : null,
+			f ? /* @__PURE__ */ (0, m.jsx)(hi, {
+				viewType: r,
+				diffType: f.type,
+				hunks: f.hunks,
+				tokens: T,
+				widgets: E,
+				renderGutter: ({ change: e, side: n, renderDefault: r, wrapInAnchor: i }) => {
+					let a = Wo(e, n), s = a == null ? void 0 : (n === "old" ? u : d).get(a), c = kr(e), l = t.focusLine?.side === n && t.focusLine.line === a;
+					return i(/* @__PURE__ */ (0, m.jsxs)("span", {
+						className: `rig-diff-gutter${l ? " focus" : ""}`,
+						"data-rig-side": n,
+						"data-rig-line": a ?? void 0,
+						children: [s ? /* @__PURE__ */ (0, m.jsx)("button", {
+							type: "button",
+							className: "rig-diff-mark-button",
+							title: "Show effects and open their call trees",
+							onClick: (e) => {
+								e.preventDefault(), e.stopPropagation(), o((e) => e?.key === c && e.side === n ? null : {
+									key: c,
+									side: n,
+									line: a
+								});
+							},
+							children: /* @__PURE__ */ (0, m.jsx)(qo, { insight: s })
+						}) : null, r()]
+					}));
+				},
+				children: (e) => e.map((e) => /* @__PURE__ */ (0, m.jsx)(ui, { hunk: e }, e.content))
+			}) : /* @__PURE__ */ (0, m.jsx)("div", {
+				className: "rig-diff-empty",
+				children: "No textual changes in this file."
+			})
+		]
 	});
 }
 function Xo(e, t, n = {}) {
