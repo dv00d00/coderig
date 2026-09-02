@@ -1,0 +1,24 @@
+# Internal CI (gitlab.meddbase.com/mms/coderig). This file is itself internal-only, but is kept at the repo
+# root because GitLab requires it there — it is harmless if it ever reaches the public repo.
+#
+# Its one job today is the meddbase/ boundary check: the mechanism that keeps tool fixes portable upstream
+# without relying on anyone remembering to check. See meddbase/README.md for the contract.
+#
+# NOTE: the build/test pipeline deliberately is NOT duplicated here. `scripts/mini-ci.ps1` (format -> build ->
+# all tests -> pack -> reinstall the global tool) remains the ship flow, and duplicating it in CI would create
+# a second source of truth that drifts. Add it here only if internal CI is meant to gate merges.
+
+stages:
+  - check
+
+meddbase-boundary:
+  stage: check
+  image: alpine:latest
+  variables:
+    GIT_DEPTH: 0 # full history — the check needs a merge-base with main
+  before_script:
+    - apk add --no-cache bash git
+  script:
+    - bash meddbase/ci/check-portable-branch.sh "$CI_COMMIT_REF_NAME"
+  rules:
+    - if: $CI_COMMIT_REF_NAME != "main"
