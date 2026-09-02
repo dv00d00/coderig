@@ -355,6 +355,7 @@ async function mountFileDiff(data) {
   // latest render may mount: a late initial render otherwise overwrites completed findings with "loading".
   if (renderId !== reviewRenderId || get().appMode !== "review" || get().reviewData !== data || get().reviewError) return;
   fileDiffModule.mountFileDiff(refs.review, data, {
+    onLoadSource: (side) => api.reviewSource(data.base.store, data.head.store, data.file, side),
     onOpenTree: (id, side) => {
       // A base witness must open the base index, not whichever store the tree last displayed.
       set({ storeId: side === "old" ? data.base.store : data.head.store });

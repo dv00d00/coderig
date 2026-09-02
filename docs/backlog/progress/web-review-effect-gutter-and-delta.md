@@ -231,7 +231,8 @@ while the language's own rule says removal renders struck-grey and never green.
    `tiers 1–3 loading…`, which on a monolith-sized store reads as broken for seconds. (XS.)
 8. **Fold-bar expansion with a ranged fetch** for surrounding context, in place of populating `Content`
    with whole-file text. Both consultations rank full-file last and one argues `-U20` already covers most
-   review reading. (M.)
+   review reading. (M.) The user subsequently requested full-file reading explicitly on 2026-09-02;
+   the agreed first slice is a lazy single-revision full-file view, not expansion of both diff panes.
 
 ### Delivered first production slice — 2026-09-02
 
@@ -325,6 +326,37 @@ presentation controls. Light/dark × unified/split checks at 1280 and 1920 pixel
 gutter. An explicitly synthetic fixture covers multiple calls per line, tier-2/3 candidate wording,
 findings-only rows, declaration-only/last-effect removals, and loading/error/disabled/empty states; this
 is not a MedDBase calibration or evidence that cross-method analysis is enabled in the current store.
+
+### Full-file reading — 2026-09-02
+
+`Full file` lazily opens one exact Git revision in the existing review surface, including lines outside
+the patch. Head is the default; deleted files open Base. `File revision` switches sides, while `Back to
+diff` restores the unchanged bounded patch and its Unified/Split preference. Focus, hidden file queue,
+wrapping and collapsed effects remain available. Source rows have one revision-native numbered gutter,
+no artificial insertion/deletion tint, and the same effects/findings and tree-link identities as the diff.
+
+`GET /api/review-source?base=…&head=…&file=…&side=base|head` resolves membership and rename paths through
+the shared immutable review inventory, then reads the Git blob at the store's source commit. It never
+falls back to a dirty/current working-tree file or recalculates annotations. The ordinary diff response
+still contains only 20-line-context hunks. Source loading is independent of findings updates; navigation
+and revision changes invalidate outstanding responses. Failures can retry and are not persisted in the
+browser cache. Empty, absent, binary/unsupported-encoding and unavailable source are distinct states.
+
+Current full-file preview limits are explicit: UTF-8 text up to 4 MiB and 20,000 lines; larger files are
+refused with an explanation, never silently truncated. Above 200,000 characters or 5,000 lines, syntax
+highlighting is disabled while all permitted source lines remain readable. Ranged expansion inside the
+two diff panes and virtualized reading above these limits are still follow-ups.
+
+Checkpoint validation: all 29 frontend tests, TypeScript checking, the frontend production build, and
+the .NET solution build passed. A real Chrome/Playwright smoke against the newly built backend covers
+Head/Base full-file reading, collapsed effects and revision-native widgets, focus/hidden files, return
+to diff, and one lazy source request per revision without additional semantic requests. Both source
+payloads match the corresponding Git blobs. Expanded widgets retain the full code-column width.
+
+The ordinary .NET suite and the additional browser resilience checks were interrupted to relieve host
+resource pressure; they are **not** recorded as passing for this slice. Packaging/global-tool install
+did not finish, so the existing local server still runs the previous installed version. This is a
+user-requested push checkpoint, not a completed release gate; remaining checks must run before release.
 
 ### Acceptance
 

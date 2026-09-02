@@ -226,6 +226,9 @@ export const api = {
       `file-diff|${base}|${head}|${file}|${!!ignoreWhitespace}`,
       "/api/file-diff" + qs({ base, head, file, ignoreWhitespace: ignoreWhitespace ? true : undefined }),
     ),
+  // Exact immutable Git source, fetched only on demand. Do not persist unavailable/binary/error results.
+  reviewSource: (base, head, file, side) =>
+    getJson("/api/review-source" + qs({ base, head, file, side })),
   // The Git change inventory is cheap but immutable for a pair of commit-scoped stores. It is the review
   // navigation model; every row opens, while source-file inventories only determine Semantic-ready status.
   reviewFiles: (base, head) =>

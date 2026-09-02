@@ -37,6 +37,62 @@ internal static class FileDiffEndpoint
         }
 
         app.MapGet(
+            "/api/review-source",
+            async (string? @base, string? head, string? file, string? side) =>
+            {
+                if (
+                    string.IsNullOrWhiteSpace(@base)
+                    || string.IsNullOrWhiteSpace(head)
+                    || string.IsNullOrWhiteSpace(file)
+                    || side is not ("base" or "head")
+                    || string.Equals(@base, head, StringComparison.OrdinalIgnoreCase)
+                )
+                {
+                    return Results.Problem(
+                        title: "Invalid review source request",
+                        detail: "Provide distinct base/head stores, a changed file and side=base|head.",
+                        statusCode: 400
+                    );
+                }
+
+                try
+                {
+                    // Shares the already loaded immutable inventory; never re-derive annotations or scan
+                    // every changed file merely to switch from hunks to source.
+                    var inventory = await LoadInventoryCachedAsync(@base, head);
+                    var changed = ResolveChangedFile(inventory.Files, file);
+                    var path = side == "base" ? changed.OldPath : changed.NewPath;
+                    var store = side == "base" ? @base : head;
+                    var commit = side == "base" ? inventory.Base.Commit : inventory.Head.Commit;
+                    var language = System.IO.Path.GetExtension(path ?? changed.Path).Equals(".cs", StringComparison.OrdinalIgnoreCase)
+                        ? "csharp"
+                        : "text";
+                    var blob = path is null
+                        ? new ReviewSourceBlob("not-present", null, null, "This file does not exist in the selected revision.")
+                        : await ReadReviewBlobAsync(inventory.Repo, commit, path);
+                    return Results.Json(
+                        new ReviewSourceResponseDto(
+                            changed.Path,
+                            side,
+                            store,
+                            commit,
+                            path,
+                            language,
+                            blob.State,
+                            blob.Content,
+                            blob.ByteLength,
+                            blob.Reason
+                        )
+                    );
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(title: "Review source failed", detail: ex.Message, statusCode: 400);
+                }
+            }
+        );
+
+        app.MapGet(
             "/api/file-diff",
             async (string? @base, string? head, string? file, bool? ignoreWhitespace) =>
             {
@@ -95,6 +151,76 @@ internal static class FileDiffEndpoint
 
     private static ReviewFilesResponseDto BuildReviewFiles(string baseStore, string headStore, ReviewInventory inventory) =>
         new(baseStore, headStore, inventory.Base.Commit, inventory.Head.Commit, inventory.Files);
+
+    private const int MaxReviewSourceBytes = 4 * 1024 * 1024;
+
+    private static async Task<ReviewSourceBlob> ReadReviewBlobAsync(string repo, string commit, string path)
+    {
+        // Both parts originate in the validated store/inventory, never a caller-supplied ref or disk path.
+        var objectName = $"{commit}:{path}";
+        try
+        {
+            var size = long.Parse(
+                (await RunGitAsync(repo, "cat-file", "-s", objectName)).Trim(),
+                System.Globalization.CultureInfo.InvariantCulture
+            );
+            if (size > MaxReviewSourceBytes)
+            {
+                return new(
+                    "too-large",
+                    null,
+                    size,
+                    "Full-file preview is limited to 4 MiB. The exact file is not truncated; use the diff or open this revision locally."
+                );
+            }
+
+            var start = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = repo,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (var argument in new[] { "cat-file", "blob", objectName })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("Git could not be started.");
+            var errorTask = process.StandardError.ReadToEndAsync();
+            var bytes = new byte[checked((int)size)];
+            await process.StandardOutput.BaseStream.ReadExactlyAsync(bytes);
+            await process.WaitForExitAsync();
+            var error = await errorTask;
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException(error.Trim());
+            if (bytes.Contains((byte)0))
+                return new("binary", null, size, "Binary files cannot be displayed as source.");
+            var lines = bytes.Count(value => value == (byte)'\n') + (bytes.Length > 0 && bytes[^1] != (byte)'\n' ? 1 : 0);
+            if (lines > 20_000)
+            {
+                return new(
+                    "too-large",
+                    null,
+                    size,
+                    "Full-file preview is limited to 20,000 lines. The exact file is not truncated; use the diff or open this revision locally."
+                );
+            }
+            try
+            {
+                // Strict UTF-8 avoids silently replacing undecodable bytes and calling that exact source.
+                return new("available", new UTF8Encoding(false, true).GetString(bytes), size, null);
+            }
+            catch (DecoderFallbackException)
+            {
+                return new("binary", null, size, "This file is binary or uses an unsupported text encoding (UTF-8 is required).");
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            return new("unavailable", null, null, $"Exact Git source is unavailable: {ex.Message}");
+        }
+    }
+
+    private sealed record ReviewSourceBlob(string State, string? Content, long? ByteLength, string? Reason);
 
     private static async Task<FileDiffResponseDto> BuildAsync(
         string workingDirectory,

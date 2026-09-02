@@ -48,3 +48,17 @@ internal sealed record ReviewFilesResponseDto(
     string HeadCommit,
     IReadOnlyList<ReviewFileDto> Files
 );
+
+// Exact, lazily requested Git source. Null content is unavailable; an empty string is a real empty blob.
+internal sealed record ReviewSourceResponseDto(
+    string File,
+    string Side,
+    string Store,
+    string Commit,
+    string? Path,
+    string Language,
+    string State,
+    string? Content,
+    long? ByteLength,
+    string? Reason
+);

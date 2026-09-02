@@ -23,6 +23,7 @@ import {
   type MethodDeltaIndex,
 } from "./effect-delta.ts";
 import { semanticLaneSide } from "./review-gutter.ts";
+import { canHighlightSource, matchesReviewSource, reviewSourceIdentity, sourceHunk, type ReviewSource } from "./review-source.ts";
 import {
   amplificationLabel, anchorLabel, effectFamilyLabel, findingsStatus, inlineEffectLabel, disclosureLabel,
   readReviewEffectMode, reviewEffectModes, saveReviewEffectMode, type ReviewEffectMode,
@@ -126,6 +127,7 @@ export type FileDiffModel = {
 };
 
 export type FileDiffCallbacks = {
+  onLoadSource?: (side: "base" | "head") => Promise<ReviewSource>;
   onOpenTree?: (symbolId: string, side: "old" | "new") => void;
   focusLine?: { side: "old" | "new"; line: number } | null;
   ignoreWhitespace?: boolean;
@@ -432,14 +434,51 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   const [wrapLines, setWrapLines] = useState(true);
   const [effectMode, setEffectMode] = useState<ReviewEffectMode>(() => readReviewEffectMode());
   const [expanded, setExpanded] = useState<Expanded | null>(null);
-  const expansionContext = useMemo(() => ({}), [model.file, model.base.store, model.head.store, model.base.commit, model.head.commit, model.patch]);
+  const identity = reviewSourceIdentity(model);
+  const [sourceView, setSourceView] = useState<{ identity: string; side: "base" | "head" } | null>(null);
+  const showSource = sourceView?.identity === identity;
+  const sourceSide = sourceView?.side || "head";
+  const sourceNativeSide = sourceSide === "base" ? "old" : "new";
+  const [sourceResult, setSourceResult] = useState<{ key: string; value?: ReviewSource; error?: string } | null>(null);
+  const [sourceRetry, setSourceRetry] = useState(0);
+  const sourceKey = JSON.stringify([identity, sourceSide, sourceRetry]);
+  const source = showSource && sourceResult?.key === sourceKey ? sourceResult.value : undefined;
+  const sourceError = showSource && sourceResult?.key === sourceKey ? sourceResult.error : undefined;
+  const sourceLoader = useRef(callbacks.onLoadSource);
+  sourceLoader.current = callbacks.onLoadSource;
+  useEffect(() => {
+    setSourceView(null);
+    setSourceResult(null);
+  }, [identity]);
+  useEffect(() => {
+    if (!showSource) return;
+    let cancelled = false;
+    setSourceResult(null);
+    const load = sourceLoader.current;
+    if (!load) return;
+    load(sourceSide).then((value) => {
+      if (cancelled) return;
+      if (!matchesReviewSource(value, model, sourceSide)) throw new Error("Source revision does not match the selected review.");
+      setSourceResult({ key: sourceKey, value });
+    }).catch((error: unknown) => {
+      if (!cancelled) setSourceResult({ key: sourceKey, error: error instanceof Error ? error.message : "Source request failed." });
+    });
+    return () => { cancelled = true; };
+  }, [identity, showSource, sourceSide, sourceRetry]);
+  const fullHunk = useMemo(() => source?.state === "available" && source.content !== null ? sourceHunk(source.content) : null, [source]);
+  const effectiveView = showSource ? "unified" : viewType;
+  const expansionContext = useMemo(() => ({}), [model.file, model.base.store, model.head.store, model.base.commit, model.head.commit, model.patch, showSource, sourceSide]);
   const activeExpanded = expanded?.context === expansionContext ? expanded : null;
   const [focusFound, setFocusFound] = useState<boolean | null>(null);
   const files = useMemo(() => (model.patch.trim() ? parseDiff(model.patch) : []), [model.patch]);
   const oldLines = useMemo(() => byLine(model.base), [model.base]);
   const newLines = useMemo(() => byLine(model.head), [model.head]);
   const file = files[0];
-  const path = useMemo(() => pathParts(model.relativePath || model.file), [model.relativePath, model.file]);
+  const displayedHunks = useMemo(() => showSource ? (fullHunk ? [fullHunk] : []) : file?.hunks || [], [showSource, fullHunk, file]);
+  const sourceHighlight = !showSource || canHighlightSource(source?.content || "", fullHunk?.newLines || 0);
+  const displayedLanguage = showSource ? source?.language : model.language;
+  const displayPath = showSource ? model[sourceSide].path || model.relativePath : model.relativePath;
+  const path = useMemo(() => pathParts(displayPath || model.file), [displayPath, model.file]);
   const patchCounts = useMemo(() => {
     if (!file) return { additions: 0, deletions: 0 };
     return file.hunks.reduce(
@@ -479,15 +518,15 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
           : "semantics unavailable";
   const tokens = useMemo(
     () =>
-      file && model.language === "csharp"
-        ? tokenize(file.hunks, {
+      displayedHunks.length && displayedLanguage === "csharp" && sourceHighlight
+        ? tokenize(displayedHunks, {
             highlight: true,
             refractor: syntaxHighlighter,
             language: "csharp",
-            enhancers: [markEdits(file.hunks)],
+            enhancers: showSource ? [] : [markEdits(displayedHunks)],
           })
         : null,
-    [file, model.language],
+    [displayedHunks, displayedLanguage, showSource, sourceHighlight],
   );
   const projection = useMemo(() => {
     const rows = new Map<string, ProjectedChange>();
@@ -496,8 +535,9 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
     );
     const oldHeaders = headersAt(methodDeltas.baseByLine);
     const newHeaders = headersAt(methodDeltas.headByLine);
-    for (const hunk of file?.hunks || []) for (const change of hunk.changes) {
+    for (const hunk of displayedHunks) for (const change of hunk.changes) {
       const row = (side: "old" | "new"): SemanticRow | undefined => {
+        if (showSource && side !== sourceNativeSide) return undefined;
         const line = changeLine(change, side);
         if (line == null) return undefined;
         const insight = (side === "old" ? oldLines : newLines).get(line);
@@ -512,7 +552,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
       rows.set(getChangeKey(change), { change, old, new: next, identical });
     }
     return rows;
-  }, [file, oldLines, newLines, methodDeltas]);
+  }, [displayedHunks, oldLines, newLines, methodDeltas, showSource, sourceNativeSide]);
   const toggleExpanded = (value: Expanded) => setExpanded((current) =>
     current?.context === expansionContext && current.key === value.key && current.side === value.side
       ? null : { ...value, context: expansionContext },
@@ -526,11 +566,11 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
     const widget = <EffectWidget expanded={activeExpanded} insight={row.insight} headers={row.headers} callbacks={callbacks} deltas={methodDeltas} />;
     // Normal changes share a single library widget key (colspan=4). Place the sole expansion in its
     // native pane; never allocate duplicate details or any extra table row before the reader asks for it.
-    result[activeExpanded.key] = viewType === "split" && item.change.type === "normal"
+    result[activeExpanded.key] = effectiveView === "split" && item.change.type === "normal"
       ? <div className="rig-diff-inline-pair"><div>{activeExpanded.side === "old" ? widget : null}</div><div>{activeExpanded.side === "new" ? widget : null}</div></div>
       : <div className="rig-diff-inline-single">{widget}</div>;
     return result;
-  }, [projection, effectMode, activeExpanded, viewType, callbacks, expansionContext, methodDeltas]);
+  }, [projection, effectMode, activeExpanded, effectiveView, callbacks, expansionContext, methodDeltas]);
 
   useEffect(() => setExpanded(null), [expansionContext]);
 
@@ -549,21 +589,21 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
       gutter?.closest("tr")?.scrollIntoView({ block: "center" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [callbacks.focusLine?.line, callbacks.focusLine?.side, model.patch, viewType]);
+  }, [callbacks.focusLine?.line, callbacks.focusLine?.side, model.patch, effectiveView, fullHunk]);
 
   return (
-    <div className={`rig-diff-island view-${viewType} effects-${effectMode} ${wrapLines ? "wrap-lines" : "no-wrap"}`} ref={rootRef}>
+    <div className={`rig-diff-island view-${effectiveView} effects-${effectMode} ${showSource ? "full-source" : "patch-source"} ${wrapLines ? "wrap-lines" : "no-wrap"}`} ref={rootRef}>
       <div className="rig-diff-head">
-        <div className="rig-diff-identity" title={model.relativePath}>
+        <div className="rig-diff-identity" title={displayPath}>
           <div className="rig-diff-file-line">
             <span className={`rig-diff-status status-${model.status.toLowerCase()}`} title={`Git status ${model.status}`}>
               {model.status}
             </span>
             <strong>{path.name}</strong>
-            <span className="rig-diff-patch-counts" aria-label={`${patchCounts.additions} additions, ${patchCounts.deletions} deletions`}>
+            {!showSource ? <span className="rig-diff-patch-counts" aria-label={`${patchCounts.additions} additions, ${patchCounts.deletions} deletions`}>
               <b>+{patchCounts.additions}</b>
               <i>−{patchCounts.deletions}</i>
-            </span>
+            </span> : <span className="rig-source-revision">{sourceSide === "base" ? "Base" : "Head"} · {shortSha(model[sourceSide].commit)}</span>}
           </div>
           {path.parent ? <span className="rig-diff-parent">{path.parent}</span> : null}
           {model.oldPath && model.newPath && model.oldPath !== model.newPath
@@ -576,6 +616,12 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
           <span className="rig-diff-revisions">{shortSha(model.base.commit)} → {shortSha(model.head.commit)}</span>
         </div>
         <div className="rig-diff-summary">
+          {callbacks.onLoadSource ? <button type="button" className="rig-diff-toolbar-button" aria-pressed={showSource} onClick={() => {
+            setSourceView(showSource ? null : { identity, side: model.newPath ? "head" : "base" });
+          }}>{showSource ? "Back to diff" : "Full file"}</button> : null}
+          {showSource ? <select className="rig-diff-toolbar-button" aria-label="File revision" value={sourceSide} onChange={(event) => setSourceView({ identity, side: event.target.value as "base" | "head" })}>
+            <option value="base">Base</option><option value="head">Head</option>
+          </select> : null}
           {callbacks.onFilesHiddenChange ? <button type="button" className="rig-diff-toolbar-button" aria-expanded={!callbacks.filesHidden} onClick={() => callbacks.onFilesHiddenChange?.(!callbacks.filesHidden)}>
             {callbacks.filesHidden ? "Show files" : "Hide files"}
           </button> : null}
@@ -612,7 +658,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
                   {mode === "inline" ? "Inline" : mode === "gutter" ? "Gutter" : "Off"}
                 </label>)}
               </fieldset>
-              <fieldset>
+              <fieldset disabled={showSource}>
                 <legend>Diff display</legend>
                 <label>
                   <input
@@ -638,6 +684,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
               <label className="rig-diff-settings-check">
                 <input
                   type="checkbox"
+                  disabled={showSource}
                   checked={callbacks.ignoreWhitespace || false}
                   onChange={(event) => callbacks.onIgnoreWhitespaceChange?.(event.target.checked)}
                 />
@@ -676,18 +723,25 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
             </details>
           </div>
         : null}
-      {callbacks.focusLine && focusFound === false
+      {callbacks.focusLine && focusFound === false && !showSource
         ? <div className="rig-diff-focus-note">
             {callbacks.focusLine.side === "old" ? "Base" : "Head"} line {callbacks.focusLine.line} is outside the changed hunks and their {model.contextLines}-line context.
           </div>
         : null}
-      {!file ? (
+      {showSource && (!source || source.state !== "available" || !fullHunk) ? (
+        <div className="rig-diff-empty rig-source-message" role="status">
+          {sourceError || (source ? source.reason || "Empty file — 0 bytes in this revision." : "Loading exact file from Git…")}
+          {sourceError || source?.state === "unavailable" ? <button type="button" className="rig-diff-toolbar-button" onClick={() => setSourceRetry(value => value + 1)}>Retry source</button> : null}
+        </div>
+      ) : !showSource && !file ? (
         <div className="rig-diff-empty">No textual changes in this file.</div>
       ) : (
+        <>
+        {showSource && !sourceHighlight ? <div className="rig-diff-focus-note">Full file · {fullHunk?.newLines} lines. Syntax highlighting is off for this large file; all source lines remain available.</div> : null}
         <Diff
-          viewType={viewType}
-          diffType={file.type}
-          hunks={file.hunks}
+          viewType={effectiveView}
+          diffType={showSource ? "modify" : file.type}
+          hunks={displayedHunks}
           tokens={tokens}
           widgets={widgets}
           renderGutter={({ change, side, renderDefault, wrapInAnchor }) => {
@@ -695,12 +749,13 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
             const key = getChangeKey(change);
             const item = projection.get(key);
             const suppressBase = canSuppressBaseGutter(item?.identical || false, item?.old?.headers.length || 0, item?.new?.headers.length || 0);
-            const laneSide = effectMode !== "off" ? semanticLaneSide(viewType, change.type, side, suppressBase) : null;
+            const laneSide = effectMode !== "off" ? (showSource ? (side === "new" ? sourceNativeSide : null) : semanticLaneSide(viewType, change.type, side, suppressBase)) : null;
             const line = laneSide == null ? null : changeLine(change, laneSide);
             const row = laneSide == null ? undefined : item?.[laneSide];
             const insight = row?.insight;
             const headers = row?.headers || [];
-            const focused = callbacks.focusLine?.side === side && callbacks.focusLine.line === nativeLine;
+            const displayedSide = showSource ? sourceNativeSide : side;
+            const focused = callbacks.focusLine?.side === displayedSide && callbacks.focusLine.line === nativeLine;
             const changed = headers.length > 0 || (insight?.effects || []).some((effect) => lineEffectChange(effect, insight, headers, laneSide!, methodDeltas) !== "same");
             const hazard = !!insight?.hazards.length;
             const amplified = !!(insight?.amplifications.length || insight?.anchors.length);
@@ -716,8 +771,8 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
             return wrapInAnchor(
               <span
                 className={`rig-diff-gutter${focused ? " focus" : ""}${headers.length ? " method-change" : ""}`}
-                data-rig-side={side}
-                data-rig-line={nativeLine ?? undefined}
+                data-rig-side={showSource && side === "old" ? undefined : displayedSide}
+                data-rig-line={showSource && side === "old" ? undefined : nativeLine ?? undefined}
                 title={laneSide == null ? undefined : methodChangeTitle(headers, laneSide) || undefined}
               >
                 {insight || headers.length ? (
@@ -749,6 +804,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
         >
           {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
         </Diff>
+        </>
       )}
     </div>
   );

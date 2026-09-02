@@ -18,6 +18,31 @@
   font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Full-source rows are native normal lines: one numbered gutter, no synthetic insertion/deletion tint. */
+.rig-diff-island.full-source col.diff-gutter-col:first-child {
+  width: 0;
+  min-width: 0;
+}
+
+/* Keep the zero-width table column: library widgets span all three logical columns. Removing it
+   with display:none makes an expanded widget create a phantom column and halves the source width. */
+.rig-diff-island.full-source .diff-line > .diff-gutter:first-child {
+  visibility: hidden;
+  overflow: hidden;
+  padding: 0;
+}
+
+.rig-source-revision {
+  color: var(--muted);
+  font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+.rig-source-message {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
 .rig-diff-readiness [data-state="unavailable"] {
   color: var(--warn);
 }
