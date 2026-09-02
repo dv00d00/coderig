@@ -14,6 +14,14 @@ import { refractor } from "refractor/core";
 import csharp from "refractor/csharp";
 import "react-diff-view/style/index.css";
 import "./file-diff.css";
+import {
+  buildMethodDeltaIndex,
+  changedEffects,
+  effectChangeAtSite,
+  type EffectChangeKind,
+  type MethodComparison,
+  type MethodDeltaIndex,
+} from "./effect-delta.ts";
 
 type FileEffect = {
   family: string;
@@ -133,6 +141,17 @@ type LineInsight = {
   anchors: FileAnchor[];
 };
 
+const effectFamilies = [
+  { key: "db", mark: "D", label: "database" },
+  { key: "cache", mark: "C", label: "cache" },
+  { key: "blob", mark: "B", label: "blob/object store" },
+  { key: "bus", mark: "Q", label: "message bus" },
+  { key: "echo", mark: "E", label: "echo/event channel" },
+  { key: "io", mark: "I", label: "file system / I/O" },
+  { key: "rpc", mark: "R", label: "remote call" },
+  { key: "search", mark: "S", label: "search" },
+] as const;
+
 const roots = new WeakMap<Element, Root>();
 refractor.register(csharp);
 // react-diff-view's tokenizer consumes the pre-refractor-4 array shape. Modern refractor returns a HAST
@@ -190,6 +209,19 @@ function changeLine(change: ChangeData, side: "old" | "new"): number | null {
   return change.type === "insert" ? change.lineNumber : change.newLineNumber;
 }
 
+function mergeEffect(target: FileEffect[], effect: FileEffect): void {
+  const existing = target.find((candidate) => candidate.family === effect.family);
+  if (!existing) {
+    target.push({ ...effect });
+    return;
+  }
+  const strongerBasis = existing.viaDispatchOnly && !effect.viaDispatchOnly;
+  const nearer = existing.viaDispatchOnly === effect.viaDispatchOnly && effect.nearestDepth < existing.nearestDepth;
+  const looped = existing.looped || effect.looped;
+  if (strongerBasis || nearer) Object.assign(existing, effect, { looped });
+  else existing.looped = looped;
+}
+
 function byLine(revision: Revision): Map<number, LineInsight> {
   const result = new Map<number, LineInsight>();
   if (!revision.effects) return result;
@@ -206,16 +238,7 @@ function byLine(revision: Revision): Map<number, LineInsight> {
     const insight = row(site.line);
     insight.sites.push(site);
     for (const effect of site.effects) {
-      const existing = insight.effects.find((candidate) => candidate.family === effect.family);
-      if (!existing) {
-        insight.effects.push({ ...effect });
-        continue;
-      }
-      const strongerBasis = existing.viaDispatchOnly && !effect.viaDispatchOnly;
-      const nearer = existing.viaDispatchOnly === effect.viaDispatchOnly && effect.nearestDepth < existing.nearestDepth;
-      const looped = existing.looped || effect.looped;
-      if (strongerBasis || nearer) Object.assign(existing, effect, { looped });
-      else existing.looped = looped;
+      mergeEffect(insight.effects, effect);
     }
   }
   for (const finding of revision.findings?.hazards || []) row(finding.line).hazards.push(finding);
@@ -244,17 +267,105 @@ function EffectBadge({ effect }: { effect: FileEffect }) {
   );
 }
 
-function EffectMarks({ insight }: { insight: LineInsight }) {
-  const shownEffects = insight.effects.slice(0, 2);
-  const hidden = insight.effects.length - shownEffects.length;
-  const count = insight.effects.length + insight.hazards.length + insight.amplifications.length + insight.anchors.length;
+function changeForSide(kind: EffectChangeKind | undefined, side: "old" | "new"): EffectChangeKind {
+  if (kind === "changed") return "changed";
+  if (side === "old" && kind === "removed") return "removed";
+  if (side === "new" && kind === "added") return "added";
+  return "same";
+}
+
+function lineEffectChange(
+  effect: FileEffect,
+  insight: LineInsight | undefined,
+  headers: MethodComparison[],
+  side: "old" | "new",
+  deltas: MethodDeltaIndex,
+): EffectChangeKind {
+  const headerKinds = headers.map((comparison) => changeForSide(comparison.effects.get(effect.family)?.kind, side));
+  const siteKinds = (insight?.sites || [])
+    .map((site) => (side === "old" ? deltas.baseById : deltas.headById).get(site.enclosingMethodId))
+    .filter((comparison): comparison is MethodComparison => !!comparison)
+    .map((comparison) => effectChangeAtSite(comparison.effects.get(effect.family), side, effect));
+  const kinds = [...headerKinds, ...siteKinds];
+  if (kinds.includes("changed")) return "changed";
+  if (kinds.includes("added")) return "added";
+  if (kinds.includes("removed")) return "removed";
+  return "same";
+}
+
+function methodChangeTitle(headers: MethodComparison[], side: "old" | "new"): string {
+  const rows = headers.flatMap((comparison) => changedEffects(comparison).map((change) => {
+    const state = side === "old" ? change.base : change.head;
+    const family = state?.family || change.base?.family || change.head?.family || "effect";
+    if (change.kind === "added") return `+${family}`;
+    if (change.kind === "removed") return `−${family}`;
+    const details = [
+      change.base?.nearestDepth !== change.head?.nearestDepth ? "distance" : "",
+      change.base?.looped !== change.head?.looped ? "repetition" : "",
+      change.base?.viaDispatchOnly !== change.head?.viaDispatchOnly ? "dispatch basis" : "",
+    ].filter(Boolean).join(", ");
+    return `△${family}${details ? ` (${details})` : ""}`;
+  }));
+  return rows.length ? `Method reach changed: ${rows.join(" · ")}` : "";
+}
+
+function EffectLane({
+  insight,
+  headers,
+  side,
+  deltas,
+}: {
+  insight?: LineInsight;
+  headers: MethodComparison[];
+  side: "old" | "new";
+  deltas: MethodDeltaIndex;
+}) {
+  const effects: FileEffect[] = [];
+  for (const effect of insight?.effects || []) mergeEffect(effects, effect);
+  for (const comparison of headers) {
+    const method = side === "old" ? comparison.base : comparison.head;
+    for (const effect of method?.effects || []) mergeEffect(effects, effect);
+  }
+  const byFamily = new Map(effects.map((effect) => [effect.family, effect]));
+  const count = effects.length
+    + (insight?.hazards.length || 0)
+    + (insight?.amplifications.length || 0)
+    + (insight?.anchors.length || 0);
   return (
     <span className="rig-diff-marks" aria-label={`${count} semantic annotations`}>
-      {insight.hazards.length ? <span className="rig-diff-finding hazard" title={`${insight.hazards.length} tier-1 hazard(s)`}>⚠</span> : null}
-      {insight.anchors.length ? <span className="rig-diff-finding anchor" title={`${insight.anchors.length} cross-method amplification anchor(s)`}>⟳↓</span> : null}
-      {insight.amplifications.length ? <span className="rig-diff-finding amplification" title={`${insight.amplifications.length} looped effect(s)`}>⟳</span> : null}
-      {shownEffects.map((effect) => <EffectBadge effect={effect} key={effect.family} />)}
-      {hidden > 0 ? <span className="rig-diff-more" title={`${hidden} more effect families`}>+{hidden}</span> : null}
+      <span className="rig-diff-finding-stack">
+        {insight?.hazards.length ? <span className="rig-diff-finding hazard" title={`${insight.hazards.length} tier-1 hazard(s)`}>⚠</span> : null}
+        {insight?.anchors.length ? <span className="rig-diff-finding anchor" title={`${insight.anchors.length} cross-method amplification anchor(s)`}>↓</span> : null}
+        {insight?.amplifications.length ? <span className="rig-diff-finding amplification" title={`${insight.amplifications.length} looped effect(s)`}>⟳</span> : null}
+      </span>
+      <span className="rig-diff-lane" aria-label="effect reach lane">
+        {effectFamilies.map((family) => {
+          const effect = byFamily.get(family.key);
+          const change = effect ? lineEffectChange(effect, insight, headers, side, deltas) : "same";
+          const title = effect
+            ? `${family.label}: ${effectTitle(effect)}${change === "same" ? "" : `\nDELTA: ${change} at method grain`}`
+            : family.label;
+          return (
+            <span
+              className={[
+                "rig-diff-slot",
+                effect ? "on" : "off",
+                effect?.nearestDepth === 0 ? "here" : "below",
+                effect?.viaDispatchOnly ? "uncertain" : "",
+                effect?.looped ? "amp" : "",
+                change !== "same" ? `moved ${change}` : "",
+              ].filter(Boolean).join(" ")}
+              data-family={family.key}
+              key={family.key}
+              title={title}
+            >
+              {effect ? <span aria-hidden="true">{effect.nearestDepth === 0 ? "●" : "○"}</span> : null}
+              {effect && effect.nearestDepth > 0 ? <sup>{effect.nearestDepth}</sup> : null}
+              {effect?.viaDispatchOnly ? <i>?</i> : null}
+            </span>
+          );
+        })}
+      </span>
     </span>
   );
 }
@@ -304,6 +415,7 @@ function EffectWidget({ expanded, insight, callbacks }: { expanded: Expanded; in
 function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: FileDiffCallbacks }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [viewType, setViewType] = useState<ViewType>("unified");
+  const [wrapLines, setWrapLines] = useState(true);
   const [expanded, setExpanded] = useState<Expanded | null>(null);
   const [focusFound, setFocusFound] = useState<boolean | null>(null);
   const files = useMemo(() => (model.patch.trim() ? parseDiff(model.patch) : []), [model.patch]);
@@ -326,6 +438,14 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   }, [file]);
   const baseAvailable = model.base.semanticState === "available" && model.base.effects !== null;
   const headAvailable = model.head.semanticState === "available" && model.head.effects !== null;
+  const methodDeltas = useMemo(
+    () => buildMethodDeltaIndex(
+      model.base.effects?.methods || [],
+      model.head.effects?.methods || [],
+      baseAvailable && headAvailable,
+    ),
+    [model.base.effects, model.head.effects, baseAvailable, headAvailable],
+  );
   const baseEffectSites = model.base.effects?.sites.length || 0;
   const headEffectSites = model.head.effects?.sites.length || 0;
   const baseFindingCount = (model.base.findings?.hazards.length || 0)
@@ -386,7 +506,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   }, [callbacks.focusLine?.line, callbacks.focusLine?.side, model.patch, viewType]);
 
   return (
-    <div className="rig-diff-island" ref={rootRef}>
+    <div className={`rig-diff-island ${wrapLines ? "wrap-lines" : "no-wrap"}`} ref={rootRef}>
       <div className="rig-diff-head">
         <div className="rig-diff-identity" title={model.relativePath}>
           <div className="rig-diff-file-line">
@@ -473,10 +593,27 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
                 />
                 Hide whitespace changes
               </label>
+              <label className="rig-diff-settings-check">
+                <input
+                  type="checkbox"
+                  checked={wrapLines}
+                  onChange={(event) => setWrapLines(event.target.checked)}
+                />
+                Wrap long lines
+              </label>
             </div>
           </details>
         </div>
       </div>
+      {baseAvailable || headAvailable
+        ? <div className="rig-diff-lane-key">
+            <span>effect reach</span>
+            <span className="rig-diff-lanehead" aria-label="Effect lane columns">
+              {effectFamilies.map((family) => <b key={family.key} title={family.label}>{family.mark}</b>)}
+            </span>
+            <span>● here · ○ below · teal changed · violet edge repeated</span>
+          </div>
+        : null}
       {callbacks.focusLine && focusFound === false
         ? <div className="rig-diff-focus-note">
             {callbacks.focusLine.side === "old" ? "Base" : "Head"} line {callbacks.focusLine.line} is outside the changed hunks and their {model.contextLines}-line context.
@@ -494,13 +631,21 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
           renderGutter={({ change, side, renderDefault, wrapInAnchor }) => {
             const line = changeLine(change, side);
             const insight = line == null ? undefined : (side === "old" ? oldLines : newLines).get(line);
+            const headers = line == null
+              ? []
+              : ((side === "old" ? methodDeltas.baseByLine : methodDeltas.headByLine).get(line) || [])
+                .filter((comparison) => changedEffects(comparison).length > 0);
             const key = getChangeKey(change);
             const focused = callbacks.focusLine?.side === side && callbacks.focusLine.line === line;
+            const marks = insight || headers.length
+              ? <EffectLane insight={insight} headers={headers} side={side} deltas={methodDeltas} />
+              : null;
             return wrapInAnchor(
               <span
-                className={`rig-diff-gutter${focused ? " focus" : ""}`}
+                className={`rig-diff-gutter${focused ? " focus" : ""}${headers.length ? " method-change" : ""}`}
                 data-rig-side={side}
                 data-rig-line={line ?? undefined}
+                title={methodChangeTitle(headers, side) || undefined}
               >
                 {insight ? (
                   <button
@@ -517,9 +662,9 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
                       );
                     }}
                   >
-                    <EffectMarks insight={insight} />
+                    {marks}
                   </button>
-                ) : null}
+                ) : marks}
                 {renderDefault()}
               </span>,
             );

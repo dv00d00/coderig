@@ -1,6 +1,7 @@
 ## Web Review: the effect gutter says the wrong thing, and the delta is not rendered at all
 
-**Status:** todo · **Family:** web review / file effect lens
+**Status:** progress — method delta, fixed lane, wrapping and palette shipped locally 2026-09-02; tree/context follow-ups remain ·
+**Family:** web review / file effect lens
 
 **Source:** dogfooding the review surface against a real 104-file MedDBase merge request (portal courses
 collapsed onto service-credits-overrides), 2026-09-02. Six reader complaints from the author, then two
@@ -231,6 +232,31 @@ while the language's own rule says removal renders struck-grey and never green.
 8. **Fold-bar expansion with a ranged fetch** for surrounding context, in place of populating `Content`
    with whole-file text. Both consultations rank full-file last and one argues `-U20` already covers most
    review reading. (M.)
+
+### Delivered first production slice — 2026-09-02
+
+- Method reach is compared across revisions by exact symbol id, with a fail-closed unique
+  owner/signature/parameter-shape fallback for renames. Added and removed methods inside a comparable file are
+  deltas; an added/deleted FILE remains quiet rather than painting every effect as new/gone.
+- Family presence, nearest depth, dispatch-only basis and looped repetition all participate in the delta. The
+  method declaration receives the change marker and its call-site rows repeat the moved family, so a rewritten
+  body does not become semantic churn solely because its line numbers changed.
+- The free-flowing badge cluster is replaced by one fixed eight-slot lane (`D C B Q E I R S`) in both unified
+  and split views. Direct/reached remains filled/hollow, distance remains a superscript, dispatch uncertainty is
+  retained, loop amplification is the violet lower edge, unchanged reach recedes, and changed reach uses a
+  dedicated teal token rather than the overloaded warning amber.
+- Long-line wrapping is an explicit setting and defaults on. Turning it off restores horizontal overflow; with
+  it on, long split-view lines wrap without moving the lane out of its gutter.
+- `--ok` is now defined for dark, light and system palettes; `--reach`, `--reach-soft`, `--amp` and `--hair` are
+  defined alongside it. Measured contrast for semantic colours is 4.97:1–7.70:1 across both themes.
+- Pure delta tests cover stable-id movement, body rewrites, loop/dispatch changes, added-file quietness, unique
+  renames, ambiguous rename fail-closed behaviour, and a method added inside a modified file. Browser dogfood on
+  CodeRig: 41 lanes in unified/split, all eight-slot, zero gutter-containment violations; added
+  `AnnotateCommand.cs` carried 43 head marks and zero false moved slots; console clean.
+
+Still open from the ranked list: collapsible/path-compressed file tree, hazard delta, eager effect-before-finding
+loading, ranged hunk expansion, and a dedicated full-screen mode. Unchanged reach deliberately stays visible but
+muted — the editorial decision requested above is closed.
 
 ### Acceptance
 

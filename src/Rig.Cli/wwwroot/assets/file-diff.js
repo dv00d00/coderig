@@ -12226,42 +12226,181 @@ function Io(e) {
 	})(e);
 }
 //#endregion
+//#region src/effect-delta.ts
+var Lo = () => ({
+	baseById: /* @__PURE__ */ new Map(),
+	headById: /* @__PURE__ */ new Map(),
+	baseByLine: /* @__PURE__ */ new Map(),
+	headByLine: /* @__PURE__ */ new Map()
+});
+function Ro(e, t) {
+	return e.nearestDepth === t.nearestDepth && e.viaDispatchOnly === t.viaDispatchOnly && e.looped === t.looped;
+}
+function zo(e, t, n) {
+	if (!e || e.kind === "same") return "same";
+	if (e.kind === "added") return t === "new" ? "added" : "same";
+	if (e.kind === "removed") return t === "old" ? "removed" : "same";
+	let r = t === "old" ? e.base : e.head;
+	return r && Ro(r, n) ? "changed" : "same";
+}
+function Bo(e, t) {
+	let n = new Map(e.map((e) => [e.family, e])), r = new Map(t.map((e) => [e.family, e])), i = [.../* @__PURE__ */ new Set([...n.keys(), ...r.keys()])].sort();
+	return new Map(i.map((e) => {
+		let t = n.get(e), i = r.get(e);
+		return [e, {
+			kind: t ? i ? Ro(t, i) ? "same" : "changed" : "removed" : "added",
+			base: t,
+			head: i
+		}];
+	}));
+}
+function Vo(e) {
+	if (!e.id || e.name === "" || e.name.startsWith(".")) return null;
+	let t = e.id.indexOf("("), n = t < 0 ? e.id : e.id.slice(0, t), r = n.lastIndexOf(".");
+	if (r < 0) return null;
+	let i = n.slice(0, r), a = t < 0 ? "" : e.id.slice(t);
+	return `${i}|${e.signature ? e.signature.replace(e.name, "<method>") : ""}|${a}`;
+}
+function Ho(e, t, n) {
+	let r = e.get(t) || [];
+	r.push(n), e.set(t, r);
+}
+function Uo(e, t, n) {
+	if (!n) return Lo();
+	let r = new Map(e.map((e) => [e.id, e])), i = new Map(t.map((e) => [e.id, e])), a = [];
+	for (let t of e) {
+		let e = i.get(t.id);
+		e && (a.push([t, e]), r.delete(t.id), i.delete(e.id));
+	}
+	let o = (e) => {
+		let t = /* @__PURE__ */ new Map();
+		for (let n of e) {
+			let e = Vo(n);
+			if (!e) continue;
+			let r = t.get(e) || [];
+			r.push(n), t.set(e, r);
+		}
+		return t;
+	}, s = o(r.values()), c = o(i.values());
+	for (let [e, t] of s) {
+		let n = c.get(e);
+		t.length === 1 && n?.length === 1 && (a.push([t[0], n[0]]), r.delete(t[0].id), i.delete(n[0].id));
+	}
+	let l = o(r.values()), u = o(i.values());
+	for (let e of r.values()) {
+		let t = Vo(e);
+		t && u.has(t) || a.push([e, void 0]);
+	}
+	for (let e of i.values()) {
+		let t = Vo(e);
+		t && l.has(t) || a.push([void 0, e]);
+	}
+	let d = /* @__PURE__ */ new Map(), f = /* @__PURE__ */ new Map(), p = /* @__PURE__ */ new Map(), m = /* @__PURE__ */ new Map();
+	for (let [e, t] of a) {
+		let n = {
+			base: e,
+			head: t,
+			effects: Bo(e?.effects || [], t?.effects || [])
+		};
+		e && (d.set(e.id, n), Ho(p, e.line, n)), t && (f.set(t.id, n), Ho(m, t.line, n));
+	}
+	return {
+		baseById: d,
+		headById: f,
+		baseByLine: p,
+		headByLine: m
+	};
+}
+function Wo(e) {
+	return [...e.effects.values()].filter((e) => e.kind !== "same");
+}
+//#endregion
 //#region src/file-diff.tsx
-var Lo = /* @__PURE__ */ new WeakMap();
+var Go = [
+	{
+		key: "db",
+		mark: "D",
+		label: "database"
+	},
+	{
+		key: "cache",
+		mark: "C",
+		label: "cache"
+	},
+	{
+		key: "blob",
+		mark: "B",
+		label: "blob/object store"
+	},
+	{
+		key: "bus",
+		mark: "Q",
+		label: "message bus"
+	},
+	{
+		key: "echo",
+		mark: "E",
+		label: "echo/event channel"
+	},
+	{
+		key: "io",
+		mark: "I",
+		label: "file system / I/O"
+	},
+	{
+		key: "rpc",
+		mark: "R",
+		label: "remote call"
+	},
+	{
+		key: "search",
+		mark: "S",
+		label: "search"
+	}
+], Ko = /* @__PURE__ */ new WeakMap();
 Eo.register(Io);
-var Ro = { highlight(e, t) {
+var qo = { highlight(e, t) {
 	return Eo.highlight(e, t).children;
 } };
-function zo(e) {
+function Jo(e) {
 	return e.slice(0, 12);
 }
-function Bo(e) {
+function Yo(e) {
 	let t = e.replaceAll("\\", "/"), n = t.lastIndexOf("/");
 	return {
 		name: n < 0 ? t : t.slice(n + 1),
 		parent: n < 0 ? "" : t.slice(0, n)
 	};
 }
-function Vo(e) {
+function Xo(e) {
 	if (!e) return "external effect";
 	let t = e.replace(/^[A-Z]:/, "").split("(", 1)[0];
 	return (t.split(/[.:+]/).pop() || t).replace(/``\d+$/, "<T>");
 }
-function Ho(e) {
+function Zo(e) {
 	let t = e.nearestDepth === 0 ? "!" : `:${e.nearestDepth}`;
 	return `${e.family}${t}${e.looped ? "*" : ""}${e.viaDispatchOnly ? "?" : ""}`;
 }
-function Uo(e) {
+function Qo(e) {
 	return [
-		`${Ho(e)} — ${e.nearestDepth === 0 ? "the effect is in this call's body" : `nearest is ${e.nearestDepth} calls below`}`,
+		`${Zo(e)} — ${e.nearestDepth === 0 ? "the effect is in this call's body" : `nearest is ${e.nearestDepth} calls below`}`,
 		e.viaDispatchOnly ? "BASIS: virtual/interface dispatch only — a lead, not a proven call" : "BASIS: a real call edge",
 		e.looped ? "AMPLIFIED: runs once per enclosing iteration" : ""
 	].filter(Boolean).join("\n");
 }
-function Wo(e, t) {
+function $o(e, t) {
 	return t === "old" ? e.type === "insert" ? null : e.type === "delete" ? e.lineNumber : e.oldLineNumber : e.type === "delete" ? null : e.type === "insert" ? e.lineNumber : e.newLineNumber;
 }
-function Go(e) {
+function es(e, t) {
+	let n = e.find((e) => e.family === t.family);
+	if (!n) {
+		e.push({ ...t });
+		return;
+	}
+	let r = n.viaDispatchOnly && !t.viaDispatchOnly, i = n.viaDispatchOnly === t.viaDispatchOnly && t.nearestDepth < n.nearestDepth, a = n.looped || t.looped;
+	r || i ? Object.assign(n, t, { looped: a }) : n.looped = a;
+}
+function ts(e) {
 	let t = /* @__PURE__ */ new Map();
 	if (!e.effects) return t;
 	let n = (e) => {
@@ -12277,15 +12416,7 @@ function Go(e) {
 	for (let t of e.effects.sites) {
 		let e = n(t.line);
 		e.sites.push(t);
-		for (let n of t.effects) {
-			let t = e.effects.find((e) => e.family === n.family);
-			if (!t) {
-				e.effects.push({ ...n });
-				continue;
-			}
-			let r = t.viaDispatchOnly && !n.viaDispatchOnly, i = t.viaDispatchOnly === n.viaDispatchOnly && n.nearestDepth < t.nearestDepth, a = t.looped || n.looped;
-			r || i ? Object.assign(t, n, { looped: a }) : t.looped = a;
-		}
+		for (let n of t.effects) es(e.effects, n);
 	}
 	for (let t of e.findings?.hazards || []) n(t.line).hazards.push(t);
 	for (let t of e.findings?.amplifications || []) n(t.line).amplifications.push(t);
@@ -12293,10 +12424,10 @@ function Go(e) {
 	for (let e of t.values()) e.effects.sort((e, t) => Number(e.viaDispatchOnly) - Number(t.viaDispatchOnly) || e.nearestDepth - t.nearestDepth || e.family.localeCompare(t.family));
 	return t;
 }
-function Ko({ effect: e }) {
+function ns({ effect: e }) {
 	return /* @__PURE__ */ (0, m.jsxs)("span", {
 		className: `rig-diff-effect-mark ${e.nearestDepth === 0 ? "here" : "below"} ${e.viaDispatchOnly ? "guess" : ""}`,
-		title: Uo(e),
+		title: Qo(e),
 		children: [
 			e.looped ? /* @__PURE__ */ (0, m.jsx)("span", {
 				className: "rig-diff-loop",
@@ -12309,37 +12440,87 @@ function Ko({ effect: e }) {
 		]
 	});
 }
-function qo({ insight: e }) {
-	let t = e.effects.slice(0, 2), n = e.effects.length - t.length, r = e.effects.length + e.hazards.length + e.amplifications.length + e.anchors.length;
+function rs(e, t) {
+	return e === "changed" ? "changed" : t === "old" && e === "removed" ? "removed" : t === "new" && e === "added" ? "added" : "same";
+}
+function is(e, t, n, r, i) {
+	let a = n.map((t) => rs(t.effects.get(e.family)?.kind, r)), o = (t?.sites || []).map((e) => (r === "old" ? i.baseById : i.headById).get(e.enclosingMethodId)).filter((e) => !!e).map((t) => zo(t.effects.get(e.family), r, e)), s = [...a, ...o];
+	return s.includes("changed") ? "changed" : s.includes("added") ? "added" : s.includes("removed") ? "removed" : "same";
+}
+function as(e, t) {
+	let n = e.flatMap((e) => Wo(e).map((e) => {
+		let n = (t === "old" ? e.base : e.head)?.family || e.base?.family || e.head?.family || "effect";
+		if (e.kind === "added") return `+${n}`;
+		if (e.kind === "removed") return `−${n}`;
+		let r = [
+			e.base?.nearestDepth === e.head?.nearestDepth ? "" : "distance",
+			e.base?.looped === e.head?.looped ? "" : "repetition",
+			e.base?.viaDispatchOnly === e.head?.viaDispatchOnly ? "" : "dispatch basis"
+		].filter(Boolean).join(", ");
+		return `△${n}${r ? ` (${r})` : ""}`;
+	}));
+	return n.length ? `Method reach changed: ${n.join(" · ")}` : "";
+}
+function os({ insight: e, headers: t, side: n, deltas: r }) {
+	let i = [];
+	for (let t of e?.effects || []) es(i, t);
+	for (let e of t) {
+		let t = n === "old" ? e.base : e.head;
+		for (let e of t?.effects || []) es(i, e);
+	}
+	let a = new Map(i.map((e) => [e.family, e])), o = i.length + (e?.hazards.length || 0) + (e?.amplifications.length || 0) + (e?.anchors.length || 0);
 	return /* @__PURE__ */ (0, m.jsxs)("span", {
 		className: "rig-diff-marks",
-		"aria-label": `${r} semantic annotations`,
-		children: [
-			e.hazards.length ? /* @__PURE__ */ (0, m.jsx)("span", {
-				className: "rig-diff-finding hazard",
-				title: `${e.hazards.length} tier-1 hazard(s)`,
-				children: "⚠"
-			}) : null,
-			e.anchors.length ? /* @__PURE__ */ (0, m.jsx)("span", {
-				className: "rig-diff-finding anchor",
-				title: `${e.anchors.length} cross-method amplification anchor(s)`,
-				children: "⟳↓"
-			}) : null,
-			e.amplifications.length ? /* @__PURE__ */ (0, m.jsx)("span", {
-				className: "rig-diff-finding amplification",
-				title: `${e.amplifications.length} looped effect(s)`,
-				children: "⟳"
-			}) : null,
-			t.map((e) => /* @__PURE__ */ (0, m.jsx)(Ko, { effect: e }, e.family)),
-			n > 0 ? /* @__PURE__ */ (0, m.jsxs)("span", {
-				className: "rig-diff-more",
-				title: `${n} more effect families`,
-				children: ["+", n]
-			}) : null
-		]
+		"aria-label": `${o} semantic annotations`,
+		children: [/* @__PURE__ */ (0, m.jsxs)("span", {
+			className: "rig-diff-finding-stack",
+			children: [
+				e?.hazards.length ? /* @__PURE__ */ (0, m.jsx)("span", {
+					className: "rig-diff-finding hazard",
+					title: `${e.hazards.length} tier-1 hazard(s)`,
+					children: "⚠"
+				}) : null,
+				e?.anchors.length ? /* @__PURE__ */ (0, m.jsx)("span", {
+					className: "rig-diff-finding anchor",
+					title: `${e.anchors.length} cross-method amplification anchor(s)`,
+					children: "↓"
+				}) : null,
+				e?.amplifications.length ? /* @__PURE__ */ (0, m.jsx)("span", {
+					className: "rig-diff-finding amplification",
+					title: `${e.amplifications.length} looped effect(s)`,
+					children: "⟳"
+				}) : null
+			]
+		}), /* @__PURE__ */ (0, m.jsx)("span", {
+			className: "rig-diff-lane",
+			"aria-label": "effect reach lane",
+			children: Go.map((i) => {
+				let o = a.get(i.key), s = o ? is(o, e, t, n, r) : "same", c = o ? `${i.label}: ${Qo(o)}${s === "same" ? "" : `\nDELTA: ${s} at method grain`}` : i.label;
+				return /* @__PURE__ */ (0, m.jsxs)("span", {
+					className: [
+						"rig-diff-slot",
+						o ? "on" : "off",
+						o?.nearestDepth === 0 ? "here" : "below",
+						o?.viaDispatchOnly ? "uncertain" : "",
+						o?.looped ? "amp" : "",
+						s === "same" ? "" : `moved ${s}`
+					].filter(Boolean).join(" "),
+					"data-family": i.key,
+					title: c,
+					children: [
+						o ? /* @__PURE__ */ (0, m.jsx)("span", {
+							"aria-hidden": "true",
+							children: o.nearestDepth === 0 ? "●" : "○"
+						}) : null,
+						o && o.nearestDepth > 0 ? /* @__PURE__ */ (0, m.jsx)("sup", { children: o.nearestDepth }) : null,
+						o?.viaDispatchOnly ? /* @__PURE__ */ (0, m.jsx)("i", { children: "?" }) : null
+					]
+				}, i.key);
+			})
+		})]
 	});
 }
-function Jo({ expanded: e, insight: t, callbacks: n }) {
+function ss({ expanded: e, insight: t, callbacks: n }) {
 	return /* @__PURE__ */ (0, m.jsxs)("div", {
 		className: "rig-diff-widget",
 		children: [
@@ -12397,8 +12578,8 @@ function Jo({ expanded: e, insight: t, callbacks: n }) {
 					disabled: !r,
 					title: r || "No symbol identity for this external effect",
 					children: [
-						/* @__PURE__ */ (0, m.jsx)("span", { children: Vo(e.targetMethodId) }),
-						e.effects.map((e) => /* @__PURE__ */ (0, m.jsx)(Ko, { effect: e }, `${e.family}:${e.nearestDepth}`)),
+						/* @__PURE__ */ (0, m.jsx)("span", { children: Xo(e.targetMethodId) }),
+						e.effects.map((e) => /* @__PURE__ */ (0, m.jsx)(ns, { effect: e }, `${e.family}:${e.nearestDepth}`)),
 						/* @__PURE__ */ (0, m.jsx)("span", {
 							className: "rig-diff-open",
 							children: "open tree ↗"
@@ -12409,8 +12590,8 @@ function Jo({ expanded: e, insight: t, callbacks: n }) {
 		]
 	});
 }
-function Yo({ model: e, callbacks: t }) {
-	let n = (0, h.useRef)(null), [r, i] = (0, h.useState)("unified"), [a, o] = (0, h.useState)(null), [s, c] = (0, h.useState)(null), l = (0, h.useMemo)(() => e.patch.trim() ? le(e.patch) : [], [e.patch]), u = (0, h.useMemo)(() => Go(e.base), [e.base]), d = (0, h.useMemo)(() => Go(e.head), [e.head]), f = l[0], p = (0, h.useMemo)(() => Bo(e.relativePath || e.file), [e.relativePath, e.file]), g = (0, h.useMemo)(() => f ? f.hunks.reduce((e, t) => {
+function cs({ model: e, callbacks: t }) {
+	let n = (0, h.useRef)(null), [r, i] = (0, h.useState)("unified"), [a, o] = (0, h.useState)(!0), [s, c] = (0, h.useState)(null), [l, u] = (0, h.useState)(null), d = (0, h.useMemo)(() => e.patch.trim() ? le(e.patch) : [], [e.patch]), f = (0, h.useMemo)(() => ts(e.base), [e.base]), p = (0, h.useMemo)(() => ts(e.head), [e.head]), g = d[0], _ = (0, h.useMemo)(() => Yo(e.relativePath || e.file), [e.relativePath, e.file]), v = (0, h.useMemo)(() => g ? g.hunks.reduce((e, t) => {
 		for (let n of t.changes) n.type === "insert" ? e.additions += 1 : n.type === "delete" && (e.deletions += 1);
 		return e;
 	}, {
@@ -12419,25 +12600,30 @@ function Yo({ model: e, callbacks: t }) {
 	}) : {
 		additions: 0,
 		deletions: 0
-	}, [f]), _ = e.base.semanticState === "available" && e.base.effects !== null, v = e.head.semanticState === "available" && e.head.effects !== null, y = e.base.effects?.sites.length || 0, b = e.head.effects?.sites.length || 0, x = (e.base.findings?.hazards.length || 0) + (e.base.findings?.amplifications.length || 0) + (e.base.findings?.anchors.length || 0), S = (e.head.findings?.hazards.length || 0) + (e.head.findings?.amplifications.length || 0) + (e.head.findings?.anchors.length || 0), C = b - y, w = _ && v ? `effect sites ${C > 0 ? "+" : ""}${C}` : _ ? "base-only semantics" : v ? "head-only semantics" : e.language === "text" ? "text-only · semantics unavailable" : "semantics unavailable", T = (0, h.useMemo)(() => f && e.language === "csharp" ? pa(f.hunks, {
+	}, [g]), y = e.base.semanticState === "available" && e.base.effects !== null, b = e.head.semanticState === "available" && e.head.effects !== null, x = (0, h.useMemo)(() => Uo(e.base.effects?.methods || [], e.head.effects?.methods || [], y && b), [
+		e.base.effects,
+		e.head.effects,
+		y,
+		b
+	]), S = e.base.effects?.sites.length || 0, C = e.head.effects?.sites.length || 0, w = (e.base.findings?.hazards.length || 0) + (e.base.findings?.amplifications.length || 0) + (e.base.findings?.anchors.length || 0), T = (e.head.findings?.hazards.length || 0) + (e.head.findings?.amplifications.length || 0) + (e.head.findings?.anchors.length || 0), E = C - S, ee = y && b ? `effect sites ${E > 0 ? "+" : ""}${E}` : y ? "base-only semantics" : b ? "head-only semantics" : e.language === "text" ? "text-only · semantics unavailable" : "semantics unavailable", D = (0, h.useMemo)(() => g && e.language === "csharp" ? pa(g.hunks, {
 		highlight: !0,
-		refractor: Ro,
+		refractor: qo,
 		language: "csharp",
-		enhancers: [da(f.hunks)]
-	}) : null, [f, e.language]), E = a ? { [a.key]: /* @__PURE__ */ (0, m.jsx)(Jo, {
-		expanded: a,
-		insight: (a.side === "old" ? u : d).get(a.line),
+		enhancers: [da(g.hunks)]
+	}) : null, [g, e.language]), te = s ? { [s.key]: /* @__PURE__ */ (0, m.jsx)(ss, {
+		expanded: s,
+		insight: (s.side === "old" ? f : p).get(s.line),
 		callbacks: t
 	}) } : {};
 	return (0, h.useEffect)(() => {
 		let e = t.focusLine;
 		if (!e) {
-			c(null);
+			u(null);
 			return;
 		}
 		let r = requestAnimationFrame(() => {
 			let t = n.current?.querySelector(`.rig-diff-gutter[data-rig-side="${e.side}"][data-rig-line="${e.line}"]`);
-			c(!!t), t?.closest("tr")?.scrollIntoView({ block: "center" });
+			u(!!t), t?.closest("tr")?.scrollIntoView({ block: "center" });
 		});
 		return () => cancelAnimationFrame(r);
 	}, [
@@ -12446,7 +12632,7 @@ function Yo({ model: e, callbacks: t }) {
 		e.patch,
 		r
 	]), /* @__PURE__ */ (0, m.jsxs)("div", {
-		className: "rig-diff-island",
+		className: `rig-diff-island ${a ? "wrap-lines" : "no-wrap"}`,
 		ref: n,
 		children: [
 			/* @__PURE__ */ (0, m.jsxs)("div", {
@@ -12463,17 +12649,17 @@ function Yo({ model: e, callbacks: t }) {
 									title: `Git status ${e.status}`,
 									children: e.status
 								}),
-								/* @__PURE__ */ (0, m.jsx)("strong", { children: p.name }),
+								/* @__PURE__ */ (0, m.jsx)("strong", { children: _.name }),
 								/* @__PURE__ */ (0, m.jsxs)("span", {
 									className: "rig-diff-patch-counts",
-									"aria-label": `${g.additions} additions, ${g.deletions} deletions`,
-									children: [/* @__PURE__ */ (0, m.jsxs)("b", { children: ["+", g.additions] }), /* @__PURE__ */ (0, m.jsxs)("i", { children: ["−", g.deletions] })]
+									"aria-label": `${v.additions} additions, ${v.deletions} deletions`,
+									children: [/* @__PURE__ */ (0, m.jsxs)("b", { children: ["+", v.additions] }), /* @__PURE__ */ (0, m.jsxs)("i", { children: ["−", v.deletions] })]
 								})
 							]
 						}),
-						p.parent ? /* @__PURE__ */ (0, m.jsx)("span", {
+						_.parent ? /* @__PURE__ */ (0, m.jsx)("span", {
 							className: "rig-diff-parent",
-							children: p.parent
+							children: _.parent
 						}) : null,
 						e.oldPath && e.newPath && e.oldPath !== e.newPath ? /* @__PURE__ */ (0, m.jsxs)("span", {
 							className: "rig-diff-path-change",
@@ -12492,9 +12678,9 @@ function Yo({ model: e, callbacks: t }) {
 						/* @__PURE__ */ (0, m.jsxs)("span", {
 							className: "rig-diff-revisions",
 							children: [
-								zo(e.base.commit),
+								Jo(e.base.commit),
 								" → ",
-								zo(e.head.commit)
+								Jo(e.head.commit)
 							]
 						})
 					]
@@ -12502,13 +12688,13 @@ function Yo({ model: e, callbacks: t }) {
 					className: "rig-diff-summary",
 					children: [
 						/* @__PURE__ */ (0, m.jsx)("span", {
-							className: `rig-diff-effect-delta ${C > 0 ? "added" : C < 0 ? "removed" : "stable"}`,
-							title: _ && v ? `${y} base effect sites → ${b} head effect sites` : `base: ${e.base.semanticState}; head: ${e.head.semanticState}`,
-							children: w
+							className: `rig-diff-effect-delta ${E > 0 ? "added" : E < 0 ? "removed" : "stable"}`,
+							title: y && b ? `${S} base effect sites → ${C} head effect sites` : `base: ${e.base.semanticState}; head: ${e.head.semanticState}`,
+							children: ee
 						}),
-						_ || v ? /* @__PURE__ */ (0, m.jsx)("span", {
+						y || b ? /* @__PURE__ */ (0, m.jsx)("span", {
 							className: "rig-diff-tier-status",
-							children: _ && e.base.findings === void 0 || v && e.head.findings === void 0 ? "tiers 1–3 loading…" : _ && e.base.findings === null || v && e.head.findings === null ? "tiers 1–3 partially unavailable" : _ && v ? `${x}/${S} findings` : _ ? `${x} base findings` : `${S} head findings`
+							children: y && e.base.findings === void 0 || b && e.head.findings === void 0 ? "tiers 1–3 loading…" : y && e.base.findings === null || b && e.head.findings === null ? "tiers 1–3 partially unavailable" : y && b ? `${w}/${T} findings` : y ? `${w} base findings` : `${T} head findings`
 						}) : null,
 						/* @__PURE__ */ (0, m.jsxs)("label", {
 							className: "rig-diff-viewed",
@@ -12527,36 +12713,62 @@ function Yo({ model: e, callbacks: t }) {
 								children: "⚙"
 							}), /* @__PURE__ */ (0, m.jsxs)("div", {
 								className: "rig-diff-settings-menu",
-								children: [/* @__PURE__ */ (0, m.jsxs)("fieldset", { children: [
-									/* @__PURE__ */ (0, m.jsx)("legend", { children: "Diff display" }),
-									/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
-										type: "radio",
-										name: "rig-diff-display",
-										value: "unified",
-										checked: r === "unified",
-										onChange: () => i("unified")
-									}), "Unified"] }),
-									/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
-										type: "radio",
-										name: "rig-diff-display",
-										value: "split",
-										checked: r === "split",
-										onChange: () => i("split")
-									}), "Split"] })
-								] }), /* @__PURE__ */ (0, m.jsxs)("label", {
-									className: "rig-diff-settings-check",
-									children: [/* @__PURE__ */ (0, m.jsx)("input", {
-										type: "checkbox",
-										checked: t.ignoreWhitespace || !1,
-										onChange: (e) => t.onIgnoreWhitespaceChange?.(e.target.checked)
-									}), "Hide whitespace changes"]
-								})]
+								children: [
+									/* @__PURE__ */ (0, m.jsxs)("fieldset", { children: [
+										/* @__PURE__ */ (0, m.jsx)("legend", { children: "Diff display" }),
+										/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
+											type: "radio",
+											name: "rig-diff-display",
+											value: "unified",
+											checked: r === "unified",
+											onChange: () => i("unified")
+										}), "Unified"] }),
+										/* @__PURE__ */ (0, m.jsxs)("label", { children: [/* @__PURE__ */ (0, m.jsx)("input", {
+											type: "radio",
+											name: "rig-diff-display",
+											value: "split",
+											checked: r === "split",
+											onChange: () => i("split")
+										}), "Split"] })
+									] }),
+									/* @__PURE__ */ (0, m.jsxs)("label", {
+										className: "rig-diff-settings-check",
+										children: [/* @__PURE__ */ (0, m.jsx)("input", {
+											type: "checkbox",
+											checked: t.ignoreWhitespace || !1,
+											onChange: (e) => t.onIgnoreWhitespaceChange?.(e.target.checked)
+										}), "Hide whitespace changes"]
+									}),
+									/* @__PURE__ */ (0, m.jsxs)("label", {
+										className: "rig-diff-settings-check",
+										children: [/* @__PURE__ */ (0, m.jsx)("input", {
+											type: "checkbox",
+											checked: a,
+											onChange: (e) => o(e.target.checked)
+										}), "Wrap long lines"]
+									})
+								]
 							})]
 						})
 					]
 				})]
 			}),
-			t.focusLine && s === !1 ? /* @__PURE__ */ (0, m.jsxs)("div", {
+			y || b ? /* @__PURE__ */ (0, m.jsxs)("div", {
+				className: "rig-diff-lane-key",
+				children: [
+					/* @__PURE__ */ (0, m.jsx)("span", { children: "effect reach" }),
+					/* @__PURE__ */ (0, m.jsx)("span", {
+						className: "rig-diff-lanehead",
+						"aria-label": "Effect lane columns",
+						children: Go.map((e) => /* @__PURE__ */ (0, m.jsx)("b", {
+							title: e.label,
+							children: e.mark
+						}, e.key))
+					}),
+					/* @__PURE__ */ (0, m.jsx)("span", { children: "● here · ○ below · teal changed · violet edge repeated" })
+				]
+			}) : null,
+			t.focusLine && l === !1 ? /* @__PURE__ */ (0, m.jsxs)("div", {
 				className: "rig-diff-focus-note",
 				children: [
 					t.focusLine.side === "old" ? "Base" : "Head",
@@ -12567,31 +12779,37 @@ function Yo({ model: e, callbacks: t }) {
 					"-line context."
 				]
 			}) : null,
-			f ? /* @__PURE__ */ (0, m.jsx)(hi, {
+			g ? /* @__PURE__ */ (0, m.jsx)(hi, {
 				viewType: r,
-				diffType: f.type,
-				hunks: f.hunks,
-				tokens: T,
-				widgets: E,
+				diffType: g.type,
+				hunks: g.hunks,
+				tokens: D,
+				widgets: te,
 				renderGutter: ({ change: e, side: n, renderDefault: r, wrapInAnchor: i }) => {
-					let a = Wo(e, n), s = a == null ? void 0 : (n === "old" ? u : d).get(a), c = kr(e), l = t.focusLine?.side === n && t.focusLine.line === a;
+					let a = $o(e, n), o = a == null ? void 0 : (n === "old" ? f : p).get(a), s = a == null ? [] : ((n === "old" ? x.baseByLine : x.headByLine).get(a) || []).filter((e) => Wo(e).length > 0), l = kr(e), u = t.focusLine?.side === n && t.focusLine.line === a, d = o || s.length ? /* @__PURE__ */ (0, m.jsx)(os, {
+						insight: o,
+						headers: s,
+						side: n,
+						deltas: x
+					}) : null;
 					return i(/* @__PURE__ */ (0, m.jsxs)("span", {
-						className: `rig-diff-gutter${l ? " focus" : ""}`,
+						className: `rig-diff-gutter${u ? " focus" : ""}${s.length ? " method-change" : ""}`,
 						"data-rig-side": n,
 						"data-rig-line": a ?? void 0,
-						children: [s ? /* @__PURE__ */ (0, m.jsx)("button", {
+						title: as(s, n) || void 0,
+						children: [o ? /* @__PURE__ */ (0, m.jsx)("button", {
 							type: "button",
 							className: "rig-diff-mark-button",
 							title: "Show effects and open their call trees",
 							onClick: (e) => {
-								e.preventDefault(), e.stopPropagation(), o((e) => e?.key === c && e.side === n ? null : {
-									key: c,
+								e.preventDefault(), e.stopPropagation(), c((e) => e?.key === l && e.side === n ? null : {
+									key: l,
 									side: n,
 									line: a
 								});
 							},
-							children: /* @__PURE__ */ (0, m.jsx)(qo, { insight: s })
-						}) : null, r()]
+							children: d
+						}) : d, r()]
 					}));
 				},
 				children: (e) => e.map((e) => /* @__PURE__ */ (0, m.jsx)(ui, { hunk: e }, e.content))
@@ -12602,15 +12820,15 @@ function Yo({ model: e, callbacks: t }) {
 		]
 	});
 }
-function Xo(e, t, n = {}) {
-	let r = Lo.get(e);
-	r || (r = (0, p.createRoot)(e), Lo.set(e, r)), r.render(/* @__PURE__ */ (0, m.jsx)(Yo, {
+function ls(e, t, n = {}) {
+	let r = Ko.get(e);
+	r || (r = (0, p.createRoot)(e), Ko.set(e, r)), r.render(/* @__PURE__ */ (0, m.jsx)(cs, {
 		model: t,
 		callbacks: n
 	}));
 }
-function Zo(e) {
-	Lo.get(e)?.unmount(), Lo.delete(e);
+function us(e) {
+	Ko.get(e)?.unmount(), Ko.delete(e);
 }
 //#endregion
-export { Xo as mountFileDiff, Zo as unmountFileDiff };
+export { ls as mountFileDiff, us as unmountFileDiff };

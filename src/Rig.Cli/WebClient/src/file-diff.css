@@ -1,4 +1,6 @@
 .rig-diff-island {
+  --rig-lane-slot: 12px;
+  --rig-lane-width: calc(8 * var(--rig-lane-slot));
   color: var(--fg);
   background: var(--bg);
   min-width: 0;
@@ -250,6 +252,45 @@
   padding-top: 0.65rem;
 }
 
+.rig-diff-settings-check + .rig-diff-settings-check {
+  padding-top: 0.45rem;
+}
+
+.rig-diff-lane-key {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  min-height: 1.55rem;
+  padding: 0.2rem 1rem;
+  border: 1px solid var(--border);
+  border-top: 0;
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 0.68rem;
+}
+
+.rig-diff-lanehead,
+.rig-diff-lane {
+  display: grid;
+  grid-template-columns: repeat(8, var(--rig-lane-slot));
+  width: var(--rig-lane-width);
+  overflow: hidden;
+}
+
+.rig-diff-lanehead b {
+  display: grid;
+  place-items: center;
+  height: 14px;
+  border-right: 1px solid var(--hair);
+  color: var(--muted);
+  font: 650 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rig-diff-lanehead b:last-child {
+  border-right: 0;
+}
+
 .rig-diff-island .diff {
   width: 100%;
   border: 1px solid var(--border);
@@ -272,6 +313,18 @@
 
 .rig-diff-island .diff-code {
   width: auto;
+}
+
+.rig-diff-island.wrap-lines .diff-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.rig-diff-island.no-wrap .diff-code {
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .rig-diff-island .token.comment,
@@ -308,20 +361,30 @@
   color: var(--sx-attr);
 }
 
-.rig-diff-island .diff-gutter {
-  width: 12rem;
-  min-width: 12rem;
+.rig-diff-island .diff-gutter,
+.rig-diff-island .diff-gutter-col {
+  width: 10rem;
+  min-width: 10rem;
 }
 
 .rig-diff-gutter {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.35rem;
+  gap: 0.28rem;
   width: 100%;
 }
 
+.rig-diff-gutter.method-change {
+  box-shadow: inset 3px 0 0 var(--reach);
+}
+
 .rig-diff-mark-button {
+  display: grid;
+  place-items: center;
+  width: calc(var(--rig-lane-width) + 20px);
+  min-width: calc(var(--rig-lane-width) + 20px);
+  overflow: hidden;
   border: 0;
   padding: 0;
   color: inherit;
@@ -330,10 +393,109 @@
 }
 
 .rig-diff-marks {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 18px var(--rig-lane-width);
   align-items: center;
-  gap: 0.12rem;
+  gap: 2px;
+  width: calc(var(--rig-lane-width) + 20px);
+  min-width: 0;
   white-space: nowrap;
+}
+
+.rig-diff-finding-stack {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 18px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.rig-diff-finding-stack .rig-diff-finding {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  min-width: 13px;
+  height: 13px;
+  margin-left: -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--panel);
+  font-size: 0.58rem;
+}
+
+.rig-diff-slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--rig-lane-slot);
+  height: 17px;
+  overflow: hidden;
+  border-right: 1px solid var(--hair);
+  color: transparent;
+  font: 800 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rig-diff-slot:last-child {
+  border-right: 0;
+}
+
+.rig-diff-slot.on {
+  color: var(--muted);
+}
+
+.rig-diff-slot.here {
+  color: var(--fg);
+  background: var(--chip);
+}
+
+.rig-diff-slot.below {
+  color: var(--muted);
+}
+
+.rig-diff-slot.uncertain {
+  opacity: 0.64;
+  outline: 1px dashed currentColor;
+  outline-offset: -2px;
+}
+
+.rig-diff-slot.amp {
+  box-shadow: inset 0 -2px 0 var(--amp);
+}
+
+.rig-diff-slot.moved {
+  color: var(--reach);
+  background: var(--reach-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--reach) 68%, var(--border));
+}
+
+.rig-diff-slot.moved.amp {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--reach) 68%, var(--border)),
+    inset 0 -2px 0 var(--amp);
+}
+
+.rig-diff-slot.removed {
+  opacity: 0.7;
+  text-decoration: line-through;
+}
+
+.rig-diff-slot sup,
+.rig-diff-slot i {
+  position: absolute;
+  right: 0;
+  color: currentColor;
+  font: 700 5px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-decoration: none;
+}
+
+.rig-diff-slot sup {
+  top: 0;
+}
+
+.rig-diff-slot i {
+  bottom: 0;
+  font-style: normal;
 }
 
 .rig-diff-effect-mark,
@@ -379,14 +541,14 @@
 
 .rig-diff-finding.anchor,
 .rig-diff-finding-row.anchor {
-  color: #d28bff;
-  border-color: color-mix(in srgb, #d28bff 55%, var(--border));
+  color: var(--amp);
+  border-color: color-mix(in srgb, var(--amp) 55%, var(--border));
 }
 
 .rig-diff-finding.amplification,
 .rig-diff-finding-row.amplification {
-  color: #e6a84a;
-  border-color: color-mix(in srgb, #e6a84a 55%, var(--border));
+  color: var(--amp);
+  border-color: color-mix(in srgb, var(--amp) 55%, var(--border));
 }
 
 .rig-diff-more {
@@ -464,13 +626,7 @@
     flex-direction: column;
   }
 
-  .rig-diff-island .diff-gutter {
-    width: 8rem;
-    min-width: 8rem;
-  }
-
-  .rig-diff-effect-mark span:nth-child(2),
-  .rig-diff-effect-mark span:nth-child(3) {
+  .rig-diff-lane-key > span:last-child {
     display: none;
   }
 }
