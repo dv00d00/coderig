@@ -98,6 +98,115 @@ one colour is not a system. Syntax highlighting is not itself a collision (no `-
 `--sx-string` red and `--sx-number` green do sit on tinted rows, so "the diff owns red/green" was never as
 clean as stated.
 
+### Reference markup from the design sketch
+
+Verbatim from the design prototype, as the starting point for item 2 — a sketch to translate, not shipped
+code. Family order is fixed and is the whole identity mechanism, so it must be declared once and shared with
+the rollup sparkline:
+
+```js
+const FAM = [
+  {k:'db',     m:'D', label:'database'},
+  {k:'cache',  m:'C', label:'cache'},
+  {k:'blob',   m:'B', label:'blob'},
+  {k:'bus',    m:'Q', label:'bus'},
+  {k:'echo',   m:'E', label:'echo'},
+  {k:'io',     m:'I', label:'io'},
+  {k:'rpc',    m:'R', label:'rpc'},
+  {k:'search', m:'S', label:'search'},
+];
+```
+
+The lane is an 8-column grid of fixed-width slots, one per family, empty slots included so position is
+stable across every row:
+
+```css
+:root{ --lane-slot:11px; }              /* 8 slots = 88px, vs today's 12rem = 192px gutter */
+
+.lane{
+  display:grid; grid-template-columns:repeat(8,var(--lane-slot));
+  gap:0; justify-content:start;
+}
+.slot{
+  height:15px; display:grid; place-items:center;
+  font:700 9px/1 "JetBrains Mono",monospace; color:var(--muted);
+  border-right:1px solid var(--hair);
+}
+.slot:last-child{ border-right:0 }
+.slot.on{ color:var(--fg) }
+.slot.here{ background:var(--chip); box-shadow:inset 0 0 0 1px var(--border) }
+.slot.below{ color:var(--muted) }
+.slot.uncertain{ opacity:.62 }
+.slot.moved{
+  background:var(--reach-soft); color:var(--reach);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--reach) 55%,var(--border));
+}
+.slot.gone{ color:var(--muted); opacity:.5; text-decoration:line-through }
+.slot.amp{ color:var(--amp) }
+```
+
+A column header labels the slots once per file, which is what makes position learnable:
+
+```css
+.lanehead{
+  display:grid; grid-template-columns:repeat(8,var(--lane-slot));
+  justify-content:start; border-bottom:1px solid var(--border);
+}
+.lanehead b{
+  height:14px; display:grid; place-items:center;
+  font:500 8.5px/1 "JetBrains Mono",monospace; color:var(--muted);
+  border-right:1px solid var(--hair);
+}
+```
+
+New tokens the language needs. `--reach` is the delta hue and `--amp` is amplification/anchor; note the
+collision recorded above — `--reach` dark `#e3a93c` against the app's existing `--warn` `#d29922` is not a
+distinguishable pair, so one of the two has to move before this ships:
+
+```css
+:root{                        /* light */
+  --ok:#0f7b34;               /* the token the app already references 7x and never defines */
+  --reach:#8a5300; --reach-soft:#fdf3e0;
+  --amp:#6d28a8; --hair:#e6eaef;
+}
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+  --ok:#3fb950; --reach:#e3a93c; --reach-soft:#2a2113;
+  --amp:#c48bf5; --hair:#20262e;
+}}
+```
+
+**The two lane renderers in the sketch contradict each other, and the split one is correct.** Unified
+`renderLane()` pushes `moved` *instead of* the directness class, so a moved slot stops saying whether the
+effect is in this body or five calls down — on precisely the rows that earned ink:
+
+```js
+// unified - WRONG: directness is only reached when nothing moved
+if(x.state==='gone') cls.push('gone');
+else if(x.state!=='same') cls.push('moved');
+else cls.push(x.cur.d===0?'here':'below');
+
+// split - RIGHT: directness always set, moved layered on top
+const cls=['slot','on', x.d===0?'here':'below'];
+if(!oth.has(f.k)) cls.push('moved');
+```
+
+Adopt the split form in both, and keep the depth superscript on moved slots.
+
+Split-view row geometry, which is what closes item 6 — a lane per side in its own fixed-width cell, and the
+delta in a centre column between the panes (Rider's change lane, carrying a signed number instead of `>>`).
+`table-layout:fixed` with an explicit `<colgroup>`; the lane cell stays `vertical-align:top` so it pins to
+row one when a line wraps:
+
+```
+| ln | lane 96px | code (base) | delta 46px | code (head) | lane 96px | ln |
+```
+
+Two things the sketch renders that are not in the card's scope yet but should not be lost: the rollup
+**sparkline** — eight ticks in the same fixed family order, amber where that family moved — as the per-file
+primitive for the sidebar and the right-edge overview strip; and `.dnum` for the signed delta chip. One
+sketch bug to not copy: `.dnum.neg` and the sparkline's `i.off` paint lost reach with `var(--ok)` green,
+while the language's own rule says removal renders struck-grey and never green.
+
 ### Ranked work, impact per unit effort
 
 1. **Method-level delta** via the unused `methods[]` — match by `id`, diff family sets, paint the method
