@@ -27,11 +27,14 @@ public sealed record FileEffectSelector
     public IReadOnlyList<EffectPredicate> Predicates { get; }
 }
 
-// ViaDispatchOnly = this reach exists only through virtual/interface dispatch: whole-program
-// devirtualization says the call CAN land on an effectful override, but no real call path proves it does. rig
-// discloses that everywhere else (`reaches`' fan-out bucket says "NOT a real call"), so the file model carries
-// it too rather than presenting an over-approximation as a plain fact. A depth-0 aggregate is always real — a
-// seed performs the effect itself.
+// ViaDispatchOnly = this reach exists only through a POLYMORPHIC dispatch hop: one whose receiver-narrowed
+// candidate set holds more than one implementation, so whole-program devirtualization says the call CAN land
+// on an effectful override while nothing pins which body runs. A hop with exactly one candidate is
+// deterministic and counts as an ordinary reach — the split the forward walk already draws (`Fanout > 1` in
+// ReachesWithFanoutCore; `tree` folds a single-impl hop away entirely), so a service call through a
+// one-implementation interface is not hedged. rig discloses fan-out everywhere else (`reaches`' bucket says
+// "NOT a real call"), so the file model carries it too rather than presenting an over-approximation as a plain
+// fact. A depth-0 aggregate is always real — a seed performs the effect itself.
 //
 // Looped = the AMPLIFICATION tier (HazardKinds.Amplification / the `looped_effect` observation): this effect
 // runs once per iteration of an enclosing loop, so the honest reading of the row is "N times per invocation",
@@ -156,11 +159,15 @@ public sealed class FileEffectReadModelIndex
             .Select(CollapseInstantiations)
             .ToArray();
 
-        // The SAME closure over real calls only. Its purpose is not precision but DISCLOSURE: a node present
-        // here has a call path a reader can follow; a node only in the closure above is reachable solely by
-        // devirtualization, and every surface must be able to say so (`Aggregate` below decides the basis).
-        // One extra reverse walk, no extra graph load or derivation — the expensive parts are already paid.
-        var realPerFamily = FactPathFinder
+        // The SAME closure over DETERMINISTIC edges only: real calls plus dispatch hops with exactly one
+        // candidate target. Its purpose is not precision but DISCLOSURE: a node present here has a route a
+        // reader can follow to one body; a node only in the closure above is reachable solely through a hop
+        // that could land on several implementations, and every surface must be able to say so (`Aggregate`
+        // below decides the basis). One extra reverse walk, no extra graph load or derivation — the expensive
+        // parts are already paid. This walk REPLACES a pure-real one rather than joining it: the model
+        // deliberately cannot tell "no dispatch at all" from "single-candidate dispatch", because the forward
+        // surfaces (`reaches`, `tree`, `path`) draw no such line either.
+        var deterministicPerFamily = FactPathFinder
             .ReachedByLabelledSeeds(
                 graph,
                 ownersPerFamily,
@@ -168,7 +175,7 @@ public sealed class FileEffectReadModelIndex
                 maxNodes: int.MaxValue,
                 narrowDispatch: true,
                 mode: FactPathFinder.TraversalMode.SyncCut,
-                includeDispatch: false
+                dispatch: FactPathFinder.DispatchAdmission.SingleTarget
             )
             .Select(CollapseInstantiations)
             .ToArray();
@@ -205,7 +212,7 @@ public sealed class FileEffectReadModelIndex
             for (var family = 0; family < selectors.Count; family++)
             {
                 var reached = reachedPerFamily[family];
-                var real = realPerFamily[family];
+                var deterministic = deterministicPerFamily[family];
                 var currentFamily = families[family];
 
                 // The AMPLIFICATION tier, keyed exactly where it is knowable. Two grains because two rows ask
@@ -221,14 +228,15 @@ public sealed class FileEffectReadModelIndex
                     .Select(effect => effect.EnclosingSymbolId!)
                     .ToHashSet(StringComparer.Ordinal);
 
-                // The REAL depth wins whenever a real path exists, even when the dispatch closure found a
-                // shorter one: a number that claims to be real must come from the real walk. Only a node the
-                // real walk never reached is rendered as dispatch-derived.
+                // The DETERMINISTIC depth wins whenever a deterministic route exists, even when the full
+                // closure found a shorter one through a polymorphic hop: a number rendered without the hedge
+                // must come from the walk that admitted no polymorphic hop. Only a node that walk never
+                // reached is rendered as dispatch-derived.
                 FileEffectAggregate? Aggregate(string node)
                 {
-                    if (real.TryGetValue(node, out var realDepth))
+                    if (deterministic.TryGetValue(node, out var deterministicDepth))
                     {
-                        return new FileEffectAggregate(currentFamily, realDepth);
+                        return new FileEffectAggregate(currentFamily, deterministicDepth);
                     }
 
                     return reached.TryGetValue(node, out var anyDepth)
@@ -264,13 +272,13 @@ public sealed class FileEffectReadModelIndex
                     var siteEffect = Aggregate(site.TargetSymbolId) ?? new FileEffectAggregate(currentFamily, 0);
 
                     // A badge's BASIS describes the route from the ENCLOSING method, not the callee's own
-                    // luck. A callee may sit on a real call path while the only way into it from here is a
-                    // dispatch guess — then this line is a guess too, and saying otherwise would print a
+                    // luck. A callee may sit on a deterministic route while the only way into it from here is
+                    // a polymorphic guess — then this line is a guess too, and saying otherwise would print a
                     // real-looking line badge under a dispatch-only method badge (observed on
                     // PathwayTreeNode.cs:45, `cache:18` beneath `get_Task cache:19?`). Every effect OWNER is
                     // seeded into both closures, so a body that performs the effect itself is always real here.
-                    var enclosingHasRealPath = real.ContainsKey(site.EnclosingSymbolId);
-                    if (!enclosingHasRealPath && !siteEffect.ViaDispatchOnly)
+                    var enclosingHasDeterministicPath = deterministic.ContainsKey(site.EnclosingSymbolId);
+                    if (!enclosingHasDeterministicPath && !siteEffect.ViaDispatchOnly)
                     {
                         siteEffect = siteEffect with { ViaDispatchOnly = true };
                     }

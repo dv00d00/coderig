@@ -149,6 +149,72 @@ public sealed class ReachedByLabelledSeedsTests
         }
     }
 
+    // The dispatch admission is the reverse mirror of the forward walk's `Fanout > 1` split. Base.V has ONE
+    // override, so under null receivers its hop has degree 1: SingleTarget admits it exactly as All does, and
+    // None drops it (direct callers only — and the two callers call Base.V, not Impl.V).
+    [Test]
+    public void Single_target_admission_keeps_a_degree_one_hop_and_none_drops_it()
+    {
+        var graph = DispatchShape();
+        IReadOnlyList<IReadOnlyCollection<string>> seeds = [new[] { "M:N.Impl.V" }];
+
+        var all = FactPathFinder.ReachedByLabelledSeeds(graph, seeds, int.MaxValue, int.MaxValue);
+        var singleTarget = FactPathFinder.ReachedByLabelledSeeds(
+            graph,
+            seeds,
+            int.MaxValue,
+            int.MaxValue,
+            dispatch: FactPathFinder.DispatchAdmission.SingleTarget
+        );
+        var none = FactPathFinder.ReachedByLabelledSeeds(
+            graph,
+            seeds,
+            int.MaxValue,
+            int.MaxValue,
+            dispatch: FactPathFinder.DispatchAdmission.None
+        );
+
+        all[0].Keys.OrderBy(key => key, StringComparer.Ordinal).ShouldBe(["M:N.Caller.Go", "M:N.Impl.V", "M:N.Second.Go"]);
+        singleTarget[0]
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .ShouldBe(all[0].OrderBy(pair => pair.Key, StringComparer.Ordinal));
+        none[0].Keys.ShouldBe(["M:N.Impl.V"]);
+    }
+
+    // With TWO overrides the null-receiver hop has degree 2, so SingleTarget excludes the caller that All admits.
+    [Test]
+    public void Single_target_admission_excludes_a_hop_that_fans_to_several_overrides()
+    {
+        var edges = new[] { new CallEdge("M:N.Caller.Go", "M:N.Base.V", "invocation", "f.cs", 1) };
+        var bases = new[] { new BaseEdge("T:N.Impl", "T:N.Base"), new BaseEdge("T:N.Other", "T:N.Base") };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.Base.V", "V", "T:N.Base"),
+            new MethodRef("M:N.Impl.V", "V", "T:N.Impl", IsOverride: true),
+            new MethodRef("M:N.Other.V", "V", "T:N.Other", IsOverride: true),
+        };
+        var mined = new[]
+        {
+            new DispatchFact("M:N.Base.V", "M:N.Impl.V", "override"),
+            new DispatchFact("M:N.Base.V", "M:N.Other.V", "override"),
+        };
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases, mined);
+        IReadOnlyList<IReadOnlyCollection<string>> seeds = [new[] { "M:N.Impl.V" }];
+
+        var all = FactPathFinder.ReachedByLabelledSeeds(graph, seeds, int.MaxValue, int.MaxValue);
+        var singleTarget = FactPathFinder.ReachedByLabelledSeeds(
+            graph,
+            seeds,
+            int.MaxValue,
+            int.MaxValue,
+            dispatch: FactPathFinder.DispatchAdmission.SingleTarget
+        );
+
+        all[0].Keys.ShouldContain("M:N.Caller.Go");
+        singleTarget[0].Keys.ShouldNotContain("M:N.Caller.Go");
+    }
+
     [Test]
     public void No_labels_is_an_empty_result_and_over_sixty_four_is_refused()
     {

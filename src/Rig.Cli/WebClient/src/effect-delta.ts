@@ -78,6 +78,15 @@ function compareEffects(base: EffectState[], head: EffectState[]): ReadonlyMap<s
   }));
 }
 
+// Replace the leading member segment — everything up to the earliest "." or "(" — and keep the remainder,
+// so an accessor keeps its ".get"/".set" tail and a getter can never pair with a setter.
+function normalizeMemberSegment(tail: string): string {
+  const dot = tail.indexOf(".");
+  const open = tail.indexOf("(");
+  const end = dot < 0 ? open : open < 0 ? dot : Math.min(dot, open);
+  return end < 0 ? "<method>" : `<method>${tail.slice(end)}`;
+}
+
 function renameShape(method: MethodState): string | null {
   if (!method.id || method.name === "" || method.name.startsWith(".")) return null;
   const open = method.id.indexOf("(");
@@ -86,8 +95,14 @@ function renameShape(method: MethodState): string | null {
   if (member < 0) return null;
   const owner = declaration.slice(0, member);
   const parameters = open < 0 ? "" : method.id.slice(open);
+  // `name` and `signature` spell the member differently (get_X vs X.get), so normalize it POSITIONALLY
+  // rather than by name: drop the owner prefix the signature carries without the id's "M:", then
+  // normalize what is left. A signature that does not carry that prefix is normalized as-is.
+  const ownerPrefix = `${owner.startsWith("M:") ? owner.slice(2) : owner}.`;
   const signature = method.signature
-    ? method.signature.replace(method.name, "<method>")
+    ? normalizeMemberSegment(
+      method.signature.startsWith(ownerPrefix) ? method.signature.slice(ownerPrefix.length) : method.signature,
+    )
     : "";
   return `${owner}|${signature}|${parameters}`;
 }
@@ -99,8 +114,9 @@ function addByLine(target: Map<number, MethodComparison[]>, line: number, compar
 }
 
 // Compare only methods that can be paired across revisions. Exact symbol identity wins. A renamed method may
-// fall back to its owner + normalized signature + parameter shape, but only when that shape is unique on both
-// sides; ambiguity fails closed rather than painting unrelated methods as a semantic change. An added/deleted
+// fall back to its owner + normalized signature + parameter shape, when that shape is unique on both sides or
+// when the shape group is the same size on each side and source line order decides which member is which;
+// residual ambiguity fails closed rather than painting unrelated methods as a semantic change. An added/deleted
 // file has no pairs and therefore never turns every effect lane into "new"/"gone" noise.
 export function buildMethodDeltaIndex(
   baseMethods: MethodState[],
@@ -140,6 +156,30 @@ export function buildMethodDeltaIndex(
     pairs.push([before[0], after[0]]);
     remainingBase.delete(before[0].id);
     remainingHead.delete(after[0].id);
+  }
+
+  // An ambiguous shape group can still be resolved positionally: a run of members renamed in place keeps its
+  // source order, so the member at a given position is the same member on both sides. Restricted to one shape
+  // group with equal counts — an unequal count means something was added or removed as well as renamed, and
+  // pairing across groups would compare unrelated members. A line repeated within one side leaves the order
+  // undecided, so that whole group fails closed into the suppression below rather than guessing.
+  const orderedBaseShapes = shapeGroups(remainingBase.values());
+  const orderedHeadShapes = shapeGroups(remainingHead.values());
+  const byAscendingLine = (group: MethodState[]): MethodState[] | null => {
+    if (new Set(group.map((method) => method.line)).size !== group.length) return null;
+    return [...group].sort((left, right) => left.line - right.line);
+  };
+  for (const [shape, group] of orderedBaseShapes) {
+    const peers = orderedHeadShapes.get(shape);
+    if (!peers || peers.length !== group.length) continue;
+    const before = byAscendingLine(group);
+    const after = byAscendingLine(peers);
+    if (!before || !after) continue;
+    for (let position = 0; position < before.length; position++) {
+      pairs.push([before[position], after[position]]);
+      remainingBase.delete(before[position].id);
+      remainingHead.delete(after[position].id);
+    }
   }
 
   // A method added/removed inside an otherwise comparable file is a real semantic delta. Shapes that remain

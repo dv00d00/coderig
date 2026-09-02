@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   Diff,
@@ -22,7 +22,7 @@ import {
   type MethodComparison,
   type MethodDeltaIndex,
 } from "./effect-delta.ts";
-import { semanticLaneSide } from "./review-gutter.ts";
+import { changeForSide, laneHeaderCells, semanticLaneSide } from "./review-gutter.ts";
 import { canHighlightSource, matchesReviewSource, reviewSourceIdentity, sourceHunk, type ReviewSource } from "./review-source.ts";
 import {
   amplificationLabel, anchorLabel, effectFamilyLabel, findingsStatus, inlineEffectLabel, disclosureLabel,
@@ -155,7 +155,7 @@ type LineInsight = {
   anchors: FileAnchor[];
 };
 
-type SemanticRow = { side: "old" | "new"; line: number; insight?: LineInsight; headers: MethodComparison[] };
+type SemanticRow = { side: "old" | "new"; line: number; insight?: LineInsight; headers: MethodComparison[]; changedHeaders: MethodComparison[] };
 type ProjectedChange = { change: ChangeData; old?: SemanticRow; new?: SemanticRow; identical: boolean };
 
 const effectFamilies = [
@@ -181,6 +181,22 @@ const syntaxHighlighter = {
 
 function shortSha(value: string): string {
   return value.slice(0, 12);
+}
+
+// Porcelain letters are git internals; the glyph carries the meaning and the word carries it for anyone who
+// cannot use the colour. An unrecognised letter renders as itself rather than disappearing. DUPLICATED as
+// `reviewFileStatusMarks` in wwwroot/components.js (the file list) — the two shells cannot share a module,
+// one being a bundled TS island and the other plain JS served directly, so change both together.
+const statusMarks: Record<string, { glyph: string; label: string }> = {
+  A: { glyph: "+", label: "added" },
+  M: { glyph: "±", label: "modified" },
+  D: { glyph: "−", label: "deleted" },
+  R: { glyph: "→", label: "renamed" },
+  C: { glyph: "⧉", label: "copied" },
+};
+
+function statusMark(status: string): { glyph: string; label: string } {
+  return statusMarks[String(status).toUpperCase()] || { glyph: status, label: status };
 }
 
 function pathParts(value: string): { name: string; parent: string } {
@@ -224,6 +240,21 @@ function changeLine(change: ChangeData, side: "old" | "new"): number | null {
 
   if (change.type === "delete") return null;
   return change.type === "insert" ? change.lineNumber : change.newLineNumber;
+}
+
+// Which revision's semantics belong in this gutter cell. The sticky lane header and the gutter renderer must
+// answer this the same way, or the header labels a column that renders no lane.
+function laneSideAt(
+  change: ChangeData,
+  gutterSide: "old" | "new",
+  item: ProjectedChange | undefined,
+  viewType: ViewType,
+  showSource: boolean,
+  sourceNativeSide: "old" | "new",
+): "old" | "new" | null {
+  if (showSource) return gutterSide === "new" ? sourceNativeSide : null;
+  const suppressBase = canSuppressBaseGutter(item?.identical || false, item?.old?.changedHeaders.length || 0, item?.new?.changedHeaders.length || 0);
+  return semanticLaneSide(viewType, change.type, gutterSide, suppressBase);
 }
 
 function mergeEffect(target: FileEffect[], effect: FileEffect): void {
@@ -272,13 +303,6 @@ function sameVisibleLineInsight(base: LineInsight | undefined, head: LineInsight
   return sameVisibleAnnotations(base, head);
 }
 
-function changeForSide(kind: EffectChangeKind | undefined, side: "old" | "new"): EffectChangeKind {
-  if (kind === "changed") return "changed";
-  if (side === "old" && kind === "removed") return "removed";
-  if (side === "new" && kind === "added") return "added";
-  return "same";
-}
-
 function lineEffectChange(
   effect: FileEffect,
   insight: LineInsight | undefined,
@@ -312,6 +336,13 @@ function methodChangeTitle(headers: MethodComparison[], side: "old" | "new"): st
     return `△${family}${details ? ` (${details})` : ""}`;
   }));
   return rows.length ? `Method reach changed: ${rows.join(" · ")}` : "";
+}
+
+// What a method lane says when there is no delta to report: the aggregate reach itself, in the same
+// vocabulary a call site uses (inlineEffectLabel).
+function methodReachTitle(headers: MethodComparison[], side: "old" | "new"): string {
+  const rows = headers.flatMap((comparison) => ((side === "old" ? comparison.base : comparison.head)?.effects || []).map(inlineEffectLabel));
+  return rows.length ? `Method reach: ${rows.join(" · ")}` : "";
 }
 
 function EffectLane({
@@ -375,29 +406,34 @@ function EffectWidget({ expanded, insight, headers = [], callbacks, deltas }: { 
   return (
     <div className="rig-diff-widget" data-rig-side={expanded.side} data-rig-line={expanded.line}>
       <strong>{expanded.side === "old" ? "base" : "head"}:{expanded.line}</strong>
-      {headers.map((comparison, index) => <span className="rig-diff-method-summary" key={index}>
-        {(expanded.side === "old" ? comparison.base : comparison.head)?.name}: {methodChangeTitle([comparison], expanded.side)}
-      </span>)}
-      <div className="rig-diff-findings">
-        {insight?.hazards.map((finding, index) => (
-          <span className={`rig-diff-finding-row hazard confidence-${finding.confidence}`} key={`hazard:${finding.type}:${index}`}>
-            <strong>{finding.type.replaceAll("_", " ")}</strong> · {finding.confidence} · {finding.subtype}
-            {finding.detail ? <span className="rig-diff-finding-detail">{finding.detail}</span> : null}
-          </span>
-        ))}
-        {insight?.amplifications.map((finding, index) => (
-          <span className="rig-diff-finding-row amplification" key={`amplification:${finding.provider}:${index}`}>
-            {amplificationLabel(finding)}
-            <span className="rig-diff-finding-detail">Iteration: {finding.iteration} · {finding.confidence} confidence</span>
-          </span>
-        ))}
-        {insight?.anchors.map((finding, index) => (
-          <span className={`rig-diff-finding-row anchor confidence-${finding.confidence}`} key={`anchor:${finding.witnessProvider}:${index}`}>
-            {anchorLabel(finding)}
-            <span className="rig-diff-finding-detail">{finding.caller} · {finding.iterationKind} · {finding.confidence} confidence{finding.witnessResource ? ` · ${finding.witnessResource}` : ""}</span>
-          </span>
-        ))}
-      </div>
+      {headers.map((comparison, index) => {
+        const delta = methodChangeTitle([comparison], expanded.side);
+        return <span className={`rig-diff-method-summary${delta ? "" : " unchanged"}`} key={index}>
+          {(expanded.side === "old" ? comparison.base : comparison.head)?.name}: {delta || methodReachTitle([comparison], expanded.side) || "no reach recorded"}
+        </span>;
+      })}
+      {insight && (insight.hazards.length > 0 || insight.amplifications.length > 0 || insight.anchors.length > 0)
+        ? <div className="rig-diff-findings">
+          {insight.hazards.map((finding, index) => (
+            <span className={`rig-diff-finding-row hazard confidence-${finding.confidence}`} key={`hazard:${finding.type}:${index}`}>
+              <strong>{finding.type.replaceAll("_", " ")}</strong> · {finding.confidence} · {finding.subtype}
+              {finding.detail ? <span className="rig-diff-finding-detail">{finding.detail}</span> : null}
+            </span>
+          ))}
+          {insight.amplifications.map((finding, index) => (
+            <span className="rig-diff-finding-row amplification" key={`amplification:${finding.provider}:${index}`}>
+              {amplificationLabel(finding)}
+              <span className="rig-diff-finding-detail">Iteration: {finding.iteration} · {finding.confidence} confidence</span>
+            </span>
+          ))}
+          {insight.anchors.map((finding, index) => (
+            <span className={`rig-diff-finding-row anchor confidence-${finding.confidence}`} key={`anchor:${finding.witnessProvider}:${index}`}>
+              {anchorLabel(finding)}
+              <span className="rig-diff-finding-detail">{finding.caller} · {finding.iterationKind} · {finding.confidence} confidence{finding.witnessResource ? ` · ${finding.witnessResource}` : ""}</span>
+            </span>
+          ))}
+        </div>
+        : null}
       {insight && (insight.anchors.length > 0 || insight.amplifications.length > 0)
         ? <span className="rig-diff-candidate-note">Static iteration candidate — not proof of runtime N+1 or a query count.</span>
         : null}
@@ -430,6 +466,7 @@ function EffectWidget({ expanded, insight, headers = [], callbacks, deltas }: { 
 
 function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: FileDiffCallbacks }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLDivElement>(null);
   const [viewType, setViewType] = useState<ViewType>("unified");
   const [wrapLines, setWrapLines] = useState(true);
   const [effectMode, setEffectMode] = useState<ReviewEffectMode>(() => readReviewEffectMode());
@@ -479,6 +516,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   const displayedLanguage = showSource ? source?.language : model.language;
   const displayPath = showSource ? model[sourceSide].path || model.relativePath : model.relativePath;
   const path = useMemo(() => pathParts(displayPath || model.file), [displayPath, model.file]);
+  const mark = statusMark(model.status);
   const patchCounts = useMemo(() => {
     if (!file) return { additions: 0, deletions: 0 };
     return file.hunks.reduce(
@@ -508,7 +546,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   const headFindingsStatus = findingsStatus(model.head);
   const effectDelta = headEffectSites - baseEffectSites;
   const semanticSummary = baseAvailable && headAvailable
-    ? `effect sites ${effectDelta > 0 ? "+" : ""}${effectDelta}`
+    ? `effect sites ${baseEffectSites} → ${headEffectSites}`
     : baseAvailable
       ? "base-only semantics"
       : headAvailable
@@ -530,11 +568,11 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   );
   const projection = useMemo(() => {
     const rows = new Map<string, ProjectedChange>();
-    const headersAt = (source: ReadonlyMap<number, MethodComparison[]>) => new Map(
-      [...source].map(([line, comparisons]) => [line, comparisons.filter((comparison) => changedEffects(comparison).length > 0)]),
-    );
-    const oldHeaders = headersAt(methodDeltas.baseByLine);
-    const newHeaders = headersAt(methodDeltas.headByLine);
+    // Every method aggregate reaches the renderer, changed or not: a method row's lane means "this
+    // method's reach", not "this method's reach changed". The delta is carried by the slot styling
+    // (changeForSide) and by `changedHeaders` below, never by withholding the reach.
+    const oldHeaders = methodDeltas.baseByLine;
+    const newHeaders = methodDeltas.headByLine;
     for (const hunk of displayedHunks) for (const change of hunk.changes) {
       const row = (side: "old" | "new"): SemanticRow | undefined => {
         if (showSource && side !== sourceNativeSide) return undefined;
@@ -542,7 +580,8 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
         if (line == null) return undefined;
         const insight = (side === "old" ? oldLines : newLines).get(line);
         const headers = (side === "old" ? oldHeaders : newHeaders).get(line) || [];
-        return insight || headers.length ? { side, line, insight, headers } : undefined;
+        const changedHeaders = headers.filter((comparison) => changedEffects(comparison).length > 0);
+        return insight || headers.length ? { side, line, insight, headers, changedHeaders } : undefined;
       };
       const old = row("old");
       const next = row("new");
@@ -571,8 +610,49 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
       : <div className="rig-diff-inline-single">{widget}</div>;
     return result;
   }, [projection, effectMode, activeExpanded, effectiveView, callbacks, expansionContext, methodDeltas]);
+  // Width of the gutter's line-number track (see `--rig-lane-number`). The widest line number the rendered
+  // hunks can show decides it: any narrower and a row carrying that number would push its lane off the
+  // common origin the sticky key aligns to.
+  const laneNumberTrack = useMemo(() => {
+    let widest = 1;
+    for (const hunk of displayedHunks) {
+      widest = Math.max(widest, hunk.oldStart + hunk.oldLines - 1, hunk.newStart + hunk.newLines - 1);
+    }
+    return `${Math.max(2, String(widest).length)}ch`;
+  }, [displayedHunks]);
+  // The gutter columns that actually render a lane, answered by the renderer's own rule over the rendered
+  // rows — a base lane suppressed on every row must not get a header group.
+  const laneSides = useMemo(() => {
+    const sides = new Set<"old" | "new">();
+    if (effectMode !== "gutter") return sides;
+    for (const hunk of displayedHunks) for (const change of hunk.changes) {
+      if (sides.size === 2) return sides;
+      const item = projection.get(getChangeKey(change));
+      for (const gutterSide of ["old", "new"] as const) {
+        if (sides.has(gutterSide)) continue;
+        const laneSide = laneSideAt(change, gutterSide, item, viewType, showSource, sourceNativeSide);
+        const row = laneSide == null ? undefined : item?.[laneSide];
+        if (row && (row.insight || row.headers.length)) sides.add(gutterSide);
+      }
+    }
+    return sides;
+  }, [displayedHunks, projection, effectMode, viewType, showSource, sourceNativeSide]);
 
   useEffect(() => setExpanded(null), [expansionContext]);
+
+  // Focus mode makes `.rig-diff-head` sticky at the top of the scrolling review pane, which is exactly where
+  // the lane header sticks. Publish the head's measured height so the header stacks below it instead of
+  // hiding behind it; CSS cannot read that height and a constant would drift with any toolbar wrap.
+  useEffect(() => {
+    const head = headRef.current;
+    const island = rootRef.current;
+    if (!head || !island) return;
+    const sync = () => island.style.setProperty("--rig-diff-head-height", `${head.offsetHeight}px`);
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const focus = callbacks.focusLine;
@@ -591,13 +671,60 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
     return () => cancelAnimationFrame(frame);
   }, [callbacks.focusLine?.line, callbacks.focusLine?.side, model.patch, effectiveView, fullHunk]);
 
+  // POSITION carries family identity in the lane, so the key is a row of the diff table itself: one glyph
+  // group per rendered lane, laid out by the same gutter cell and the same width tokens as the slots below
+  // it, and sticky so it stays with the lane while a long file scrolls.
+  const laneKeyCells = effectMode === "gutter" && laneSides.size > 0
+    ? laneHeaderCells(effectiveView, showSource ? "modify" : file.type, laneSides)
+    : null;
+  const laneHelpAt = laneKeyCells ? laneKeyCells.findIndex((cell) => cell.kind === "code") : -1;
+  const laneKey = laneKeyCells
+    ? <thead className="rig-diff-lane-key" key="rig-diff-lane-key">
+        <tr>
+          {/* `td`, not `th`: this row labels the lane, not the columns of data. A column header would be
+              announced again on every code line below it. */}
+          {laneKeyCells.map((cell, index) => cell.kind === "gutter"
+            ? <td className="diff-gutter" key={index}>
+                {cell.lane
+                  ? <span className="rig-diff-gutter">
+                      <span className="rig-diff-marks">
+                        <span className="rig-diff-finding-stack" />
+                        <span className="rig-diff-lanehead" aria-label="Effect lane columns" title="Effect reach by family">
+                          {effectFamilies.map((family) => <b key={family.key} title={family.label}>{family.mark}</b>)}
+                        </span>
+                      </span>
+                      <span className="rig-diff-line-number" />
+                    </span>
+                  : null}
+              </td>
+            : <td className="diff-code" key={index}>
+                {index === laneHelpAt
+                  ? <details className="rig-diff-lane-help">
+                      <summary aria-label="Explain effect reach lane" title="Explain effect reach lane">?</summary>
+                      <div>
+                        <strong>Effect reach</strong>
+                        <span>● in this call · ○ through callees</span>
+                        <span>teal changed · violet edge repeated</span>
+                        <span>exact depth and dispatch basis are in each mark's tooltip</span>
+                      </div>
+                    </details>
+                  : null}
+              </td>)}
+        </tr>
+      </thead>
+    : null;
+
   return (
-    <div className={`rig-diff-island view-${effectiveView} effects-${effectMode} ${showSource ? "full-source" : "patch-source"} ${wrapLines ? "wrap-lines" : "no-wrap"}`} ref={rootRef}>
-      <div className="rig-diff-head">
+    <div
+      className={`rig-diff-island view-${effectiveView} effects-${effectMode} ${showSource ? "full-source" : "patch-source"} ${wrapLines ? "wrap-lines" : "no-wrap"}`}
+      style={{ "--rig-lane-number": laneNumberTrack } as CSSProperties}
+      ref={rootRef}
+    >
+      <div className="rig-diff-head" ref={headRef}>
         <div className="rig-diff-identity" title={displayPath}>
           <div className="rig-diff-file-line">
-            <span className={`rig-diff-status status-${model.status.toLowerCase()}`} title={`Git status ${model.status}`}>
-              {model.status}
+            <span className={`rig-diff-status status-${model.status.toLowerCase()}`} title={mark.label} aria-label={mark.label}>
+              {mark.glyph}
             </span>
             <strong>{path.name}</strong>
             {!showSource ? <span className="rig-diff-patch-counts" aria-label={`${patchCounts.additions} additions, ${patchCounts.deletions} deletions`}>
@@ -707,22 +834,6 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
         <span data-findings-side="base" data-state={baseFindingsStatus.state} title={baseFindingsStatus.detail}>Base: {baseFindingsStatus.label}</span>
         <span data-findings-side="head" data-state={headFindingsStatus.state} title={headFindingsStatus.detail}>Head: {headFindingsStatus.label}</span>
       </div>
-      {effectMode === "gutter" && (baseAvailable || headAvailable)
-        ? <div className="rig-diff-lane-key" title="Effect reach by family">
-            <span className="rig-diff-lanehead" aria-label="Effect lane columns">
-              {effectFamilies.map((family) => <b key={family.key} title={family.label}>{family.mark}</b>)}
-            </span>
-            <details className="rig-diff-lane-help">
-              <summary aria-label="Explain effect reach lane" title="Explain effect reach lane">?</summary>
-              <div>
-                <strong>Effect reach</strong>
-                <span>● in this call · ○ through callees</span>
-                <span>teal changed · violet edge repeated</span>
-                <span>exact depth and dispatch basis are in each mark's tooltip</span>
-              </div>
-            </details>
-          </div>
-        : null}
       {callbacks.focusLine && focusFound === false && !showSource
         ? <div className="rig-diff-focus-note">
             {callbacks.focusLine.side === "old" ? "Base" : "Head"} line {callbacks.focusLine.line} is outside the changed hunks and their {model.contextLines}-line context.
@@ -748,32 +859,34 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
             const nativeLine = changeLine(change, side);
             const key = getChangeKey(change);
             const item = projection.get(key);
-            const suppressBase = canSuppressBaseGutter(item?.identical || false, item?.old?.headers.length || 0, item?.new?.headers.length || 0);
-            const laneSide = effectMode !== "off" ? (showSource ? (side === "new" ? sourceNativeSide : null) : semanticLaneSide(viewType, change.type, side, suppressBase)) : null;
+            const laneSide = effectMode !== "off" ? laneSideAt(change, side, item, viewType, showSource, sourceNativeSide) : null;
             const line = laneSide == null ? null : changeLine(change, laneSide);
             const row = laneSide == null ? undefined : item?.[laneSide];
             const insight = row?.insight;
             const headers = row?.headers || [];
+            const changedHeaders = row?.changedHeaders || [];
             const displayedSide = showSource ? sourceNativeSide : side;
             const focused = callbacks.focusLine?.side === displayedSide && callbacks.focusLine.line === nativeLine;
-            const changed = headers.length > 0 || (insight?.effects || []).some((effect) => lineEffectChange(effect, insight, headers, laneSide!, methodDeltas) !== "same");
+            const changed = changedHeaders.length > 0 || (insight?.effects || []).some((effect) => lineEffectChange(effect, insight, headers, laneSide!, methodDeltas) !== "same");
             const hazard = !!insight?.hazards.length;
             const amplified = !!(insight?.amplifications.length || insight?.anchors.length);
             const marks = effectMode === "gutter" && (insight || headers.length)
               ? <EffectLane insight={insight} headers={headers} side={laneSide!} deltas={methodDeltas} />
               : null;
+            // A method row with no delta still has something to say: its reach.
+            const methodTitle = laneSide == null ? "" : methodChangeTitle(headers, laneSide) || methodReachTitle(headers, laneSide);
             const title = [
-              laneSide == null ? "" : methodChangeTitle(headers, laneSide),
+              methodTitle,
               ...(insight?.effects || []).map(inlineEffectLabel),
               hazard ? "Hazard findings — click for details" : "",
               amplified ? "Iteration candidate — not proof of runtime N+1" : "",
             ].filter(Boolean).join("\n");
             return wrapInAnchor(
               <span
-                className={`rig-diff-gutter${focused ? " focus" : ""}${headers.length ? " method-change" : ""}`}
+                className={`rig-diff-gutter${focused ? " focus" : ""}${changedHeaders.length ? " method-change" : ""}`}
                 data-rig-side={showSource && side === "old" ? undefined : displayedSide}
                 data-rig-line={showSource && side === "old" ? undefined : nativeLine ?? undefined}
-                title={laneSide == null ? undefined : methodChangeTitle(headers, laneSide) || undefined}
+                title={methodTitle || undefined}
               >
                 {insight || headers.length ? (
                   <button
@@ -797,12 +910,15 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
                       : marks}
                   </button>
                 ) : marks}
-                {renderDefault()}
+                <span className="rig-diff-line-number">{renderDefault()}</span>
               </span>,
             );
           }}
         >
-          {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
+          {(hunks) => {
+            const bodies = hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />);
+            return laneKey ? [laneKey, ...bodies] : bodies;
+          }}
         </Diff>
         </>
       )}

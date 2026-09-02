@@ -105,8 +105,13 @@ export function sameVisibleAnnotations(base?: VisibleAnnotations, head?: Visible
   return fingerprint(base) === fingerprint(head);
 }
 
-export function canSuppressBaseGutter(identical: boolean, baseHeaderCount: number, headHeaderCount: number): boolean {
-  // Method headers are revision-native aggregates. In particular, a removed last effect has no head
-  // mark: retaining only that empty head lane would hide the removal even though both summaries match.
-  return identical && baseHeaderCount === 0 && headHeaderCount === 0;
+// Split view draws a lane per pane, so a context row whose two panes would draw the SAME lane pays twice
+// for one fact. The counts are of CHANGED method aggregates, not of aggregates: an unchanged aggregate is
+// equal on both sides by construction (compareEffects only reports "same" when family, depth, dispatch
+// basis and repetition all match), so both panes would render identical slots and the base one is pure
+// duplication. A CHANGED aggregate keeps both panes for the original reason — a removed last effect has
+// no head mark, so retaining only that empty head lane would hide the removal even though the per-line
+// annotations match.
+export function canSuppressBaseGutter(identical: boolean, changedBaseHeaders: number, changedHeadHeaders: number): boolean {
+  return identical && changedBaseHeaders === 0 && changedHeadHeaders === 0;
 }

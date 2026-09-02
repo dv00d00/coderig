@@ -45,6 +45,24 @@ public static partial class FactPathFinder
         AsyncInclude,
     }
 
+    // Which reverse-dispatch predecessors a reverse walk admits, on top of the direct callers it always
+    // yields. The forward walk already splits dispatch by DEGREE (a single-target hop is deterministic and
+    // tagged like a real call; only `Fanout > 1` is disclosed as fan-out — see ReachesWithFanoutCore), and
+    // this is the reverse mirror of that split, so a read model can separate "reached deterministically" from
+    // "reached only through a hop that could land on several implementations".
+    public enum DispatchAdmission
+    {
+        // Direct callers only — the reverse of Successors' direct-call arm.
+        None,
+
+        // Direct callers plus dispatch hops whose receiver-narrowed candidate set has exactly ONE target.
+        // Such a hop is deterministic: the one candidate is the only body the call can run.
+        SingleTarget,
+
+        // Every dispatch hop, whatever its degree. The default for every reverse traversal.
+        All,
+    }
+
     // The SINGLE handoff-gate predicate, shared by the forward (Dispatch) and reverse (GraphIndex) walks so
     // they cut identically. Returns true when `edge` must NOT be crossed in `mode`:
     //   * SyncCut       — cut ALL handoff edges (a deferred callback is not a synchronous call).
@@ -1162,7 +1180,7 @@ public static partial class FactPathFinder
         int maxNodes = 20000,
         bool narrowDispatch = true,
         TraversalMode mode = TraversalMode.SyncCut,
-        bool includeDispatch = true
+        DispatchAdmission dispatch = DispatchAdmission.All
     )
     {
         ArgumentNullException.ThrowIfNull(graph);
@@ -1245,7 +1263,7 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (var (pred, _) in Predecessors(current, index, rev, includeDispatch))
+            foreach (var (pred, _) in Predecessors(current, index, rev, dispatch))
             {
                 var predDepths = Slot(pred);
                 var improved = 0UL;

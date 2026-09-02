@@ -122,7 +122,13 @@ public static partial class FactPathFinder
         //     SOURCE (base/interface/hub) methods that resolve to it, the exact reverse of the receiver-blind
         //     forward DispatchTargets(node, null) over every node. Predecessors yields the full hub-fan
         //     (every caller of the hub rides up), matching the SQL/dispatch_edges oracle. Unchanged.
-        public Dictionary<string, List<string>> ReverseDispatch = new(StringComparer.Ordinal);
+        //
+        // SingleTarget records the DEGREE of the hop that produced the entry: true when the DispatchTargets
+        // resolution it was inverted from had exactly one candidate (the same count the forward walk reports
+        // as Fanout, which tags only `> 1` as fan-out). Predecessors uses it to admit deterministic hops
+        // without the polymorphic ones (DispatchAdmission.SingleTarget). It is per ENTRY, not per target:
+        // two callers of one hub can narrow to different degrees through their own receivers.
+        public Dictionary<string, List<(string Source, bool SingleTarget)>> ReverseDispatch = new(StringComparer.Ordinal);
 
         public bool NarrowDispatch = true;
     }
@@ -197,14 +203,16 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (var target in DispatchTargetsMemo(hub: edge.Callee, receiver: edge.ReceiverType))
+            var targets = DispatchTargetsMemo(hub: edge.Callee, receiver: edge.ReceiverType);
+            var singleTarget = targets.Count == 1;
+            foreach (var target in targets)
             {
                 if (!rev.ReverseDispatch.TryGetValue(target.Node, out var sources))
                 {
-                    rev.ReverseDispatch[target.Node] = sources = new List<string>();
+                    rev.ReverseDispatch[target.Node] = sources = new List<(string, bool)>();
                 }
 
-                sources.Add(edge.Caller);
+                sources.Add((edge.Caller, singleTarget));
             }
         }
 
@@ -214,29 +222,36 @@ public static partial class FactPathFinder
             // O -> [hub methods that resolve to O]. Predecessors yields the full hub-fan (every caller of the
             // hub rides up). The SQL/dispatch_edges oracle equivalence is by construction. Unchanged behaviour.
             foreach (var node in index.Nodes)
-            foreach (var target in DispatchTargets(method: node, index: index, receiverType: null))
             {
-                if (!rev.ReverseDispatch.TryGetValue(target.Node, out var sources))
+                var targets = DispatchTargets(method: node, index: index, receiverType: null);
+                var singleTarget = targets.Count == 1;
+                foreach (var target in targets)
                 {
-                    rev.ReverseDispatch[target.Node] = sources = new List<string>();
-                }
+                    if (!rev.ReverseDispatch.TryGetValue(target.Node, out var sources))
+                    {
+                        rev.ReverseDispatch[target.Node] = sources = new List<(string, bool)>();
+                    }
 
-                sources.Add(node);
+                    sources.Add((node, singleTarget));
+                }
             }
         }
 
         return rev;
     }
 
-    // includeDispatch:false yields ONLY real callers — the reverse of Successors' direct-call arm. It exists
-    // because a consumer may need to know whether a reach survives WITHOUT whole-program devirtualization: rig
-    // discloses dispatch fan-out everywhere else (reaches' "NOT a real call" bucket, tree's edge markers), and a
-    // consumer that cannot separate the two silently launders an over-approximation into a fact.
+    // `dispatch` gates the reverse-dispatch arm. None yields ONLY real callers — the reverse of Successors'
+    // direct-call arm. SingleTarget adds the hops whose narrowed candidate set had exactly one target: the
+    // reverse of the forward walk's rule that a degree-1 dispatch is deterministic and only `Fanout > 1` is
+    // disclosed as fan-out (ReachesWithFanoutCore). All (the default) admits every hop. The narrower modes
+    // exist because a consumer may need to know whether a reach survives WITHOUT polymorphic devirtualization:
+    // rig discloses dispatch fan-out everywhere else (reaches' "NOT a real call" bucket, tree's edge markers),
+    // and a consumer that cannot separate the two silently launders an over-approximation into a fact.
     private static IEnumerable<(string Pred, bool ViaReverseDispatch)> Predecessors(
         string current,
         GraphIndex index,
         ReverseMaps rev,
-        bool includeDispatch = true
+        DispatchAdmission dispatch = DispatchAdmission.All
     )
     {
         // Cut symmetry: a cut node yields NO successors forward (Successors `yield break`s on it), so it
@@ -257,7 +272,7 @@ public static partial class FactPathFinder
             }
         }
 
-        if (!includeDispatch)
+        if (dispatch == DispatchAdmission.None)
         {
             yield break;
         }
@@ -269,13 +284,19 @@ public static partial class FactPathFinder
         //     never added. The base.M() exclusion falls out for free (NonVirtual edges contributed nothing).
         //   * RECEIVER-BLIND mode: `sources` are the hub/base/interface methods that resolve to `current` —
         //     the full hub-fan rides up, as before.
+        // Under SingleTarget only the entries whose producing hop had one candidate are yielded.
         if (rev.ReverseDispatch.TryGetValue(current, out var sources))
         {
-            foreach (var s in sources)
+            foreach (var (source, singleTarget) in sources)
             {
-                if (!cutting || !index.IsTraversalCut(s))
+                if (dispatch == DispatchAdmission.SingleTarget && !singleTarget)
                 {
-                    yield return (s, true);
+                    continue;
+                }
+
+                if (!cutting || !index.IsTraversalCut(source))
+                {
+                    yield return (source, true);
                 }
             }
         }

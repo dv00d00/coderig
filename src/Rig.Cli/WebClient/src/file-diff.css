@@ -1,6 +1,9 @@
 .rig-diff-island {
   --rig-lane-slot: 12px;
   --rig-lane-width: calc(8 * var(--rig-lane-slot));
+  /* Width of the line-number track next to the lane. Replaced per file by the digit count of the widest
+     line number the rendered hunks can show (FileDiffView), so no file size is a special case. */
+  --rig-lane-number: 4ch;
   color: var(--fg);
   background: var(--bg);
   min-width: 0;
@@ -26,7 +29,8 @@
 
 /* Keep the zero-width table column: library widgets span all three logical columns. Removing it
    with display:none makes an expanded widget create a phantom column and halves the source width. */
-.rig-diff-island.full-source .diff-line > .diff-gutter:first-child {
+.rig-diff-island.full-source .diff-line > .diff-gutter:first-child,
+.rig-diff-island.full-source .rig-diff-lane-key > tr > td:first-child {
   visibility: hidden;
   overflow: hidden;
   padding: 0;
@@ -169,6 +173,12 @@
 .rig-diff-method-summary {
   color: var(--reach);
   font-size: 12px;
+}
+
+/* A method summary is teal because teal means CHANGED. An unchanged aggregate is stating reach, not a
+   delta, so it must not borrow the delta colour. */
+.rig-diff-method-summary.unchanged {
+  color: var(--muted);
 }
 
 .rig-diff-focus-note {
@@ -425,18 +435,41 @@
   padding-top: 0.45rem;
 }
 
-.rig-diff-lane-key {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.35rem;
-  min-height: 1.55rem;
-  padding: 0.2rem 1rem;
-  border: 1px solid var(--border);
-  border-top: 0;
+/* The key is a header ROW OF THE DIFF TABLE, not a band above it: position carries family identity, so each
+   glyph group has to sit in the same gutter cell — same column width, same 1ch cell padding, same
+   `.rig-diff-marks` grid — as the slots it names, and the table's own layout keeps them aligned. It sticks
+   to the top of `.review-diff`, the pane that scrolls the diff. */
+.rig-diff-lane-key td {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  padding-block: 2px;
   color: var(--muted);
   background: var(--panel);
-  font-size: 0.68rem;
+  box-shadow: inset 0 -1px var(--border);
+  /* The rows set their own family (react-diff-view's `.diff-line`); match it so `ch` — and therefore the
+     number track this key aligns against — measures the same glyph here as in the gutters below. */
+  font-family: var(--diff-font-family);
+  cursor: default;
+}
+
+/* Focus mode sticks `.rig-diff-head` to the same edge (see index.html), so stack the key below its measured
+   height — otherwise the head hides the key exactly when a long file is being scrolled. */
+main.review-focus .rig-diff-lane-key td {
+  top: var(--rig-diff-head-height, 0px);
+}
+
+/* Gutter mode gives the gutter FIXED TRACKS instead of a right-packed flex row. Right-packing made the
+   lane's x depend on the width of the line number beside it, so a context row, a deleted row (no head
+   number) and an inserted row (no base number) each started their lane somewhere else. The number is placed
+   in track 2 explicitly, because a row with no annotations has no first child to hold track 1 open. */
+.rig-diff-island.effects-gutter .rig-diff-gutter {
+  display: grid;
+  grid-template-columns: calc(var(--rig-lane-width) + 20px) minmax(var(--rig-lane-number), 1fr);
+}
+
+.rig-diff-island.effects-gutter .rig-diff-line-number {
+  grid-column: 2;
 }
 
 .rig-diff-lane-help {
@@ -471,7 +504,7 @@
   position: absolute;
   z-index: 20;
   top: calc(100% + 0.35rem);
-  right: 0;
+  left: 0;
   display: grid;
   gap: 0.3rem;
   width: 17rem;
@@ -543,6 +576,17 @@
   white-space: pre;
   overflow-wrap: normal;
   word-break: normal;
+}
+
+/* Row hover — a scanning guide across a wide table, on the code cells of both panes (split renders the pair
+   in one row, which is the point). It is a background IMAGE deliberately: an image layer composites ON TOP
+   of the insert/delete background-COLOR the library sets, so a hovered row still reads as added or deleted,
+   and it leaves the focus row's inset box-shadow (below) alone — box-shadow does not merge across rules. */
+.rig-diff-island .diff-line:hover > .diff-code {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--fg) 6%, transparent),
+    color-mix(in srgb, var(--fg) 6%, transparent)
+  );
 }
 
 .rig-diff-island .token.comment,
@@ -655,8 +699,6 @@
   height: 17px;
   overflow: hidden;
   border-right: 1px solid var(--hair);
-  color: transparent;
-  font: 800 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .rig-diff-slot:last-child {
@@ -691,8 +733,6 @@
 
 .rig-diff-slot.uncertain {
   opacity: 0.64;
-  outline: 1px dashed currentColor;
-  outline-offset: -2px;
 }
 
 .rig-diff-slot.amp {
@@ -712,7 +752,6 @@
 
 .rig-diff-slot.removed {
   opacity: 0.7;
-  text-decoration: line-through;
 }
 
 .rig-diff-effect-mark,
@@ -841,9 +880,5 @@
   .rig-diff-summary {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .rig-diff-lane-key > span:last-child {
-    display: none;
   }
 }

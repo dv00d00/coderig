@@ -2568,7 +2568,7 @@
       }
       .review-file-row {
         display: grid;
-        grid-template-columns: 20px minmax(0, 1fr) 16px;
+        grid-template-columns: 20px minmax(0, 1fr) auto 16px;
         align-items: center;
         width: 100%;
         gap: 6px;
@@ -2637,7 +2637,25 @@
         color: var(--muted);
         font-size: 10px;
       }
+      .review-file-counts {
+        display: inline-flex;
+        gap: 4px;
+        white-space: nowrap;
+      }
+      /* The shorthand also resets the <i> to upright, which is what de-italicises the deletions figure. */
+      .review-file-counts b,
+      .review-file-counts i {
+        font: 750 10px/1.4 ui-monospace, Menlo, Consolas, monospace;
+      }
+      .review-file-counts b {
+        color: var(--ok);
+      }
+      .review-file-counts i {
+        color: var(--danger);
+      }
+      /* Pinned to the last track so the tick sits at the same x whether or not the row has line counts. */
       .review-file-viewed {
+        grid-column: 4;
         color: var(--ok);
         font-size: 12px;
         font-weight: 800;

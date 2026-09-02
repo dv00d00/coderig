@@ -105,14 +105,17 @@ internal static class QueryCacheKeys
     // v1: every Git-changed file has a two-path, side-optional review payload. This gates the client-cached
     // /api/review-files and /api/file-diff contracts independently of the per-file semantic projection.
     // v1->v2: Impact effect/hazard rows gained unique source locations for honest changed-file deep links.
-    internal const int ReviewSchema = 2;
+    internal const int ReviewSchema = 3; // v2->v3: review rows carry git changed-line counts (additions/deletions)
 
     // v1: the per-file semantic effect projection shared by web, annotate and Rider. This gates both the
     // browser derivation token and the resident process LRU, so same-store projection fixes cannot leave
     // either surface serving the pre-fix read model.
     // v1->v2: fold lambda-owned effects to declarations, preserve co-located direct rows, and enforce method/site consistency.
     // v2->v3: badges disclose dispatch-only reach (ViaDispatchOnly).
-    internal const int FileEffectsSchema = 4; // v3->v4: badges carry the amplification tier (Looped)
+    // v3->v4: badges carry the amplification tier (Looped).
+    // v4->v5: ViaDispatchOnly fires only for a dispatch hop with MORE THAN ONE candidate target; a single-candidate
+    // hop is now an ordinary reach, so a warm v4 blob would keep hedging every one-implementation service call.
+    internal const int FileEffectsSchema = 5;
 
     // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)
@@ -147,6 +150,30 @@ internal static class QueryCacheKeys
     internal static string FileEffectsCacheKey(string storeKey, string rulesHash, string filePath)
     {
         var material = $"filefx|v{FileEffectsSchema}|{storeKey}|{rulesHash}|{filePath}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    // The cache key for ONE FILE's tiers 1-3 (/api/file-findings, FileFindingsQueryService.ForFileAsync): the
+    // hazard + amplification + cross-method-anchor findings whose site falls in `filePath`. A pure function of
+    // the store, the rule fingerprint and the path — every other input the derivation has is one of those.
+    //
+    // The version slot is the WHOLE DerivationSchemaToken, not a single `*Schema` constant, and that is the
+    // point: this artifact is derived from THREE separately-gated inputs (the hazard-augmented effect set —
+    // HazardEffectsSchema; the graph-tier findings — GraphHazSchema; the classification/projection into
+    // displayed findings incl. the amplification tier — FindingViewSchema) plus the tier-3 cross-method anchor
+    // derivation, which has no constant of its own. Any ONE of those bumping must miss here, else the per-file
+    // blob keeps serving pre-bump findings off freshly-recomputed inputs — the exact stale-serve this section
+    // exists to prevent. The composite token is the only value guaranteed to move on all of them, and it is
+    // ALSO what /api/meta hands the browser as `derivationVersion` (api.js caches /api/file-findings under it),
+    // so the disk entry and the client entry invalidate in lockstep by construction rather than by discipline.
+    // The cost of the over-broad hedge is one 2s / 11 KB recompute per file on an unrelated bump — cheap, and
+    // the opposite mistake (a findings cache nothing can invalidate) is not.
+    //
+    // A NEW key namespace: no prior rig ever wrote a blob under `filefindings|`, so there is nothing warm to
+    // flush and no constant needed a bump of its own to introduce it (the `eprecords|v1` precedent above).
+    internal static string FileFindingsCacheKey(string storeKey, string rulesHash, string filePath)
+    {
+        var material = $"filefindings|v{DerivationSchemaToken()}|{storeKey}|{rulesHash}|{filePath}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 

@@ -5,6 +5,7 @@ using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
+using static Rig.Cli.Caching.QueryCacheKeys;
 using static Rig.Cli.Effects.EffectDerivation;
 
 namespace Rig.Cli.Services;
@@ -13,7 +14,14 @@ namespace Rig.Cli.Services;
 // web host (Web/) run the SAME engine — no shelling out, no re-parsing text. Produces the three things a
 // consumer needs to render a tree: the TraceNode forest, the effects keyed to enclosing method, and a
 // symbol-id -> file:line map. This is the COLD compute (rules load -> graph load -> BuildTree -> derive
-// effects); the CLI's query-cache is a presentation-layer optimization that stays in TreeCommand for now.
+// effects), and BuildAsync now fronts it with the SAME query cache `rig tree` uses — the same
+// QueryCacheKeys.TreeCacheKey material, the same `.rig/cache.db` slots, the same filter-independent
+// `:loc` render sidecar (the seam sidecar is a CLI render stage and stays in TreeCommand). It lives here
+// rather than at the endpoint because the key's inputs — the store identity and the rule fingerprint —
+// are resolved by the store open and the rules load this method already does; keying at the endpoint
+// would mean a second rules load and a second store open just to name the artifact. Sibling precedent:
+// HotspotsQueryService.BuildAsync owns its QueryCache the same way. No double-cache: `rig tree` enters
+// through ComputeAsync (below), never through BuildAsync.
 //
 // Deliberately public + primitives-in (workingDirectory/storeRef, not the internal WorkspaceLocation) so the
 // contract survives a later lift to a standalone Rig.Web project. Return types are public Rig.Domain records.
@@ -60,7 +68,13 @@ public static class TreeQueryService
         IReadOnlyList<string>? extraRules = null
     )
     {
-        var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules ?? [], loadedPaths: out _);
+        // Capture the resolved rule paths: the cache key's rule-fingerprint axis is computed from them
+        // (ComputeFromPaths) rather than by re-running the cascade merge, exactly as TreeCommand does.
+        var rules = RuleSetLoader.Load(
+            workingDirectory: workingDirectory,
+            extraRules: extraRules ?? [],
+            loadedPaths: out var loadedRulePaths
+        );
         // --raw parity: zero the graph-shaping rules so the tree is the exact unfiltered structure.
         var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
@@ -70,28 +84,96 @@ public static class TreeQueryService
             new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
         );
 
-        var computation = await ComputeAsync(
-            source: source,
-            rules: rules,
-            shaped: shaped,
+        var maxDepth = CommonOptions.DepthOrUnbounded(depth);
+        var maxNodes = FactPathFinder.DefaultTreeNodeBudget;
+        var mode = CommonOptions.Mode(async: async, includeDelivery: includeDelivery);
+
+        // The forest key's axes, threaded through the SAME function TreeCommand uses so the two paths cannot
+        // disagree about what a cached tree is a function of. Every BuildAsync parameter is accounted for:
+        // `storeRef` by the store identity (and by which store's cache.db is opened), `extraRules` by the rule
+        // fingerprint, `depth` by maxDepth, `async`+`includeDelivery` by `mode`, `raw` verbatim, and maxNodes
+        // by the constant budget this method always passes. `intrinsic` is deliberately NOT here: it is a
+        // post-cache EFFECT FILTER (SelectEffectsForMethods below), not a forest or effect-set input — the
+        // payload is cached UNFILTERED exactly as the CLI caches it before applying --only/--exclude, so
+        // folding it in would fragment the >1 MB artifact across two views of the same tree. It DOES key the
+        // filter signature, which is what the filter-dependent sidecar slots are namespaced by.
+        var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths);
+        using var cache = source.OpenArtifactCache(useCache: true);
+        var cacheKey = TreeCacheKey(
+            storeKey: cache.StoreKey,
+            rulesHash: rulesHash,
             fromPattern: fromPattern,
-            maxDepth: CommonOptions.DepthOrUnbounded(depth),
-            maxNodes: FactPathFinder.DefaultTreeNodeBudget,
-            mode: CommonOptions.Mode(async: async, includeDelivery: includeDelivery),
+            maxDepth: maxDepth,
+            maxNodes: maxNodes,
+            mode: mode,
             raw: raw
         );
+        // Only the LOCATIONS half of the render sidecar: it is filter- and hazard-independent (keyed off the
+        // forest key alone), and it is the one thing a rendered response needs that the forest payload does not
+        // carry — so caching it is what lets a warm request skip the graph load entirely. The seam half is a
+        // CLI render stage with no web counterpart; the filter signature is still built honestly from this
+        // query's `intrinsic` so the record describes the query it belongs to.
+        var locKey = new RenderSidecarKey(
+            cacheKey,
+            EffectFilterSignature(only: [], exclude: [], intrinsic: intrinsic),
+            Hazards: false,
+            Gate: false
+        ).Locations();
 
-        var locations = computation
-            .Graph.Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => new SymbolLocation(g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+        var cached = cache.Get(cacheKey.Value, TreeCacheCodec.Decode);
+        var cachedLocations = cached is null
+            ? null
+            : cache.Get<IReadOnlyDictionary<string, (string? File, int Line)>>(locKey, LocationsCodec.Decode);
+
+        IReadOnlyList<TraceNode> roots;
+        IReadOnlyList<DerivedEffect> effects;
+        IReadOnlyDictionary<string, (string? File, int Line)> rawLocations;
+        if (cached is not null && cachedLocations is not null)
+        {
+            // FULL HIT: forest + effects + locations all cached, so the graph is never loaded — the whole point.
+            roots = cached.Forest;
+            effects = cached.Effects;
+            rawLocations = cachedLocations;
+        }
+        else
+        {
+            var computation = await ComputeAsync(
+                source: source,
+                rules: rules,
+                shaped: shaped,
+                fromPattern: fromPattern,
+                maxDepth: maxDepth,
+                maxNodes: maxNodes,
+                mode: mode,
+                raw: raw
+            );
+            roots = computation.Roots;
+            effects = computation.Effects;
+            rawLocations = computation
+                .Graph.Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => (g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+            // Best-effort, and only when the pattern matched — an empty forest isn't worth a cache slot
+            // (same gate the CLI's cold path applies).
+            if (roots.Count > 0)
+            {
+                cache.Put(cacheKey.Value, new TreeCachePayload(roots, effects), TreeCacheCodec.Encode);
+                cache.Put(locKey, rawLocations, LocationsCodec.Encode);
+            }
+        }
+
+        var locations = rawLocations.ToDictionary(
+            kv => kv.Key,
+            kv => new SymbolLocation(kv.Value.File, kv.Value.Line),
+            StringComparer.Ordinal
+        );
 
         var treeMethods = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var root in computation.Roots)
+        foreach (var root in roots)
         {
             TreeRenderer.CollectTreeMethods(root, treeMethods);
         }
         var selection = SelectEffectsForMethods(
-            computation.Effects,
+            effects,
             treeMethods,
             new HashSet<string>(StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(StringComparer.OrdinalIgnoreCase),
@@ -100,14 +182,7 @@ public static class TreeQueryService
 
         // raw parity: no fold rules either, so the web serves the exact unfolded tree (mirrors CLI --raw).
         var renderRules = raw ? FactRenderRules.Empty : rules.Render;
-        return new TreeQueryResult(
-            computation.Roots,
-            selection.Effects,
-            locations,
-            rules.EffectEmoji,
-            renderRules,
-            selection.HiddenIntrinsic > 0
-        );
+        return new TreeQueryResult(roots, selection.Effects, locations, rules.EffectEmoji, renderRules, selection.HiddenIntrinsic > 0);
     }
 
     // The COLD tree computation shared by the web host (BuildAsync, above) and `rig tree`'s cold path

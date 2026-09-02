@@ -26,13 +26,14 @@ internal static class FileEffectLens
         internal bool IsDirect => NearestDepth == 0;
 
         // The grammar, in one sentence: FAMILY, then how far (`!` here / `:N` calls away), then how OFTEN
-        // (`*` = once per loop iteration), then on what BASIS (`?` = only reachable through virtual/interface
-        // dispatch, so it may not be a real call at all).
+        // (`*` = once per loop iteration), then on what BASIS (`?` = only reachable through a dispatch hop with
+        // several candidate implementations, so it may not be a real call at all; a one-implementation hop is
+        // deterministic and carries no mark).
         //
         //   db!     the effect is in this body
         //   db!*    …and it runs once per iteration of an enclosing loop
         //   db:5    the nearest one is five calls away
-        //   db:5?   …and that reach exists only through dispatch — a lead, not a fact
+        //   db:5?   …and that reach exists only through a polymorphic dispatch hop — a lead, not a fact
         //
         // `*` appears only on `!` rows by construction (repetition is a lexical fact about the effect's own
         // body — see FileEffectAggregate.Looped), so `db:5*` is not a shape this grammar can produce.

@@ -86,11 +86,12 @@ export const store = createStore({
   // diff overlay on a tree: when you open a tree FROM an impact EP card, this carries that EP's changed
   // methods so the head tree can highlight what the diff touched. Session-only (not URL-synced). null = off.
   diffOverlay: null, // { from, base, head, added:[enclosingFqn], removed:[enclosingFqn], changedOnly:bool }
-  // pivot history: a breadcrumb trail of tree/drawer pivots (re-root, drawer open, diff cross-link) so an
-  // investigation is a navigable session, not a single query. Session-only (not URL-synced, same reasoning as
-  // `diffOverlay` above) — the CURRENT position is still fully expressed by the existing query params; this is
-  // a TRAIL on top, driven by the History API's own state object (see main.js's pushState/popstate wiring).
-  history: [], // [{ kind: "tree"|"callers"|"reaches"|"path", label, from, appMode, storeId, diffOverlay, callers }]
+  // pivot history: a breadcrumb trail of tree/drawer pivots (re-root, drawer open, diff cross-link) and of
+  // review file selections, so an investigation is a navigable session, not a single query. Session-only (not
+  // URL-synced, same reasoning as `diffOverlay` above) — the CURRENT position is still fully expressed by the
+  // existing query params; this is a TRAIL on top, driven by the History API's own state object (see main.js's
+  // pushState/popstate wiring).
+  history: [], // [{ kind: "tree"|"callers"|"reaches"|"path"|"review", label, from, appMode, storeId, diffOverlay, callers, review }]
   historyCursor: -1, // index into `history` of the crumb currently being viewed; -1 = no crumbs yet
   // ui
   tab: "runs", // runs | eps
@@ -114,6 +115,29 @@ export function activeStoreId(s = get()) {
 export function pushCrumb(s, crumb) {
   const trail = [...s.history.slice(0, s.historyCursor + 1), crumb];
   return { history: trail, historyCursor: trail.length - 1 };
+}
+
+// Selecting a review file is a pivot too, so Back returns to the previously read file instead of leaving the
+// app. `reviewCrumbState` is the whole crumb payload and `reviewCrumbPatch` the whole restore patch — the
+// file itself is loaded by main.js, which owns fetch and pushState.
+export function reviewCrumbState(s, file) {
+  return { base: s.reviewBase, head: s.reviewHead, file, line: s.reviewLine, side: s.reviewSide };
+}
+
+export function reviewCrumbPatch(review) {
+  return {
+    appMode: "review",
+    reviewBase: review.base,
+    reviewHead: review.head,
+    reviewLine: review.line,
+    reviewSide: review.side,
+  };
+}
+
+// Re-selecting the file already on screen is not a pivot: it would push a duplicate entry, and a selection
+// that is itself the result of a restore would push back the entry the reader just came from.
+export function isReviewPivot(s, file) {
+  return !!file && file !== s.reviewFile;
 }
 
 // ---- lens filter <-> URL -------------------------------------------------------------------------------

@@ -4,7 +4,8 @@ internal sealed record IndexedFileDto(string Path, string Name, string Status, I
 
 internal sealed record IndexedFilesResponseDto(IReadOnlyList<IndexedFileDto> Files, int Total, int Limit);
 
-// ViaDispatchOnly mirrors FileEffectAggregate: the reach exists only through virtual/interface dispatch.
+// ViaDispatchOnly mirrors FileEffectAggregate: the reach exists only through a dispatch hop with more than one
+// candidate implementation (a single-implementation hop is deterministic and reads as an ordinary reach).
 // Looped mirrors it too: the effect runs once per iteration of an enclosing loop (the amplification tier).
 // Both are ADDITIVE on the wire — an older client that ignores them reads the same badge it always did.
 internal sealed record FileEffectAggregateDto(string Family, int NearestDepth, bool ViaDispatchOnly, bool Looped = false);

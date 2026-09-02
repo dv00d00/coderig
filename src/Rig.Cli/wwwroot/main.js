@@ -14,6 +14,9 @@ import {
   serializeUrl,
   readUrl,
   pushCrumb,
+  isReviewPivot,
+  reviewCrumbPatch,
+  reviewCrumbState,
 } from "./store.js";
 import {
   Shell,
@@ -700,7 +703,9 @@ async function compareEffects(a, b) {
 // browser's own back/forward button are driven by the SAME mechanism — clicking a crumb just replays that
 // many real back/forward steps (see actions.jumpToCrumb), and the popstate handler below does the one true
 // restore. `diffOverlay`/`callers` default to what's already on the crumb; callers pass what they need.
-function recordCrumb(kind, label, extra = {}) {
+// `replace` adopts the CURRENT entry instead of pushing a new one, which is only for giving an entry that
+// carries no crumb one before pushing past it (see recordReviewCrumb) — popstate bails on a crumbless entry.
+function recordCrumb(kind, label, extra = {}, { replace = false } = {}) {
   const s = get();
   const crumb = {
     kind,
@@ -714,11 +719,25 @@ function recordCrumb(kind, label, extra = {}) {
   };
   const patch = pushCrumb(s, crumb);
   set(patch);
-  history.pushState(
-    { crumb, cursor: patch.historyCursor },
-    "",
-    location.pathname + location.search,
-  );
+  const state = { crumb, cursor: patch.historyCursor };
+  const url = location.pathname + location.search;
+  if (replace) history.replaceState(state, "", url);
+  else history.pushState(state, "", url);
+}
+
+// Every review file selection is its own history entry, GitHub-style: Back returns to the previously read
+// file. `opened` is the review state the selection is about to apply, so the crumb describes where the reader
+// lands rather than where they came from.
+function recordReviewCrumb(file, opened = {}) {
+  const s = get();
+  if (!isReviewPivot(s, file)) return;
+  // Review can be entered without a pivot (a shared ?app=review link, a mode switch), leaving no crumb on the
+  // entry this push moves past — Back would then bail in the popstate handler and strand the reader on the
+  // file they had just left. Adopt the current file as that entry's crumb first, which also keeps the trail
+  // and the real history stack one entry to one entry, as jumpToCrumb's step count assumes.
+  if (!history.state?.crumb && s.reviewFile)
+    recordCrumb("review", baseName(s.reviewFile), { review: reviewCrumbState(s, s.reviewFile) }, { replace: true });
+  recordCrumb("review", baseName(file), { review: reviewCrumbState({ ...s, ...opened }, file) });
 }
 
 // Restore app state from a crumb (breadcrumb click or a real browser back/forward). Every pivot action below
@@ -728,6 +747,16 @@ async function restoreCrumb(crumb) {
   if (crumb.kind === "tree") {
     set({ diffOverlay: crumb.diffOverlay || null, callers: null });
     if (crumb.from) await openTree(crumb.from, { recordHistory: false });
+    return;
+  }
+  // A review crumb restores the pair + the deep-link target, then reloads that file through the same loader a
+  // click uses. `loadFileDiff` records nothing itself — recording lives in recordReviewCrumb — so this path
+  // cannot re-push the entry it is restoring.
+  if (crumb.kind === "review") {
+    set(reviewCrumbPatch(crumb.review));
+    refs.reviewBase.value = crumb.review.base;
+    refs.reviewHead.value = crumb.review.head;
+    await loadFileDiff(crumb.review.file);
     return;
   }
   // drawer pivots (callers/reaches/path) don't change the tree — restore whatever tree was behind the drawer
@@ -813,7 +842,9 @@ const actions = {
   openReviewFile,
   openReviewQuery,
   openReviewFileEntry(file) {
-    set({ reviewLine: 0, reviewSide: "head" });
+    const opened = { reviewLine: 0, reviewSide: "head" };
+    recordReviewCrumb(file.path, opened);
+    set(opened);
     loadFileDiff(file.path);
   },
   setReviewFileSearch(value) {

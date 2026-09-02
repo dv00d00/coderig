@@ -28,7 +28,9 @@ internal sealed record FileDiffResponseDto(
 );
 
 // One Git-changed file matched back to the immutable source-file inventories on both sides. Every Git row
-// is reviewable as text; SemanticReady is the narrower both-sides semantic capability.
+// is reviewable as text; SemanticReady is the narrower both-sides semantic capability. Additions/Deletions
+// are null when Git reports no line counts at all (a binary file), which is a different fact from a text
+// file whose changed-line count really is zero — a renderer must not show "0" for an unknown count.
 internal sealed record ReviewFileDto(
     string Status,
     string Path,
@@ -38,7 +40,9 @@ internal sealed record ReviewFileDto(
     string? NewFile,
     bool Reviewable,
     bool SemanticReady,
-    string? Reason
+    string? Reason,
+    int? Additions,
+    int? Deletions
 );
 
 internal sealed record ReviewFilesResponseDto(

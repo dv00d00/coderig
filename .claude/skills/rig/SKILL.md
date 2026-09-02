@@ -117,11 +117,12 @@ first; `--summary` is the cheap per-method table.
   fact about the effect's own body, so a distant badge never claims it. This is the mark to look for when you
   are hunting an n+1: on `CompanyToChamber.CopyRoles` it lands on `destRole.Save()` and `memberProfiles.Fill(…)`
   inside a `foreach (var srcRole in roles)`, while the sibling `Copy*` methods next to it read plain `db!`.
-- **A trailing `?` (`cache:18?`) means the reach exists only through virtual/interface dispatch** — CHA says
-  the call CAN land on an effectful override, but no real call path proves it does (the same thing `reaches`
-  puts in its "NOT a real call" fan-out bucket). Unflagged = a real call path. On MedDBase this matters a lot:
-  a page method can show `cache:5? echo:9? rpc:11?` next to a plain `db!` — the db work is proven, the rest is
-  devirtualization. A `?` badge is a lead to check with `rig reaches`, not a fact to act on.
+- **A trailing `?` (`cache:18?`) means the reach exists only through a dispatch hop with SEVERAL candidate
+  implementations** — CHA says the call CAN land on an effectful override, but nothing pins which one runs (the
+  same thing `reaches` puts in its "NOT a real call" fan-out bucket, and the same `Fanout > 1` rule). A hop
+  through an interface with exactly ONE implementation is deterministic and is NOT flagged — it reads like a
+  real call, exactly as `tree` folds it (`«via IFoo»`). So unflagged = a route that lands on one body. A `?`
+  badge is a lead to check with `rig reaches`, not a fact to act on.
 - Effects inside **lambdas** now fold onto the declaring method (`WithDb(db => …)` bodies included), so a `db`
   call inside a `.Select(x => …)` appears on its own line and in the method's badge. Two consequences: the
   method's depth does NOT count the invisible hop into the lambda (so it can read one lower than `rig reaches`

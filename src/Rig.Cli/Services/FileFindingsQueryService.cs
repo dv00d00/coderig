@@ -4,6 +4,7 @@ using Rig.Cli.Commands;
 using Rig.Cli.Effects;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
+using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using static Rig.Cli.Caching.QueryCacheKeys;
 using static Rig.Cli.Effects.EffectDerivation;
@@ -60,6 +61,20 @@ internal static class FileFindingsQueryService
         var rigDir = StoreLayout.ResolveReadStoreDir(ws);
         var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedPaths);
+
+        // The per-FILE result, cached over `.rig/cache.db` exactly as the two whole-store inputs below are
+        // (LoadOrDerive*: QueryCache.Open → Get+decode → derive → TryCache Put). Both of those were already
+        // warm and this call still cost ~2.1s, because the work on top of them is per-file and was recomputed
+        // every request: the tier-3 anchor pairing walks the WHOLE-store effect set (it must — the witness is
+        // by definition in another frame), and tiers 1-2 scan it to filter to this path. That is the artifact
+        // this entry holds. Best-effort throughout: an unopenable cache misses and a failed write is dropped,
+        // so the cache can only change latency, never the findings.
+        var key = FileFindingsCacheKey(storeKey: storeKey, rulesHash: rulesHash, filePath: filePath);
+        using var cache = QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
+        if (cache?.Get(key) is { } cachedBlob && Caching.FileFindingsCodec.Decode(cachedBlob) is { } cacheHit)
+        {
+            return cacheHit;
+        }
 
         // The whole-store hazard-augmented effect set — the same cached artifact `derive` and /api/hazards
         // share, so asking for a second file costs a dictionary scan, not a re-derivation.
@@ -123,6 +138,12 @@ internal static class FileFindingsQueryService
                 .ToArray();
         }
 
-        return new Findings(hazards, amplifications, anchors, crossMethodDerived);
+        var findings = new Findings(hazards, amplifications, anchors, crossMethodDerived);
+        if (cache is not null)
+        {
+            TryCache(() => cache.Put(key, Caching.FileFindingsCodec.Encode(findings)));
+        }
+
+        return findings;
     }
 }

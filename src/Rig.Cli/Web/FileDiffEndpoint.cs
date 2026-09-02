@@ -340,7 +340,10 @@ internal static class FileDiffEndpoint
         var repo = await FindRepoAsync(representative);
         var baseFiles = RelativeFileMap(repo, baseInventory.Files);
         var headFiles = RelativeFileMap(repo, headInventory.Files);
-        var nameStatus = await RunGitAsync(
+        // Changed-line counts need the SAME rename/copy detection and the same commit pair, or the two scans
+        // disagree about which rows exist and the join lands counts on the wrong file. Run them together: the
+        // --find-copies-harder scan is the expensive part and this pair is loaded once per review session.
+        var nameStatusTask = RunGitAsync(
             repo,
             "diff",
             "--name-status",
@@ -352,8 +355,23 @@ internal static class FileDiffEndpoint
             headInventory.Commit,
             "--"
         );
+        var numstatTask = RunGitAsync(
+            repo,
+            "diff",
+            "--numstat",
+            "-z",
+            "--find-renames",
+            "--find-copies",
+            "--find-copies-harder",
+            baseInventory.Commit,
+            headInventory.Commit,
+            "--"
+        );
+        await Task.WhenAll(nameStatusTask, numstatTask);
+        var nameStatus = await nameStatusTask;
+        var counts = ParseNumstat(await numstatTask);
         var files = ParseNameStatus(nameStatus)
-            .Select(change => ToReviewFile(change, baseFiles, headFiles))
+            .Select(change => ToReviewFile(change, baseFiles, headFiles, counts))
             .OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         return new ReviewInventory(repo, baseInventory, headInventory, files);
@@ -471,26 +489,70 @@ internal static class FileDiffEndpoint
         return result;
     }
 
+    // `--numstat -z` does NOT frame like `--name-status -z`: a normal record is ONE NUL-terminated token of
+    // "<added>\t<removed>\t<path>", while a rename/copy ends that token right after the second tab (an empty
+    // path field) and follows it with the old path and the new path as two further NUL tokens. Keyed on the
+    // same path ToReviewFile uses for its Path — the new path where there is one — so the counts land on the
+    // row Git's rename detection produced.
+    internal static IReadOnlyDictionary<string, NumstatCounts> ParseNumstat(string value)
+    {
+        var tokens = value.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        var result = new Dictionary<string, NumstatCounts>(PathComparer);
+        for (var index = 0; index < tokens.Length; )
+        {
+            // A path may itself contain a tab, so only the two count fields are split off.
+            var fields = tokens[index++].Split('\t', 3);
+            if (fields.Length < 3)
+            {
+                throw new InvalidOperationException("Git returned an incomplete changed-line record.");
+            }
+
+            var path = fields[2];
+            if (path.Length == 0)
+            {
+                if (index + 1 >= tokens.Length)
+                {
+                    throw new InvalidOperationException("Git returned an incomplete rename/copy changed-line record.");
+                }
+
+                index++;
+                path = tokens[index++];
+            }
+
+            result[path] = new NumstatCounts(ParseCount(fields[0]), ParseCount(fields[1]));
+        }
+
+        return result;
+    }
+
+    // A binary file reports "-" for both counts: the number of changed lines is unknown, not zero.
+    private static int? ParseCount(string value) => int.TryParse(value, out var parsed) ? parsed : null;
+
     private static ReviewFileDto ToReviewFile(
         NameStatusChange change,
         IReadOnlyDictionary<string, string> baseFiles,
-        IReadOnlyDictionary<string, string> headFiles
+        IReadOnlyDictionary<string, string> headFiles,
+        IReadOnlyDictionary<string, NumstatCounts> counts
     )
     {
         var oldFile = change.OldPath is not null && baseFiles.TryGetValue(change.OldPath, out var indexedOld) ? indexedOld : null;
         var newFile = change.NewPath is not null && headFiles.TryGetValue(change.NewPath, out var indexedNew) ? indexedNew : null;
         var semanticReady = oldFile is not null && newFile is not null;
         var reason = semanticReady ? null : "Semantic annotations are unavailable for one or both revisions.";
+        var path = change.NewPath ?? change.OldPath ?? "";
+        var counted = counts.TryGetValue(path, out var found) ? found : null;
         return new ReviewFileDto(
             change.Status,
-            change.NewPath ?? change.OldPath ?? "",
+            path,
             change.OldPath,
             change.NewPath,
             oldFile,
             newFile,
             Reviewable: true,
             semanticReady,
-            reason
+            reason,
+            counted?.Additions,
+            counted?.Deletions
         );
     }
 
@@ -583,4 +645,6 @@ internal static class FileDiffEndpoint
     private sealed record ReviewInventory(string Repo, StoreInventory Base, StoreInventory Head, IReadOnlyList<ReviewFileDto> Files);
 
     private sealed record NameStatusChange(string Status, string? OldPath, string? NewPath);
+
+    internal sealed record NumstatCounts(int? Additions, int? Deletions);
 }

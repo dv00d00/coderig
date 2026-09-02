@@ -73,7 +73,8 @@ internal static class AnnotateCommand
         };
         var noDispatch = new Option<bool>("--no-dispatch")
         {
-            Description = "Drop badges whose reach exists only through virtual/interface dispatch (the ones marked `?`).",
+            Description =
+                "Drop badges whose reach exists only through a dispatch hop with several candidate implementations (the ones marked `?`).",
         };
         var cmd = new Command(
             name: "annotate",
@@ -425,7 +426,9 @@ internal static class AnnotateCommand
 
         if (AnyDispatchOnly(lens))
         {
-            output.WriteLine($"{Indent.L1}`?` = that reach exists only through virtual/interface dispatch — it MAY not be a real call");
+            output.WriteLine(
+                $"{Indent.L1}`?` = that reach exists only through a dispatch hop with several candidate implementations — it MAY not be a real call"
+            );
         }
 
         if (AnyLooped(lens))

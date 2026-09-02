@@ -1489,6 +1489,42 @@ export function visibleReviewFiles(s) {
   });
 }
 
+// Porcelain letters are git internals; the glyph carries the meaning and the word carries it for anyone who
+// cannot use the colour. An unrecognised letter renders as itself rather than disappearing. DUPLICATED as
+// `statusMarks` in WebClient/src/file-diff.tsx (the diff header) — the two shells cannot share a module,
+// one being a bundled TS island and the other plain JS served directly, so change both together.
+const reviewFileStatusMarks = {
+  A: { glyph: "+", label: "added" },
+  M: { glyph: "±", label: "modified" },
+  D: { glyph: "−", label: "deleted" },
+  R: { glyph: "→", label: "renamed" },
+  C: { glyph: "⧉", label: "copied" },
+};
+
+function reviewFileStatusMark(status) {
+  return reviewFileStatusMarks[String(status).toUpperCase()] || { glyph: status, label: status };
+}
+
+// Git reports no changed-line counts at all for a binary file, so the count is UNKNOWN, not zero. Render
+// nothing rather than a "+0 −0" that would read as a real measurement of an unmeasurable file.
+function reviewFileCounts(file) {
+  const additions = typeof file.additions === "number" ? file.additions : null;
+  const deletions = typeof file.deletions === "number" ? file.deletions : null;
+  if (additions === null && deletions === null) return null;
+  const label = [
+    additions === null ? "" : `${additions} additions`,
+    deletions === null ? "" : `${deletions} deletions`,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return h(
+    "span",
+    { class: "review-file-counts", "aria-label": label },
+    additions === null ? null : h("b", {}, `+${additions}`),
+    deletions === null ? null : h("i", {}, `−${deletions}`),
+  );
+}
+
 function reviewFileRow(file, s, actions, depth = 0) {
   const path = reviewDisplayPath(file);
   const identity = reviewFileIdentity(file);
@@ -1498,6 +1534,7 @@ function reviewFileRow(file, s, actions, depth = 0) {
   const oldPath = (file.oldPath || file.oldFile || "").replaceAll("\\", "/");
   const pathChange = oldPath && oldPath !== path ? `${oldPath} → ${path}` : "";
   const semanticLabel = file.semanticReady ? "" : "semantic annotations partial or unavailable";
+  const statusMark = reviewFileStatusMark(file.status);
   return h(
     "button",
     {
@@ -1511,7 +1548,15 @@ function reviewFileRow(file, s, actions, depth = 0) {
       style: `--review-depth:${depth}`,
       onClick: () => actions.openReviewFileEntry(file),
     },
-    h("span", { class: `review-file-status status-${file.status.toLowerCase()}` }, file.status),
+    h(
+      "span",
+      {
+        class: `review-file-status status-${file.status.toLowerCase()}`,
+        title: statusMark.label,
+        "aria-label": statusMark.label,
+      },
+      statusMark.glyph,
+    ),
     h(
       "span",
       { class: "review-file-label" },
@@ -1524,6 +1569,7 @@ function reviewFileRow(file, s, actions, depth = 0) {
       pathChange ? h("span", { class: "review-file-reason" }, pathChange) : null,
       semanticLabel ? h("span", { class: "review-file-reason" }, semanticLabel) : null,
     ),
+    reviewFileCounts(file),
     viewed ? h("span", { class: "review-file-viewed", title: "Viewed" }, "✓") : null,
   );
 }
