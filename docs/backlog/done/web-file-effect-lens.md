@@ -74,7 +74,7 @@ selected call.
 
 - [Open every changed-file shape through a two-path contract](./web-review-two-path-file-diffs.md).
 - [Add effect-aware per-file inventory and an honest Effects-changed filter](../todo/web-review-effect-aware-file-inventory.md).
-- [Link Impact changes directly into Review](../todo/web-review-impact-deep-links.md).
+- [Link Impact changes directly into Review](../progress/web-review-impact-deep-links.md).
 - [Expand hunk context on demand without loading full files](../todo/web-review-expand-context.md).
 - [Adapt remote pull-request providers only after the local review contract is complete](../todo/web-review-provider-adapters.md).
 - [Resolve a concrete witness path lazily from web or Rider](../todo/file-lens-lazy-witness-path.md).
