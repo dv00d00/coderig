@@ -258,6 +258,18 @@ Still open from the ranked list: path-compressed file tree, hazard delta, eager 
 loading, ranged hunk expansion, and a dedicated full-screen mode. Unchanged reach deliberately stays visible but
 muted — the editorial decision requested above is closed.
 
+Low-DPI dogfood exposed a follow-up in the first slice: `react-diff-view` creates two gutter columns in unified
+mode, so the renderer painted the same semantic lane twice on context rows and reserved 320px before the code.
+Unified review now owns one lane (head for context/inserts, base for deletes); split retains one per pane. The
+five-pixel depth superscript was not legible on a low-DPI Windows display and is removed from the lane — exact
+depth stays in the tooltip/expanded row. The always-visible legend is reduced to the fixed family key plus a `?`
+popover, preserving the vocabulary without competing with the diff.
+
+Split review also suppresses the base lane on an unchanged context row when its complete visible annotation
+(effect depth/basis/repetition plus findings) is byte-for-byte equivalent to head. Both lanes remain when the
+semantic presentation differs; inserts/deletes keep the only side that exists. This removes baseline duplication
+without hiding a difference.
+
 ### Folder disclosure — 2026-09-02
 
 Review tree folders now have full-row disclosure buttons with Enter/Space support and `aria-expanded`.

@@ -22,6 +22,7 @@ import {
   type MethodComparison,
   type MethodDeltaIndex,
 } from "./effect-delta.ts";
+import { semanticLaneSide } from "./review-gutter.ts";
 
 type FileEffect = {
   family: string;
@@ -252,6 +253,33 @@ function byLine(revision: Revision): Map<number, LineInsight> {
   return result;
 }
 
+function sameVisibleLineInsight(base: LineInsight | undefined, head: LineInsight | undefined): boolean {
+  if (!base || !head) return base === head;
+  const fingerprint = (insight: LineInsight): string => JSON.stringify({
+    effects: insight.effects.map((effect) => [effect.family, effect.nearestDepth, effect.viaDispatchOnly, effect.looped]),
+    hazards: insight.hazards.map((finding) => [finding.type, finding.confidence, finding.subtype, finding.key]),
+    amplifications: insight.amplifications.map((finding) => [
+      finding.type,
+      finding.confidence,
+      finding.subtype,
+      finding.key,
+      finding.iteration,
+      finding.provider,
+      finding.operation,
+    ]),
+    anchors: insight.anchors.map((finding) => [
+      finding.caller,
+      finding.iterationKind,
+      finding.witnessProvider,
+      finding.witnessOperation,
+      finding.witnessResource,
+      finding.witnessDepth,
+      finding.confidence,
+    ]),
+  });
+  return fingerprint(base) === fingerprint(head);
+}
+
 function EffectBadge({ effect }: { effect: FileEffect }) {
   return (
     <span
@@ -358,11 +386,7 @@ function EffectLane({
               data-family={family.key}
               key={family.key}
               title={title}
-            >
-              {effect ? <span aria-hidden="true">{effect.nearestDepth === 0 ? "●" : "○"}</span> : null}
-              {effect && effect.nearestDepth > 0 ? <sup>{effect.nearestDepth}</sup> : null}
-              {effect?.viaDispatchOnly ? <i>?</i> : null}
-            </span>
+            />
           );
         })}
       </span>
@@ -506,7 +530,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
   }, [callbacks.focusLine?.line, callbacks.focusLine?.side, model.patch, viewType]);
 
   return (
-    <div className={`rig-diff-island ${wrapLines ? "wrap-lines" : "no-wrap"}`} ref={rootRef}>
+    <div className={`rig-diff-island view-${viewType} ${wrapLines ? "wrap-lines" : "no-wrap"}`} ref={rootRef}>
       <div className="rig-diff-head">
         <div className="rig-diff-identity" title={model.relativePath}>
           <div className="rig-diff-file-line">
@@ -606,12 +630,19 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
         </div>
       </div>
       {baseAvailable || headAvailable
-        ? <div className="rig-diff-lane-key">
-            <span>effect reach</span>
+        ? <div className="rig-diff-lane-key" title="Effect reach by family">
             <span className="rig-diff-lanehead" aria-label="Effect lane columns">
               {effectFamilies.map((family) => <b key={family.key} title={family.label}>{family.mark}</b>)}
             </span>
-            <span>● here · ○ below · teal changed · violet edge repeated</span>
+            <details className="rig-diff-lane-help">
+              <summary aria-label="Explain effect reach lane" title="Explain effect reach lane">?</summary>
+              <div>
+                <strong>Effect reach</strong>
+                <span>● in this call · ○ through callees</span>
+                <span>teal changed · violet edge repeated</span>
+                <span>exact depth and dispatch basis are in each mark's tooltip</span>
+              </div>
+            </details>
           </div>
         : null}
       {callbacks.focusLine && focusFound === false
@@ -629,23 +660,35 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
           tokens={tokens}
           widgets={widgets}
           renderGutter={({ change, side, renderDefault, wrapInAnchor }) => {
-            const line = changeLine(change, side);
-            const insight = line == null ? undefined : (side === "old" ? oldLines : newLines).get(line);
-            const headers = line == null
+            const nativeLine = changeLine(change, side);
+            const oldLine = changeLine(change, "old");
+            const newLine = changeLine(change, "new");
+            const oldInsight = oldLine == null ? undefined : oldLines.get(oldLine);
+            const newInsight = newLine == null ? undefined : newLines.get(newLine);
+            const oldHeaders = oldLine == null
               ? []
-              : ((side === "old" ? methodDeltas.baseByLine : methodDeltas.headByLine).get(line) || [])
-                .filter((comparison) => changedEffects(comparison).length > 0);
+              : (methodDeltas.baseByLine.get(oldLine) || []).filter((comparison) => changedEffects(comparison).length > 0);
+            const newHeaders = newLine == null
+              ? []
+              : (methodDeltas.headByLine.get(newLine) || []).filter((comparison) => changedEffects(comparison).length > 0);
+            const duplicateAcrossSides = oldHeaders.length === 0
+              && newHeaders.length === 0
+              && sameVisibleLineInsight(oldInsight, newInsight);
+            const laneSide = semanticLaneSide(viewType, change.type, side, duplicateAcrossSides);
+            const line = laneSide == null ? null : changeLine(change, laneSide);
+            const insight = laneSide === "old" ? oldInsight : laneSide === "new" ? newInsight : undefined;
+            const headers = laneSide === "old" ? oldHeaders : laneSide === "new" ? newHeaders : [];
             const key = getChangeKey(change);
-            const focused = callbacks.focusLine?.side === side && callbacks.focusLine.line === line;
+            const focused = callbacks.focusLine?.side === side && callbacks.focusLine.line === nativeLine;
             const marks = insight || headers.length
-              ? <EffectLane insight={insight} headers={headers} side={side} deltas={methodDeltas} />
+              ? <EffectLane insight={insight} headers={headers} side={laneSide!} deltas={methodDeltas} />
               : null;
             return wrapInAnchor(
               <span
                 className={`rig-diff-gutter${focused ? " focus" : ""}${headers.length ? " method-change" : ""}`}
                 data-rig-side={side}
-                data-rig-line={line ?? undefined}
-                title={methodChangeTitle(headers, side) || undefined}
+                data-rig-line={nativeLine ?? undefined}
+                title={laneSide == null ? undefined : methodChangeTitle(headers, laneSide) || undefined}
               >
                 {insight ? (
                   <button
@@ -656,9 +699,9 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
                       event.preventDefault();
                       event.stopPropagation();
                       setExpanded((current) =>
-                        current?.key === key && current.side === side
+                        current?.key === key && current.side === laneSide
                           ? null
-                          : { key, side, line: line! },
+                          : { key, side: laneSide!, line: line! },
                       );
                     }}
                   >
