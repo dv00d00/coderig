@@ -964,7 +964,9 @@ public sealed record FactInvocation(
     string? TypeArguments = null,
     // The reference is QUOTED code (see ReferenceFact.InExpressionTree) — never executes as C#, so it derives
     // no effect and anchors no iteration fanout.
-    bool InExpressionTree = false
+    bool InExpressionTree = false,
+    // 1-based start column of the call site (ReferenceFact.Column, same convention as Line). 0 = unknown.
+    int Column = 0
 );
 
 // An effect re-derived from the reference index by matching an invocation target against the

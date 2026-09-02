@@ -56,7 +56,8 @@ public sealed class FactProjectionSharingTests(AnalyzedPlaygrounds playgrounds)
             EnclosingGuards: "isEnabled",
             EnclosingLoopElementType: "T:Ns.Row",
             EnclosingLoopBindType: "T:Ns.Rows",
-            InExpressionTree: true
+            InExpressionTree: true,
+            Column: 17
         );
 
     // A symbol fact with every field set likewise. Modifiers carries `abstract` (TypeSymbol.IsAbstract) and the
@@ -118,7 +119,9 @@ public sealed class FactProjectionSharingTests(AnalyzedPlaygrounds playgrounds)
         var symbol = FullyPopulatedSymbol();
 
         var methodRef = SymbolFactProjections.ToMethodRef(symbol);
-        AssertNoDefaults(methodRef, exempt: []);
+        // IsExternal is not a symbol_facts column: external-node admission sets it on the graph at query time
+        // (ExternalNodeAdmission / FactPathFinder), so a projection FROM a stored row must leave it default.
+        AssertNoDefaults(methodRef, exempt: [nameof(MethodRef.IsExternal)]);
         methodRef.ContainingTypeId.ShouldBe("T:Ns.Type");
 
         AssertNoDefaults(SymbolFactProjections.ToMethodSymbol(symbol), exempt: []);
@@ -231,7 +234,10 @@ public sealed class FactProjectionSharingTests(AnalyzedPlaygrounds playgrounds)
         {
             if (exempt.Contains(property.Name, StringComparer.Ordinal))
             {
-                property.GetValue(record).ShouldBe(null, $"{typeof(T).Name}.{property.Name} is documented as always-null");
+                // Exempt means "this projection must leave it UNSET", not "it must be null" — a non-nullable
+                // exemption (bool/int) is unset at its default, so assert the default rather than null.
+                IsDefaultValue(property.GetValue(record))
+                    .ShouldBeTrue($"{typeof(T).Name}.{property.Name} is documented as never set by this projection");
                 continue;
             }
 

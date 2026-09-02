@@ -49,6 +49,7 @@ public static class FactInvocationProjection
         EnclosingLoopElementType,
         EnclosingLoopBindType,
         InExpressionTree,
+        Column,
     }
 
     // The column names in ordinal order — Enum.GetNames orders by value, which for a default-valued enum is
@@ -87,6 +88,7 @@ public static class FactInvocationProjection
                 Guards: r.EnclosingGuards
             ),
             TypeArguments: r.TypeArguments,
-            InExpressionTree: r.InExpressionTree
+            InExpressionTree: r.InExpressionTree,
+            Column: r.Column
         );
 }

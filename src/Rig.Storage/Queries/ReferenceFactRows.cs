@@ -61,9 +61,7 @@ internal static class ReferenceFactRows
         EnclosingLoopElementType: r.EnclosingLoopElementType,
         EnclosingLoopBindType: r.EnclosingLoopBindType,
         InExpressionTree: r.InExpressionTree,
-        // Not part of the invocation column set (FactInvocationProjection.Column) — the FactInvocation this
-        // row feeds carries no column, so selecting it would widen the whole-store derive scan for nothing.
-        Column: 0
+        Column: r.Column
     );
 
     // The EF (whole-store) row supply for CallEdgeProjection: exactly the columns a CallEdge is a function of
@@ -241,10 +239,9 @@ internal static class ReferenceFactRows
             EnclosingLoopBindType: Text(FactInvocationProjection.Column.EnclosingLoopBindType),
             InExpressionTree: !reader.IsDBNull((int)FactInvocationProjection.Column.InExpressionTree)
                 && reader.GetBoolean((int)FactInvocationProjection.Column.InExpressionTree),
-            // No ordinal to read: reference_facts.Column is deliberately not in the invocation column set
-            // (FactInvocationProjection.Column), so this bounded reader has no column to select — same
-            // placeholder the EF InvocationRow passes, which keeps the two paths field-identical.
-            Column: 0
+            Column: reader.IsDBNull((int)FactInvocationProjection.Column.Column)
+                ? 0
+                : reader.GetInt32((int)FactInvocationProjection.Column.Column)
         );
     }
 }
