@@ -6,6 +6,146 @@
   min-width: 0;
 }
 
+.rig-diff-readiness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+  padding: 0.35rem 1rem;
+  border: 1px solid var(--border);
+  border-top: 0;
+  color: var(--muted);
+  background: var(--panel);
+  font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+.rig-diff-readiness [data-state="unavailable"] {
+  color: var(--warn);
+}
+
+.rig-diff-toolbar-button {
+  padding: 0.32rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+  background: var(--bg);
+  font: 12px/1.3 ui-sans-serif, system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.rig-diff-toolbar-button:hover,
+.rig-diff-toolbar-button[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.rig-diff-island.effects-inline .diff-gutter-col {
+  width: 5.5rem;
+  min-width: 5.5rem;
+}
+
+.rig-diff-island.effects-off .diff-gutter-col {
+  width: 3.5rem;
+  min-width: 3.5rem;
+}
+
+.rig-diff-inline-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.rig-diff-inline-pair > div {
+  min-width: 0;
+}
+
+.rig-diff-inline-pair > div + div {
+  border-left: 1px solid var(--border);
+}
+
+.rig-diff-inline-single,
+.rig-diff-widget {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.rig-diff-disclosure-trigger {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: pointer;
+}
+
+.rig-diff-disclosure-trigger:hover,
+.rig-diff-disclosure-trigger[aria-expanded="true"] {
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.rig-diff-disclosure-trigger.changed,
+.rig-diff-inline-delta {
+  color: var(--reach);
+}
+
+.rig-diff-disclosure-trigger.amplification {
+  color: var(--amp);
+}
+
+.rig-diff-disclosure-trigger.hazard {
+  color: var(--danger);
+}
+
+.rig-diff-disclosure-trigger.changed {
+  box-shadow: inset 2px 0 var(--reach);
+}
+
+.rig-diff-effect-detail {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rig-diff-effect-detail.rig-diff-inline-delta {
+  color: var(--reach);
+}
+
+.rig-diff-island button:focus-visible,
+.rig-diff-island summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.rig-diff-finding-detail,
+.rig-diff-candidate-note {
+  display: block;
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rig-diff-widget .rig-diff-path {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.rig-diff-method-summary {
+  color: var(--reach);
+  font-size: 12px;
+}
+
 .rig-diff-focus-note {
   border: 1px solid var(--border);
   border-top: 0;
@@ -225,6 +365,10 @@
   padding: 0 0 0.65rem;
   border: 0;
   border-bottom: 1px solid var(--border);
+}
+
+.rig-diff-settings-menu fieldset + fieldset {
+  margin-top: 0.65rem;
 }
 
 .rig-diff-settings-menu legend {

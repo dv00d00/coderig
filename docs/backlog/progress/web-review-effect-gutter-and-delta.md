@@ -1,6 +1,6 @@
 ## Web Review: the effect gutter says the wrong thing, and the delta is not rendered at all
 
-**Status:** progress — method delta, fixed lane, wrapping and palette shipped locally 2026-09-02; tree/context follow-ups remain ·
+**Status:** progress — method delta, inline/gutter/off presentation, focus mode and folder disclosure shipped locally 2026-09-02; findings delta and context follow-ups remain ·
 **Family:** web review / file effect lens
 
 **Source:** dogfooding the review surface against a real 104-file MedDBase merge request (portal courses
@@ -254,9 +254,10 @@ while the language's own rule says removal renders struck-grey and never green.
   CodeRig: 41 lanes in unified/split, all eight-slot, zero gutter-containment violations; added
   `AnnotateCommand.cs` carried 43 head marks and zero false moved slots; console clean.
 
-Still open from the ranked list: path-compressed file tree, hazard delta, eager effect-before-finding
-loading, ranged hunk expansion, and a dedicated full-screen mode. Unchanged reach deliberately stays visible but
-muted — the editorial decision requested above is closed.
+Still open from the ranked list: path-compressed file tree with counts/rollups, hazard/finding delta and
+ranged hunk expansion. Review already renders effects before its independent findings requests complete;
+the ordinary File view's shared `Promise.all` still waits for findings. Unchanged reach deliberately stays
+visible but muted by default; a changes-only filter must not silently discard uncomparable findings.
 
 Low-DPI dogfood exposed a follow-up in the first slice: `react-diff-view` creates two gutter columns in unified
 mode, so the renderer painted the same semantic lane twice on context rows and reserved 320px before the code.
@@ -286,6 +287,44 @@ Validation: 7 new behavioral tree tests (18 frontend tests total), TypeScript ch
 local release gate pass. Chrome smoke on the real 37-file CodeRig review covers mouse/keyboard disclosure,
 focus retention, nested and same-name directories, List/Tree, Viewed, search restoration, queue filters and
 ordered-pair isolation. Toggle-only interactions made zero API requests and left the review URL unchanged.
+
+### Reading-first presentation and focus — 2026-09-02
+
+- Effects now have a local presentation preference: **Inline** (default), **Gutter**, or **Off**, preserved
+  across file navigation and reload. Changing presentation makes no semantic request. The source is unchanged;
+  collapsed lightning markers disclose non-selectable widgets only on click; no extra row or effect list
+  appears by default. Calls on the same line remain distinct in the disclosure. Gutter keeps the existing fixed lanes; Off retains source and availability
+  disclosure without semantic widgets.
+- Expanded inline text names the call, family, distance, dispatch uncertainty and iteration context. Tier-2 findings
+  explain an effect inside iteration; tier-3 findings explain downstream reach from an iterating call, with
+  candidate wording rather than a claim of runtime N+1, query count or polynomial degree. Findings-only rows
+  and method-declaration-only deltas can expand. Method removals remain visible on the head summary.
+- Context deduplication includes target identities and visible finding details, not only family sets. Split
+  Gutter never suppresses a method-change header, including removal of a method's last effect. Inline shared
+  context is placed in the head pane; changed context shows both revisions.
+- Base/head each disclose loading, unavailable findings, absent/unindexed source, a completed empty result,
+  or disabled cross-method analysis. CodeRig's current rules do not enable tier 3; this change does not turn it
+  on or introduce another whole-store correlation request. Real API baseline: indexed `904674e12dc1`
+  `Rig.Storage/Queries/Reads.cs` returns 11 amplification findings and `crossMethodAvailable: false`.
+- **Focus mode** uses the full app viewport with a compact sticky toolbar and an explicit exit; Escape exits
+  even from controls. **Hide/Show files** is independent and remembered. Search shortcuts reopen the queue.
+  A failed/missing diff reveals the queue and exits focus so hidden controls cannot strand the reader.
+- Tree links now carry their revision side and select that exact index before navigation; a base witness
+  must not open whatever head/latest store the tree happened to use previously.
+- Lazy renderer loading is generation-guarded: a late initial patch render cannot overwrite the completed
+  findings render with stale "loading" state. This was reproduced against the real, warm CodeRig index.
+
+Not shipped in this slice: matching/diffing findings across revisions, changes-only filtering, complete
+cross-method witness paths, correlation caching, or the `rig amplify` degree model in the file interface.
+
+Validation: 26 frontend tests and TypeScript check pass; the ordinary 1,350-test .NET release gate passed
+before the final presentation-only adjustment, followed by a successful rebuild/package/install. Chrome
+at DPR 1 covers the real CodeRig review, Inline/Gutter/Off persistence, zero extra widget rows when
+collapsed, single disclosure, viewport focus, sidebar/search/error recovery, and no API requests from
+presentation controls. Light/dark × unified/split checks at 1280 and 1920 pixels keep markers inside the
+gutter. An explicitly synthetic fixture covers multiple calls per line, tier-2/3 candidate wording,
+findings-only rows, declaration-only/last-effect removals, and loading/error/disabled/empty states; this
+is not a MedDBase calibration or evidence that cross-method analysis is enabled in the current store.
 
 ### Acceptance
 

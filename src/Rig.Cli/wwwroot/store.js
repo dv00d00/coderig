@@ -46,6 +46,8 @@ export const store = createStore({
   reviewFiles: null, // Git changed-file inventory for the selected base/head pair
   reviewFilesError: "",
   reviewIgnoreWhitespace: false,
+  reviewFocusMode: false, // session-only; Escape restores the normal app chrome
+  reviewFilesHidden: false, // independent of focus mode, hydrated from a local UI preference
   // Review-queue controls are session UI, not shareable query state. The display preference and the
   // base/head-scoped viewed set are hydrated from localStorage by main.js.
   reviewFileSearch: "",

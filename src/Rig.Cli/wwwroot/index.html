@@ -2383,6 +2383,44 @@
       .review-layout.hidden {
         display: none;
       }
+      .review-layout.files-hidden {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr);
+      }
+      .review-layout.files-hidden > .review-files {
+        display: none;
+      }
+      /* Focus mode uses the existing scroll containers, not browser fullscreen or a second mounted view.
+         Hidden chrome is display:none so it also leaves keyboard navigation and the accessibility tree. */
+      body:has(main.review-focus) header,
+      main.review-focus > :not(section),
+      main.review-focus > section > #statusbar,
+      main.review-focus > section > :not(.review-layout) {
+        display: none;
+      }
+      main.review-focus {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        display: block;
+        height: 100dvh;
+        background: var(--bg);
+      }
+      main.review-focus > section,
+      main.review-focus .review-layout {
+        height: 100%;
+        min-height: 0;
+      }
+      main.review-focus .review-diff {
+        padding: 0;
+      }
+      main.review-focus .rig-diff-head {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        border-radius: 0;
+        padding-block: 0.4rem;
+      }
       .review-layout.busy {
         opacity: 0.72;
       }

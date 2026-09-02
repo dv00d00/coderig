@@ -314,15 +314,22 @@ function persistReviewViewed(base, head, viewed) {
 function setupReviewKeys() {
   document.addEventListener("keydown", (event) => {
     if (get().appMode !== "review") return;
+    if (event.key === "Escape" && get().reviewFocusMode) {
+      event.preventDefault();
+      set({ reviewFocusMode: false });
+      return;
+    }
     const tag = (event.target.tagName || "").toLowerCase();
     const typing = tag === "input" || tag === "textarea" || tag === "select";
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
       event.preventDefault();
+      actions.setReviewFilesHidden(false);
       refs.reviewFiles.querySelector(".review-file-search")?.focus();
       return;
     }
     if (!typing && event.key === "/") {
       event.preventDefault();
+      actions.setReviewFilesHidden(false);
       refs.reviewFiles.querySelector(".review-file-search")?.focus();
       return;
     }
@@ -338,17 +345,30 @@ function setupReviewKeys() {
 }
 
 let fileDiffModule;
+let reviewRenderId = 0;
 let reviewRequestId = 0;
 let reviewFilesRequestId = 0;
 async function mountFileDiff(data) {
+  const renderId = ++reviewRenderId;
   fileDiffModule ||= await import("./assets/file-diff.js");
+  // The patch and then its cached findings can both arrive before the lazy module has loaded. Only the
+  // latest render may mount: a late initial render otherwise overwrites completed findings with "loading".
+  if (renderId !== reviewRenderId || get().appMode !== "review" || get().reviewData !== data || get().reviewError) return;
   fileDiffModule.mountFileDiff(refs.review, data, {
-    onOpenTree: (id) => actions.openFileTree(id),
+    onOpenTree: (id, side) => {
+      // A base witness must open the base index, not whichever store the tree last displayed.
+      set({ storeId: side === "old" ? data.base.store : data.head.store });
+      actions.openFileTree(id);
+    },
     focusLine: get().reviewLine > 0
       ? { side: get().reviewSide === "base" ? "old" : "new", line: get().reviewLine }
       : null,
     ignoreWhitespace: get().reviewIgnoreWhitespace,
     viewed: get().reviewViewed.includes(get().reviewFile),
+    focusMode: get().reviewFocusMode,
+    onFocusModeChange: (value) => set({ reviewFocusMode: value }),
+    filesHidden: get().reviewFilesHidden,
+    onFilesHiddenChange: (value) => actions.setReviewFilesHidden(value),
     onViewedChange: (value) => actions.setCurrentReviewViewed(value),
     onIgnoreWhitespaceChange: (value) => {
       if (value === get().reviewIgnoreWhitespace) return;
@@ -808,6 +828,10 @@ const actions = {
     if (value !== "list" && value !== "tree") return;
     localStorage.setItem("rig-review-file-mode", value);
     set({ reviewFileMode: value });
+  },
+  setReviewFilesHidden(value) {
+    set({ reviewFilesHidden: value });
+    try { localStorage.setItem("rig-review-files-hidden", String(value)); } catch { /* UI still works without storage. */ }
   },
   setCurrentReviewViewed(value) {
     const s = get();
@@ -1499,18 +1523,25 @@ function setupWatches() {
   );
   watch(
     store,
-    (s) => [s.reviewData, s.reviewError, s.reviewViewed, s.reviewLine, s.reviewSide, s.appMode],
+    (s) => [s.reviewData, s.reviewError, s.reviewViewed, s.reviewLine, s.reviewSide, s.reviewFocusMode, s.reviewFilesHidden, s.appMode],
     (s) => {
+      const usableData = !!s.reviewData && !s.reviewError;
+      refs.root.classList.toggle("review-focus", s.appMode === "review" && s.reviewFocusMode && usableData);
+      // The mounted renderer owns Show files; keep a visible recovery path when that renderer is absent.
+      // Preserve the preference so it can be restored after successfully opening another file.
+      refs.reviewWrap.classList.toggle("files-hidden", s.reviewFilesHidden && usableData);
       if (s.appMode !== "review") return;
       if (s.reviewError) {
+        // A failed renderer must never strand the reader behind hidden navigation controls.
+        if (s.reviewFocusMode) set({ reviewFocusMode: false });
         fileDiffModule?.unmountFileDiff(refs.review);
         refs.review.textContent = "Review unavailable: " + s.reviewError;
       } else if (s.reviewData) {
         mountFileDiff(s.reviewData).catch((error) => {
-          fileDiffModule?.unmountFileDiff(refs.review);
-          refs.review.textContent = "Diff renderer failed: " + error.message;
+          set({ reviewFocusMode: false, reviewError: "Diff renderer failed: " + error.message });
         });
       } else {
+        if (s.reviewFocusMode) set({ reviewFocusMode: false });
         fileDiffModule?.unmountFileDiff(refs.review);
         refs.review.textContent = "Choose two indexed revisions and a file.";
       }
@@ -1614,6 +1645,7 @@ function setupWatches() {
   applyTheme(localStorage.getItem("rig-theme") || "system");
   if (localStorage.getItem("rig-lens-legend") === "0") set({ lensLegend: false });
   set({ reviewFileMode: localStorage.getItem("rig-review-file-mode") === "tree" ? "tree" : "list" });
+  try { set({ reviewFilesHidden: localStorage.getItem("rig-review-files-hidden") === "true" }); } catch { /* default is visible */ }
   initSplitter();
   setupSearch();
   setupFileSearch();
