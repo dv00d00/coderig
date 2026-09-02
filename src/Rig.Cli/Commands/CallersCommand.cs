@@ -2,13 +2,12 @@ using System.CommandLine;
 using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
-using Rig.Cli.Deployments;
 using Rig.Cli.Live;
 using Rig.Cli.Rendering;
+using Rig.Cli.Services;
 using Rig.Cli.Telemetry;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
-using Rig.Storage.Queries;
 using static Rig.Cli.EntryPoints.EntryPointContext;
 using static Rig.Cli.Rendering.EntryPointListRenderer;
 using static Rig.Cli.Rendering.SymbolNameFormatter;
@@ -20,6 +19,11 @@ namespace Rig.Cli.Commands;
 // for "who touches X"; `--async` also walks handoffs. --orphans filters to entry-point candidates (reachable
 // methods with no predecessor); --entrypoints filters to the RULE-DETECTED entry points (the `rig derive` set)
 // that reach the target. Walks the SAME shaped graph as path/reaches/tree; --raw bypasses shaping.
+//
+// RENDER ONLY. The answer — graph load, reverse closure, forward verification, the entry-point join, its cache
+// routing, the async hint and the frontier — is CallersQueryService.ComputeAsync's, and arrives here as data
+// with every partition already flagged. This file chooses which of those parts to show and how; it selects and
+// computes nothing.
 internal static class CallersCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
@@ -166,15 +170,20 @@ internal static class CallersCommand
     internal static RuleSet ShapeRules(Options opts, RuleSet rules) =>
         opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-    // Human --entrypoints output contains a sync-only hint that probes the async reverse set. Discover that
-    // superset once, while execution below still uses the user's original mode. TSV has no hint and ordinary
-    // callers/roots need only their execution lens.
+    // The two mutually-exclusive flags plus their flag-less default, as the ONE lens value the engine takes.
+    internal static CallersQueryService.CallersMode Lens(Options opts) =>
+        opts.EntrypointsOnly ? CallersQueryService.CallersMode.EntryPoints
+        : opts.RootsOnly ? CallersQueryService.CallersMode.Roots
+        : CallersQueryService.CallersMode.Callers;
+
+    // Human --entrypoints output contains a sync-only hint that probes the async reverse set, so its load must
+    // reach that superset (CallersQueryService.DiscoveryModeFor) while execution stays on the user's mode. TSV
+    // renders no hint, which is the one CLI-only economy on top of that rule: it does not pay for the superset,
+    // and the engine consequently reports no async count for a TSV run.
     internal static FactPathFinder.TraversalMode DiscoveryMode(Options opts, bool tsv)
     {
         var executionMode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
-        return executionMode == FactPathFinder.TraversalMode.SyncCut && opts.EntrypointsOnly && !tsv
-            ? FactPathFinder.TraversalMode.AsyncExact
-            : executionMode;
+        return tsv ? executionMode : CallersQueryService.DiscoveryModeFor(Lens(opts), executionMode);
     }
 
     // The CLI entry: answer off the .rig store, which is what every `rig callers` invocation does. The source
@@ -190,7 +199,6 @@ internal static class CallersCommand
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
         var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded
-        var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
         var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
 
         using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
@@ -210,88 +218,63 @@ internal static class CallersCommand
 
         await using var source = await openSource();
 
-        // One shaped reverse subgraph (SQL-bounded/full-EF on the store path; keyed fixed-point on an indexed
-        // resident source) drives all three callers modes — the set, no-predecessor roots and rule-detected
-        // entrypoints. A flattened live fixture alone retains the explicit whole-graph compatibility path.
-        var graphWatch = Stopwatch.StartNew();
-        DemandReverseCallersGraphResult? demandResult = null;
-        FactGraphData graph;
-        if (source is IDemandReverseCallersFactSource demand)
-        {
-            demandResult = await demand.LoadDemandReverseCallersGraphAsync(
-                new DemandForwardGraphRules(
-                    new ForwardCallProjectionRules(
-                        Handoff: shaped.Handoff,
-                        Redirect: shaped.Redirect,
-                        Factory: shaped.Factory,
-                        ClassifyEventSubscriptions: !opts.Raw
-                    ),
-                    shaped.Cut,
-                    shaped.Context
-                ),
-                new DemandReverseCallersGraphRequest(
-                    opts.ToPattern,
-                    maxDepth,
-                    DiscoveryMode(opts, tsv),
-                    Monomorphization: opts.MaxGenericWork is null
-                        ? null
-                        : new DemandMonomorphizationLimits(MaxWorkUnits: opts.MaxGenericWork.Value),
-                    MaxNodes: opts.MaxNodes ?? 250_000,
-                    ExecutionMode: mode
-                )
-            );
-            graph = demandResult.Graph;
-        }
-        else
-        {
-            graph = await source.LoadShapedTraversalGraphAsync(opts.ToPattern, SqlReachability.Direction.Reverse, shaped);
-        }
+        var computation = await CallersQueryService.ComputeAsync(
+            source: source,
+            rules: rules,
+            shaped: shaped,
+            workingDirectory: io.WorkspaceLocation.WorkingDirectory,
+            toPattern: opts.ToPattern,
+            maxDepth: CommonOptions.DepthOrUnbounded(opts.Depth),
+            mode: mode,
+            discoveryMode: DiscoveryMode(opts, tsv),
+            lens: Lens(opts),
+            raw: opts.Raw,
+            // The two inputs the EP-record cache key is a function of beyond the store itself: the rule
+            // cascade's fingerprint (which --rules moves), and --no-cache, which turns the cache into one
+            // that misses and drops.
+            loadedRulePaths: loadedRulePaths,
+            useCache: !opts.NoCache,
+            maxNodes: opts.MaxNodes,
+            maxGenericWork: opts.MaxGenericWork
+        );
 
-        // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
-        // (and now path). The handler runs LATER via the event, not synchronously at the `+=` site, so it
-        // is sync-cut by default and only crossed under --async. Marks edges by (Caller, FilePath, Line),
-        // which is direction-agnostic, so it applies to this REVERSE subgraph the same way. Consequence
-        // (intended, matches reaches/tree): a `+=` handler is no longer a synchronous reverse caller, so
-        // event handlers surface under --roots/--entrypoints only via --async. `--raw` bypasses shaping.
-        if (!opts.Raw && demandResult?.EventSubscriptionsClassified != true)
+        // The engine's phases, into THIS command's `--time` table: one row per phase, in the order they ran,
+        // and no row at all for a phase that did not (an absent `async probe` row is the tell that no second
+        // reverse walk was paid). `render` is the only phase measured here, because it is the only one here.
+        timing.Record("graph load", computation.GraphLoadElapsed);
+        if (computation.DeploymentsElapsed is { } deploymentsElapsed)
         {
-            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
+            timing.Record("deployments", deploymentsElapsed);
         }
-
-        graphWatch.Stop();
-        timing.Record("graph load", graphWatch.Elapsed);
+        timing.Record("reverse closure", computation.ReverseClosureElapsed);
+        if (computation.EntryPointsElapsed is { } entryPointsElapsed)
+        {
+            timing.Record("entry points", entryPointsElapsed);
+        }
+        if (computation.ForwardVerifyElapsed is { } forwardVerifyElapsed)
+        {
+            timing.Record("forward verify", forwardVerifyElapsed);
+        }
+        if (computation.AsyncProbeElapsed is { } asyncProbeElapsed)
+        {
+            timing.Record("async probe", asyncProbeElapsed);
+        }
 
         // Ambiguity disclosure (all three modes): a multi-target pattern merges reverse-reach sets.
-        AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.ToPattern, graph);
+        AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.ToPattern, computation.Graph);
 
         if (opts.EntrypointsOnly)
         {
-            // F9: load the DeploymentMap here and pass it into RunEntryPointsAsync, eliminating the
-            // LoadDeploymentsAsync call that was inside RunEntryPointsAsync (depth-1 in the call tree).
-            var deploymentsWatch = Stopwatch.StartNew();
-            var epDeployments = await source.LoadDeploymentsAsync(io.WorkspaceLocation.WorkingDirectory);
-            deploymentsWatch.Stop();
-            timing.Record("deployments", deploymentsWatch.Elapsed);
-            var epResult = await RunEntryPointsAsync(
-                source,
-                graph,
+            return RenderEntryPoints(
+                computation,
                 timing: timing,
                 toPattern: opts.ToPattern,
-                maxDepth: maxDepth,
                 mode: mode,
-                rules: rules,
-                workingDirectory: io.WorkspaceLocation.WorkingDirectory,
                 tsv: tsv,
-                output: io.TextOutput.Output,
+                max: max,
                 includeReverseOnly: opts.IncludeReverseOnly,
-                deployments: epDeployments,
-                // The two inputs the EP-record cache key is a function of beyond the store itself: the rule
-                // cascade's fingerprint (which --rules moves), and --no-cache, which turns the cache into one
-                // that misses and drops.
-                loadedRulePaths: loadedRulePaths,
-                useCache: !opts.NoCache
+                output: io.TextOutput.Output
             );
-            return epResult;
         }
 
         // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Only the
@@ -300,7 +283,7 @@ internal static class CallersCommand
         EpRenderContext? epContext = tsv
             ? null
             : await source.BuildEpContextAsync(
-                graph: graph,
+                graph: computation.Graph,
                 workingDirectory: io.WorkspaceLocation.WorkingDirectory,
                 extraRules: opts.ExtraRules,
                 rules: rules,
@@ -312,13 +295,7 @@ internal static class CallersCommand
 
         if (opts.RootsOnly)
         {
-            // SPLIT (2026-08-24) from the single `traversal` bucket into the two hot spots it hid: the reverse
-            // closure and the forward verification. They scale differently — the closure with graph size, the
-            // verification with candidate COUNT x depth — so one bucket could never say which one to attack.
-            var traversalWatch = Stopwatch.StartNew();
-            var roots = FactPathFinder.EntryRootsReaching(graph, opts.ToPattern, maxDepth, mode: mode);
-            traversalWatch.Stop();
-            timing.Record("reverse closure", traversalWatch.Elapsed);
+            var roots = computation.Roots;
             if (roots.Count == 0)
             {
                 if (!tsv)
@@ -331,42 +308,16 @@ internal static class CallersCommand
                 return 1;
             }
 
-            // FORWARD-VERIFY each root against the SAME graph (mirrors RunEntryPointsAsync), unless --raw —
-            // which keeps the exact unfiltered reverse superset. Reverse reachability is set-based BFS, so a
-            // shared base/interface virtual node pulls in roots whose FORWARD (receiver-narrowed) dispatch
-            // resolves to a sibling override that never reaches the target. The depth-0 entries of the reverse
-            // closure are the matched target nodes; each root forward-reaches them or is partitioned as
-            // reverse-only (recall-safe — a forward reach can legitimately miss an interface/lambda-only path).
-            var verifyWatch = Stopwatch.StartNew();
-            var rootsConfirmed = roots;
-            var rootsReverseOnly = (IReadOnlyList<string>)[];
-            if (!opts.Raw)
-            {
-                var targetIds = FactPathFinder
-                    .ReachedBy(graph, opts.ToPattern, maxDepth, mode: mode)
-                    .Where(kv => kv.Value == 0)
-                    .Select(kv => kv.Key)
-                    .ToHashSet(StringComparer.Ordinal);
-                var seedGroups = roots.Select(r => (IReadOnlyList<string>)new[] { r }).ToList();
-                var confirmedFlags = FactPathFinder.SeedsReachTarget(graph, seedGroups, targetIds, maxDepth, mode);
-                rootsConfirmed = roots.Where((_, i) => confirmedFlags[i]).ToList();
-                rootsReverseOnly = roots.Where((_, i) => !confirmedFlags[i]).ToList();
-            }
-
-            verifyWatch.Stop();
-            timing.Record("forward verify", verifyWatch.Elapsed);
-
             var rootsRenderWatch = Stopwatch.StartNew();
             // Reverse-only roots are hidden by default (matching the text output); --include-reverse-only
             // surfaces them flagged false. --raw keeps the raw superset.
             if (tsv)
             {
-                var reverseOnlySet = rootsReverseOnly.ToHashSet(StringComparer.Ordinal);
                 foreach (
-                    var r in CallersReverseOnly.VisibleTsvRows(roots.Take(max).ToList(), reverseOnlySet.Contains, opts.IncludeReverseOnly)
+                    var r in CallersReverseOnly.VisibleTsvRows(roots.Take(max).ToList(), r => !r.ForwardConfirmed, opts.IncludeReverseOnly)
                 )
                 {
-                    io.TextOutput.Output.WriteLine($"{r}\t{(reverseOnlySet.Contains(r) ? "false" : "true")}");
+                    io.TextOutput.Output.WriteLine($"{r.SymbolId}\t{(r.ForwardConfirmed ? "true" : "false")}");
                 }
 
                 rootsRenderWatch.Stop();
@@ -375,12 +326,14 @@ internal static class CallersCommand
                 return 0;
             }
 
+            var rootsConfirmed = roots.Where(r => r.ForwardConfirmed).ToList();
+            var rootsReverseOnly = roots.Where(r => !r.ForwardConfirmed).ToList();
             io.TextOutput.Output.WriteLine(
                 $"Root callers (heuristic — no-predecessor origins) reaching '{opts.ToPattern}': {rootsConfirmed.Count}"
             );
             foreach (var r in rootsConfirmed.Take(max))
             {
-                io.TextOutput.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}{r.SymbolId}{HeaderSuffix(epContext, r.SymbolId)}");
             }
             if (rootsConfirmed.Count > max)
             {
@@ -394,7 +347,7 @@ internal static class CallersCommand
                 io.TextOutput.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {rootsReverseOnly.Count}");
                 foreach (var r in rootsReverseOnly.Take(max))
                 {
-                    io.TextOutput.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
+                    io.TextOutput.Output.WriteLine($"{Indent.L1}{r.SymbolId}{HeaderSuffix(epContext, r.SymbolId)}");
                 }
             }
 
@@ -404,12 +357,9 @@ internal static class CallersCommand
             return 0;
         }
 
-        var defaultTraversalWatch = Stopwatch.StartNew();
-        var reachable = MonomorphCollapse.CollapseDepthMap(FactPathFinder.ReachedBy(graph, opts.ToPattern, maxDepth, mode: mode));
-        if (reachable.Count == 0)
+        var reached = computation.Callers;
+        if (reached.Count == 0)
         {
-            defaultTraversalWatch.Stop();
-            timing.Record("reverse closure", defaultTraversalWatch.Elapsed);
             if (!tsv)
             {
                 io.TextOutput.Output.WriteLine($"No symbol matches '{opts.ToPattern}'.");
@@ -418,49 +368,23 @@ internal static class CallersCommand
             return 1;
         }
 
-        // Separate the BFS start nodes (depth=0, the matched target(s) and their lambdas) from actual
+        // The BFS start nodes (depth=0, the matched target(s) and their lambdas) are separated from actual
         // upstream callers (depth≥1). The headline count and --limit budget reflect upstream callers only
         // — the matched nodes are the SUBJECT of the query, not its answer.
-        var matched = reachable.Where(k => k.Value == 0).OrderBy(k => k.Key, StringComparer.Ordinal).ToList();
-        var callers = reachable.Where(k => k.Value > 0).OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).ToList();
-        defaultTraversalWatch.Stop();
-        timing.Record("reverse closure", defaultTraversalWatch.Elapsed);
-
-        // FORWARD-VERIFY each upstream caller against the SAME graph (mirrors RunEntryPointsAsync), unless
-        // --raw — which keeps the exact unfiltered reverse superset. Reverse reachability is set-based BFS, so
-        // a shared base/interface virtual node pulls in callers whose FORWARD (receiver-narrowed) dispatch
-        // resolves to a sibling override that never reaches the target. Each caller forward-reaches a matched
-        // (depth-0) target node or is partitioned as reverse-only (recall-safe — a forward reach can
-        // legitimately miss an interface/lambda-only path, so we caveat rather than drop).
-        var defaultVerifyWatch = Stopwatch.StartNew();
-        var forwardConfirmed = new Dictionary<string, bool>(StringComparer.Ordinal);
-        if (!opts.Raw)
-        {
-            var targetIds = matched.Select(k => k.Key).ToHashSet(StringComparer.Ordinal);
-            var seedGroups = callers.Select(c => (IReadOnlyList<string>)new[] { c.Key }).ToList();
-            var confirmedFlags = FactPathFinder.SeedsReachTarget(graph, seedGroups, targetIds, maxDepth, mode);
-            for (var i = 0; i < callers.Count; i++)
-            {
-                forwardConfirmed[callers[i].Key] = confirmedFlags[i];
-            }
-        }
-        bool IsReverseOnly(string id) => !opts.Raw && forwardConfirmed.TryGetValue(id, out var ok) && !ok;
-
-        var confirmedCallers = callers.Where(kv => !IsReverseOnly(kv.Key)).ToList();
-        var reverseOnlyCallers = callers.Where(kv => IsReverseOnly(kv.Key)).ToList();
-
-        defaultVerifyWatch.Stop();
-        timing.Record("forward verify", defaultVerifyWatch.Elapsed);
+        var matched = reached.Where(r => r.Depth == 0).ToList();
+        var confirmedCallers = reached.Where(r => r.Depth > 0 && r.ForwardConfirmed).ToList();
+        var reverseOnlyCallers = reached.Where(r => r.Depth > 0 && !r.ForwardConfirmed).ToList();
 
         var renderWatch = Stopwatch.StartNew();
         // Depth-0 rows are the BFS start nodes (always forwardConfirmed=true). Reverse-only rows are
         // hidden by default, matching the text output; --include-reverse-only surfaces them.
         if (tsv)
         {
-            var ordered = reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max).ToList();
-            foreach (var kv in CallersReverseOnly.VisibleTsvRows(ordered, kv => IsReverseOnly(kv.Key), opts.IncludeReverseOnly))
+            foreach (
+                var r in CallersReverseOnly.VisibleTsvRows(reached.Take(max).ToList(), r => !r.ForwardConfirmed, opts.IncludeReverseOnly)
+            )
             {
-                io.TextOutput.Output.WriteLine($"{kv.Value}\t{kv.Key}\t{(IsReverseOnly(kv.Key) ? "false" : "true")}");
+                io.TextOutput.Output.WriteLine($"{r.Depth}\t{r.SymbolId}\t{(r.ForwardConfirmed ? "true" : "false")}");
             }
 
             renderWatch.Stop();
@@ -473,14 +397,14 @@ internal static class CallersCommand
         if (matched.Count > 0)
         {
             io.TextOutput.Output.WriteLine($"{Indent.L1}Matched nodes ({matched.Count}):");
-            foreach (var kv in matched)
+            foreach (var r in matched)
             {
-                io.TextOutput.Output.WriteLine($"{Indent.L2}{HumanNodeLabel(kv.Key)}");
+                io.TextOutput.Output.WriteLine($"{Indent.L2}{HumanNodeLabel(r.SymbolId)}");
             }
         }
-        foreach (var kv in confirmedCallers.Take(max))
+        foreach (var r in confirmedCallers.Take(max))
         {
-            io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {HumanNodeLabel(kv.Key)}");
+            io.TextOutput.Output.WriteLine($"{Indent.L1}d{r.Depth}  {HumanNodeLabel(r.SymbolId)}");
         }
         if (confirmedCallers.Count > max)
         {
@@ -492,9 +416,9 @@ internal static class CallersCommand
         if (opts.IncludeReverseOnly && reverseOnlyCallers.Count > 0)
         {
             io.TextOutput.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {reverseOnlyCallers.Count}");
-            foreach (var kv in reverseOnlyCallers.Take(max))
+            foreach (var r in reverseOnlyCallers.Take(max))
             {
-                io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {HumanNodeLabel(kv.Key)}");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}d{r.Depth}  {HumanNodeLabel(r.SymbolId)}");
             }
         }
 
@@ -506,49 +430,24 @@ internal static class CallersCommand
 
     // `rig callers <to> --entrypoints` — the RULE-DETECTED entry points (same set `rig derive` emits) whose
     // body is in the REVERSE closure of <to>, i.e. the real entry points that actually reach the target code.
-    // The join key is the declaration site (FilePath, Line): a derived EP carries no DocID, but its handler
-    // method's symbol fact shares the same site, so an EP is "touching" when some reverse-reachable method is
-    // declared at the EP's site. Default is synchronous-only; --async also counts scheduled paths.
-    // F9: `deployments` is passed in from `RunAsync` (already loaded there) so this method no longer
-    // calls `LoadDeploymentsAsync` itself. Default null so future callers that don't have a pre-loaded
-    // map still work (they pass null and the method loads its own below). All current callers pass it in.
-    // `source` is the IQueryFactSource seam, not a RigDbContext: this whole method is fact-source-agnostic, so
-    // `--entrypoints` answers off the resident live facts too.
+    // Default is synchronous-only; --async also counts scheduled paths.
     //
-    // TIMED (2026-08-24): this branch recorded NO phase at all, so `--time` attributed the whole of it to a
-    // single unlabelled remainder — on a 227-project store that was ~7s of a ~12s query with nothing said
-    // about where it went. `timing` is the caller's QueryTiming (the same one `graph load` was recorded on),
-    // threaded in rather than created here so the phases land in ONE table with the load that precedes them.
-    private static async Task<int> RunEntryPointsAsync(
-        IQueryFactSource source,
-        FactGraphData graph,
+    // Pure render: the touching set, its forward-verification flags, the async-hint count and the frontier all
+    // arrive on `computation`. What is decided here is presentation — which rows to show (reverse-only is
+    // hidden unless --include-reverse-only), the TSV columns, the kind grouping, the deployment chips, and
+    // which of the two 0-EP wordings the answer deserves.
+    private static int RenderEntryPoints(
+        CallersQueryService.CallersComputation computation,
         QueryTiming timing,
         string toPattern,
-        int maxDepth,
         FactPathFinder.TraversalMode mode,
-        RuleSet rules,
-        string workingDirectory,
         bool tsv,
-        TextWriter output,
-        // REQUIRED, not defaulted: these two are the EP-record cache key's non-store inputs. A default would
-        // let a future caller key a --rules query under the DEFAULT rule fingerprint and serve it the wrong
-        // entry-point set — so the caller must say which cascade it loaded and whether caching is on.
-        IReadOnlyList<string> loadedRulePaths,
-        bool useCache,
-        bool includeReverseOnly = false,
-        DeploymentMap? deployments = null
+        int max,
+        bool includeReverseOnly,
+        TextWriter output
     )
     {
-        // Reverse closure of the target (every method that reaches it) over the SAME shaped graph the caller
-        // loaded — so the rule-detected entry points are intersected with the cut-shaped reach. Keep the
-        // depth-bearing result: the depth-0 entries are the matched TARGET nodes, the forward-verify pass
-        // (below) reaches each candidate EP toward them.
-        var closureWatch = Stopwatch.StartNew();
-        var reachedBy = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode);
-        var reachable = reachedBy.Keys.ToHashSet(StringComparer.Ordinal);
-        closureWatch.Stop();
-        timing.Record("reverse closure", closureWatch.Elapsed);
-        if (reachable.Count == 0)
+        if (computation.ReachableCount == 0)
         {
             if (!tsv)
             {
@@ -558,170 +457,23 @@ internal static class CallersCommand
             return 1;
         }
 
-        // F9: use the passed-in map when the caller already loaded it; fall back to loading if null
-        // (defensive — the current caller always passes it).
-        deployments ??= await source.LoadDeploymentsAsync(workingDirectory);
-
-        // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites. Sourced
-        // from the already-loaded graph's method nodes (the same Kind==Method set, deduped by SymbolId) rather
-        // than a second whole-method-table EF scan (LoadDeadCodeMethodsAsync) of the identical rows.
-        var epWatch = Stopwatch.StartNew();
-        var reachableSites = graph.Methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
-
-        // The rule-detected entry points (identical derivation to `rig derive`) + promoted handoff origins,
-        // each carrying the handler DocID its FQN column resolves from.
-        //
-        // CACHED (2026-08-24), because this set is a pure function of (store + rules) and NOT of the question:
-        // it used to load every EP fact in the solution and re-derive the whole EP set on every invocation,
-        // however small the closure — 3.5s of a 9.7s query on the 227-project store, the largest phase in the
-        // tool's hottest query. Routed through the SOURCE's artifact cache, so the store path gets the
-        // `.rig/cache.db` blob a fresh process needs and the live path gets the fact generation's memo, off
-        // ONE code path and ONE key (see EntryPointContext.LoadOrDeriveEntryPointRecordsAsync).
-        using var epCache = source.OpenArtifactCache(useCache);
-        var epRecords = await LoadOrDeriveEntryPointRecordsAsync(
-            source: source,
-            cache: epCache,
-            rulesHash: RulesFingerprint.ComputeFromPaths(loadedRulePaths),
-            rules: rules
-        );
-
-        var touching = epRecords
-            .Where(e => reachableSites.Contains((e.FilePath, e.Line)))
-            .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
-            // The group key IS four of the six fields, and DocId is a function of the other two, so taking the
-            // first member is the same row the old projection built field-by-field off the key + First().
-            .Select(g => g.First())
-            .OrderBy(e => e.Kind, StringComparer.Ordinal)
-            .ThenBy(e => e.Route, StringComparer.Ordinal)
-            .ToList();
-        epWatch.Stop();
-        // The EP set (cache hit, or the fact load + rule derivation behind it) + the site join — everything
-        // between "who reaches it" and "which of those declarations are entry points". Cold, its cost tracks
-        // the STORE (every EP fact in the solution) rather than the query's closure, which is why it deserves
-        // its own row next to the two traversal rows; warm, this row is what shows the cache working.
-        timing.Record("entry points", epWatch.Elapsed);
-
-        // BUG-rig-missed-entrypoints-healthcode (Defect 2): the sync surface hides the scheduled/actor-handoff
-        // paths, so a sync EP answer can UNDER-report — "0 sync" misreads as "unreachable from any entry point"
-        // (which de-risks a change wrongly), and a non-zero sync count can still omit EPs that reach the target
-        // ONLY via a handoff. Count the rule-detected EPs reachable on the --async surface so both the 0-EP and
-        // the non-zero hints below can point the user at --async. Probed with AsyncExact (the semantics we'd
-        // suggest), never AsyncInclude, so the hint never leans on imprecise delivery fan-out that --async would
-        // itself exclude. Returns 0 when already walking handoffs (nothing hidden) — also the cheap early-out.
-        int AsyncReachableEpCount()
-        {
-            // Already walking handoffs (nothing hidden), or the graph has none at all — skip the extra reverse
-            // walk. The handoff-presence check is an O(E) scan that spares handoff-free stores the whole probe.
-            if (mode != FactPathFinder.TraversalMode.SyncCut || !graph.CallEdges.Any(e => e.Kind == EdgeKinds.Handoff))
-            {
-                return 0;
-            }
-
-            // Timed from HERE, past the early-out: a probe that did not run must not add a 0ms row that reads
-            // as "the async hint is free". A row appearing at all means a SECOND whole reverse walk was paid.
-            var probeWatch = Stopwatch.StartNew();
-            var asyncReachable = FactPathFinder
-                .ReachedBy(graph, toPattern, maxDepth, mode: FactPathFinder.TraversalMode.AsyncExact)
-                .Keys.ToHashSet(StringComparer.Ordinal);
-            var asyncSites = graph.Methods.Where(m => asyncReachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
-            var count = epRecords
-                .Where(e => asyncSites.Contains((e.FilePath, e.Line)))
-                .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
-                .Count();
-            probeWatch.Stop();
-            timing.Record("async probe", probeWatch.Elapsed);
-            return count;
-        }
-
-        // THE FRONTIER: the reverse-reachable methods that have NO caller of their own — where the chain TOPS
-        // OUT. On a 0-EP answer this is the difference between "dead code" and "reached across a boundary this
-        // analysis cannot see". `callers X --entrypoints` reporting a bare zero while plain `callers X` returns
-        // an 18-method chain cost a WRONG CONCLUSION mid-review (the gap was attributed to lambdas; rig models
-        // lambdas fine — `~λ0` nodes appear in the chain). The real cause was template/Dom interpolation
-        // (`{MedicalRecord.Documents}` resolved reflectively), which is exactly what a frontier list shows.
-        //
-        // In-edges are computed under the SAME mode semantics as the walk (handoff edges excluded under
-        // SyncCut), so the frontier describes the traversal actually performed rather than a different graph.
-        // Handoff-only callers are already covered by the async hint above, which runs first.
-        List<(string SymbolId, string FilePath, int Line)> ReverseFrontier()
-        {
-            var hasCaller = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var e in graph.CallEdges)
-            {
-                if (mode == FactPathFinder.TraversalMode.SyncCut && e.Kind == EdgeKinds.Handoff)
-                {
-                    continue; // not walked in this mode, so it does not count as a caller for this answer
-                }
-
-                hasCaller.Add(e.Callee);
-            }
-
-            return graph
-                .Methods.Where(m => reachable.Contains(m.SymbolId) && !hasCaller.Contains(m.SymbolId))
-                .GroupBy(m => m.SymbolId, StringComparer.Ordinal)
-                // FilePath is nullable on a method fact (a synthesized/metadata node has no source); the
-                // renderer already treats "" as "unlocated", so normalize here rather than widen the tuple.
-                .Select(g => (SymbolId: g.Key, FilePath: g.First().FilePath ?? "", g.First().Line))
-                .OrderBy(m => m.SymbolId, StringComparer.Ordinal)
-                .ToList();
-        }
-
-        // Report the frontier under a 0-EP answer, so the zero is attributable instead of merely discouraging.
-        void WriteFrontier()
-        {
-            const int MaxFrontierListed = 8;
-            var frontier = ReverseFrontier();
-            if (frontier.Count == 0)
-            {
-                return; // every reverse-reachable method has a caller (e.g. a cycle) — nothing to attribute
-            }
-
-            // The target itself being the only frontier node means nothing in the solution calls it at all —
-            // a materially different answer from "the chain runs up to a boundary", so say which one it is.
-            var selfOnly = frontier.Count == 1 && reachable.Count == 1;
-            output.WriteLine(
-                selfOnly
-                    ? $"{Indent.L1}Nothing in the analysed solution calls it — the chain is empty, not cut short."
-                    : $"{Indent.L1}The reverse chain tops out at {frontier.Count} method(s) with no in-solution caller:"
-            );
-            if (!selfOnly)
-            {
-                foreach (var m in frontier.Take(MaxFrontierListed))
-                {
-                    var where = string.IsNullOrEmpty(m.FilePath) ? "" : $"  {m.FilePath}:{m.Line}";
-                    output.WriteLine($"{Indent.L2}{HumanNodeLabel(m.SymbolId)}{where}");
-                }
-
-                if (frontier.Count > MaxFrontierListed)
-                {
-                    output.WriteLine($"{Indent.L2}… +{frontier.Count - MaxFrontierListed} more");
-                }
-
-                output.WriteLine(
-                    $"{Indent.L1}These are the BOUNDARY, not proof of dead code: something outside the static call graph"
-                        + " may invoke them — template/Dom interpolation, reflection, DI-by-name, or an external caller."
-                );
-            }
-        }
-
+        var deployments = computation.Deployments;
+        var touching = computation.EntryPoints;
         if (touching.Count == 0)
         {
-            // The 0-EP answer is not a cheap answer: it pays a SECOND whole reverse walk (the async probe) and
-            // the frontier scan. Both are timed — the probe under its own row, the writes under `render` — so
-            // the empty result still accounts for its seconds instead of returning through an unmeasured exit.
+            // The 0-EP answer is not a cheap answer: it paid a SECOND whole reverse walk (the async probe) and
+            // the frontier scan, both accounted for by the engine's own phase rows — so the empty result still
+            // reports its seconds instead of returning through an unmeasured exit.
             var emptyRenderWatch = Stopwatch.StartNew();
             if (!tsv)
             {
                 // A target reachable ONLY via a handoff (background worker, actor message, event) would
                 // otherwise be wrongly reported as dead/background-only — defeating the security-reachability
-                // use case. Paid only on the 0-result path here.
-                emptyRenderWatch.Stop();
-                var asyncCount = AsyncReachableEpCount();
-                emptyRenderWatch.Start();
-                if (asyncCount > 0)
+                // use case.
+                if (computation.AsyncReachableEpCount > 0)
                 {
                     output.WriteLine(
-                        $"No entry points reach '{toPattern}' synchronously — but {asyncCount} reach it via async/scheduled handoff. Re-run with --async."
+                        $"No entry points reach '{toPattern}' synchronously — but {computation.AsyncReachableEpCount} reach it via async/scheduled handoff. Re-run with --async."
                     );
                     emptyRenderWatch.Stop();
                     timing.Record("render", emptyRenderWatch.Elapsed);
@@ -729,7 +481,7 @@ internal static class CallersCommand
                 }
 
                 output.WriteLine($"No rule-detected entry points reach '{toPattern}'.");
-                WriteFrontier();
+                WriteFrontier(output, computation);
             }
 
             emptyRenderWatch.Stop();
@@ -737,57 +489,22 @@ internal static class CallersCommand
 
             return 1;
         }
-        // FORWARD-VERIFY each candidate EP against the SAME graph (recall-safe partition, NOT a drop).
-        // Reverse reachability is set-based BFS, so once a shared base/interface virtual node enters the
-        // reverse closure ALL its callers rejoin — including callers whose FORWARD (receiver-narrowed)
-        // dispatch resolves to a DIFFERENT sibling override, never the target's (the documented "reverse
-        // narrowing is dispatch-hop-precise, not path-precise" limitation). For each candidate EP we
-        // forward-reach its handler-method nodes (the graph.Methods declared at the EP's (file,line)) and
-        // keep it as CONFIRMED iff one of them forward-reaches a matched target node; the rest are listed
-        // under a caveat (reverse-only) rather than dropped — a forward reach can legitimately miss an
-        // interface-dispatch/lambda-only reach, so dropping would risk a false negative.
-        //
-        // Its own phase, separate from `reverse closure`: SeedsReachTarget is a forward walk PER candidate EP,
-        // so this row scales with the candidate COUNT x depth while the closure row scales with graph size.
-        // Folded together they could never say which of the two a slow query was actually paying for.
-        var verifyWatch = Stopwatch.StartNew();
-        var targetIds = reachedBy.Where(kv => kv.Value == 0).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
-        // (FilePath,Line) -> the method symbol ids declared there, inverting the same graph.Methods set
-        // reachableSites was built from — the candidate EP's handler nodes to seed the forward reach with.
-        var methodsBySite = new Dictionary<(string, int), List<string>>();
-        foreach (var m in graph.Methods)
-        {
-            var key = (m.FilePath!, m.Line);
-            if (!methodsBySite.TryGetValue(key, out var ids))
-            {
-                ids = new List<string>();
-                methodsBySite[key] = ids;
-            }
 
-            ids.Add(m.SymbolId);
-        }
-
-        var seedGroups = touching
-            .Select(e => (IReadOnlyList<string>)(methodsBySite.TryGetValue((e.FilePath, e.Line), out var ids) ? ids : []))
-            .ToList();
-        var confirmedFlags = FactPathFinder.SeedsReachTarget(graph, seedGroups, targetIds, maxDepth, mode);
-        var confirmed = touching.Where((_, i) => confirmedFlags[i]).ToList();
-        var reverseOnly = touching.Where((_, i) => !confirmedFlags[i]).ToList();
-        verifyWatch.Stop();
-        timing.Record("forward verify", verifyWatch.Elapsed);
+        var confirmed = touching.Where(hit => hit.ForwardConfirmed).Select(hit => hit.Record).ToList();
+        var reverseOnly = touching.Where(hit => !hit.ForwardConfirmed).Select(hit => hit.Record).ToList();
 
         var renderWatch = Stopwatch.StartNew();
         // Reverse-only EPs (no forward path) are hidden by default, matching the text output; --include-reverse-only surfaces them.
         // Columns: kind, route, file, line, requires, loadedServices, activeServices, forwardConfirmed, fqn.
         if (tsv)
         {
-            var rows = touching.Select((e, i) => (Ep: e, Confirmed: confirmedFlags[i])).ToList();
-            foreach (var (e, isConfirmed) in CallersReverseOnly.VisibleTsvRows(rows, isReverseOnly: r => !r.Confirmed, includeReverseOnly))
+            foreach (var hit in CallersReverseOnly.VisibleTsvRows(touching, isReverseOnly: r => !r.ForwardConfirmed, includeReverseOnly))
             {
+                var e = hit.Record;
                 var loaded = deployments.ServicesForFile(e.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
                 output.WriteLine(
-                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(isConfirmed ? "true" : "false")}\t{FqnOrRoute(e)}"
+                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(hit.ForwardConfirmed ? "true" : "false")}\t{FqnOrRoute(e)}"
                 );
             }
             renderWatch.Stop();
@@ -822,21 +539,13 @@ internal static class CallersCommand
         }
         // Defect 2 (non-zero under-report): even with sync EPs present, the async surface can reach MORE — a
         // target some EPs touch only via a scheduled/actor handoff. Compared against the sync REACHABLE set
-        // (touching), not the confirmed headline, so the delta isolates the async contribution rather than
-        // conflating it with the reverse-only partition. Cost is one extra reverse walk, paid only on the text
-        // path in SyncCut mode (the helper early-outs otherwise). The precise per-EP confirmation lives on the
-        // --async run, so this is a "go look" pointer, not a verified count.
-        //
-        // The render watch is PAUSED across the probe so the probe's whole reverse walk is attributed to
-        // `async probe` and to nothing else — leaving it running would have counted the same milliseconds in
-        // two rows and inflated the summed total the table prints as 100%.
-        renderWatch.Stop();
-        var asyncEpCount = AsyncReachableEpCount();
-        renderWatch.Start();
-        if (asyncEpCount > touching.Count)
+        // (the whole touching set), not the confirmed headline, so the delta isolates the async contribution
+        // rather than conflating it with the reverse-only partition. The precise per-EP confirmation lives on
+        // the --async run, so this is a "go look" pointer, not a verified count.
+        if (computation.AsyncReachableEpCount > touching.Count)
         {
             output.WriteLine(
-                $"{Indent.L1}… +{asyncEpCount - touching.Count} more entry point(s) reach this via async/scheduled handoff (not shown) — re-run with --async."
+                $"{Indent.L1}… +{computation.AsyncReachableEpCount - touching.Count} more entry point(s) reach this via async/scheduled handoff (not shown) — re-run with --async."
             );
         }
 
@@ -874,6 +583,44 @@ internal static class CallersCommand
         timing.Record("render", renderWatch.Elapsed);
 
         return 0;
+    }
+
+    // Report the frontier under a 0-EP answer, so the zero is attributable instead of merely discouraging.
+    private static void WriteFrontier(TextWriter output, CallersQueryService.CallersComputation computation)
+    {
+        const int MaxFrontierListed = 8;
+        var frontier = computation.Frontier;
+        if (frontier.Count == 0)
+        {
+            return; // every reverse-reachable method has a caller (e.g. a cycle) — nothing to attribute
+        }
+
+        // The target itself being the only frontier node means nothing in the solution calls it at all —
+        // a materially different answer from "the chain runs up to a boundary", so say which one it is.
+        var selfOnly = frontier.Count == 1 && computation.ReachableCount == 1;
+        output.WriteLine(
+            selfOnly
+                ? $"{Indent.L1}Nothing in the analysed solution calls it — the chain is empty, not cut short."
+                : $"{Indent.L1}The reverse chain tops out at {frontier.Count} method(s) with no in-solution caller:"
+        );
+        if (!selfOnly)
+        {
+            foreach (var m in frontier.Take(MaxFrontierListed))
+            {
+                var where = string.IsNullOrEmpty(m.FilePath) ? "" : $"  {m.FilePath}:{m.Line}";
+                output.WriteLine($"{Indent.L2}{HumanNodeLabel(m.SymbolId)}{where}");
+            }
+
+            if (frontier.Count > MaxFrontierListed)
+            {
+                output.WriteLine($"{Indent.L2}… +{frontier.Count - MaxFrontierListed} more");
+            }
+
+            output.WriteLine(
+                $"{Indent.L1}These are the BOUNDARY, not proof of dead code: something outside the static call graph"
+                    + " may invoke them — template/Dom interpolation, reflection, DI-by-name, or an external caller."
+            );
+        }
     }
 }
 

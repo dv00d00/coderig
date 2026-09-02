@@ -59,7 +59,17 @@ internal static class CallersEndpoint
                                     Fqn: e.View.Fqn,
                                     File: e.View.File,
                                     Line: e.View.Line,
-                                    Services: e.Services
+                                    Services: e.Services,
+                                    ForwardConfirmed: e.ForwardConfirmed
+                                ))
+                                .ToList(),
+                            AsyncReachableEpCount: result.AsyncReachableEpCount,
+                            Frontier: result
+                                .Frontier.Select(f => new CallersFrontierNodeDto(
+                                    Id: f.SymbolId,
+                                    Name: ShortName(f.SymbolId),
+                                    File: string.IsNullOrEmpty(f.FilePath) ? null : f.FilePath,
+                                    Line: f.Line
                                 ))
                                 .ToList()
                         );

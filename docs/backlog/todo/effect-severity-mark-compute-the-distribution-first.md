@@ -48,6 +48,44 @@ answers "which file in this MR should I read first".
 
 A property setter reaching a remote call 26 hops down is exactly the reader-facing case the signal is for.
 
+## Measured 2026-09-02 — the distribution
+
+Seeded random sample of **250 of 11,966 indexed files** (2.1%), annotated warm through `rig serve` against
+store `409c330b99dd-dirty` (v8; note the store is disclosed `UNVERIFIABLE: indexed from a dirty tree`).
+0 errors, **1,567 call sites** and **857 method rows**, 197s. Reproduce with seed `20260902`.
+
+| family breadth | call sites | % | method rows | % |
+|---|---|---|---|---|
+| 1/8 | 709 | 45.2 | 302 | 35.2 |
+| 2/8 | 210 | 13.4 | 174 | 20.3 |
+| 3/8 | 267 | 17.0 | 92 | 10.7 |
+| 4/8 | 94 | 6.0 | 46 | 5.4 |
+| 5/8 | 201 | 12.8 | 181 | 21.1 |
+| 6/8 | 86 | 5.5 | 62 | 7.2 |
+| 7/8 | **0** | 0.0 | **0** | 0.0 |
+| 8/8 | **0** | 0.0 | **0** | 0.0 |
+
+Cumulative call sites: `>=6/8` **5.49%**, `>=5/8` **18.32%**, `>=4/8` 24.31%, `>=3/8` 41.35%, `>=2/8` 54.75%.
+
+**The denominator is wrong, and that is the headline.** Only six families occur at all — `db` 1890,
+`io` 1546, `cache` 1212, `echo` 841, `rpc` 543, `blob` 182 rows. `bus` and `search` appear in **zero** of
+1,567 sites, so `n/8` cannot exceed 6/8 in practice and a reader shown "6/8" is being told the site is at
+75% of a ceiling it can never reach. Decide whether breadth is reported out of 8 declared families or out of
+the families actually present in the store before choosing any mark. Cheap follow-up to confirm estate-wide
+rather than in-sample: `rig derive --only bus` / `--only search`.
+
+**Threshold, from the data rather than a guess.** The floated 5+ would mark 18.3% of call sites — roughly one
+in five, which is not a severity signal. `6/8` is both the observed maximum and 5.49% of sites (~1 in 18),
+which is the only bucket rare enough to read as an exception. Recommendation: threshold at the top observed
+bucket, restated against whichever denominator is chosen.
+
+Note the distribution is **non-monotone**: 5/8 (12.8%) is twice 4/8 (6.0%). That spike is a cluster of code
+reaching a common multi-family core, not a smooth tail — so a threshold set at 5 captures a population, while
+one set at 6 captures outliers.
+
+**Not measured:** reachable-method count, the card's second approved metric. `annotate` does not emit it, so
+it needs its own surface; this measurement covers family breadth only.
+
 ## Acceptance
 
 - The family-breadth (and reachable-method-count) distribution over the real store is reported before any
