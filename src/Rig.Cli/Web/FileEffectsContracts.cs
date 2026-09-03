@@ -71,6 +71,12 @@ internal sealed record FileAmplificationDto(
 // the key token and the witness site too, but it is ~40x larger and collapsing it here would re-implement a
 // calibrated decision. Confidence is DERIVED from WitnessDepth (<=1 high, <=4 medium, else low) and sent
 // rather than left to the client, so the two cannot disagree about what counts as a lead.
+//
+// Evidence rides alongside it for the same reason and is likewise derived server-side: it is what the note
+// under the finding list is allowed to claim ("direct" = the call is unconditional in its loop and the
+// witness was reached with no dispatch inference; "inferred" = a guessed or fanned-out dispatch hop is on the
+// path; "candidate" = neither). Guards / DispatchBasis / DispatchDegree are sent WITH it so the client can
+// say WHY a row is not direct without re-deriving the tier and drifting from the server's definition.
 internal sealed record FileAnchorDto(
     int Line,
     string Caller,
@@ -79,7 +85,11 @@ internal sealed record FileAnchorDto(
     string WitnessOperation,
     string WitnessResource,
     int WitnessDepth,
-    string Confidence
+    string Confidence,
+    string Evidence,
+    string? Guards,
+    string? DispatchBasis,
+    int DispatchDegree
 );
 
 internal sealed record FileFindingsResponseDto(

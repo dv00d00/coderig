@@ -25,7 +25,8 @@ import {
 import { changeForSide, laneHeaderCells, semanticLaneSide } from "./review-gutter.ts";
 import { canHighlightSource, matchesReviewSource, reviewSourceIdentity, sourceHunk, type ReviewSource } from "./review-source.ts";
 import {
-  amplificationLabel, anchorLabel, effectFamilyLabel, findingsStatus, inlineEffectLabel, disclosureLabel,
+  amplificationLabel, anchorEvidenceNote, anchorGutterHint, anchorLabel, effectFamilyLabel, findingsStatus,
+  inlineEffectLabel, disclosureLabel,
   readReviewEffectMode, reviewEffectModes, saveReviewEffectMode, type ReviewEffectMode,
   sameVisibleAnnotations,
   canSuppressBaseGutter,
@@ -91,6 +92,12 @@ type FileAnchor = {
   witnessResource: string;
   witnessDepth: number;
   confidence: string;
+  // The server's evidence tier plus the two fields that explain it. Sent rather than re-derived here, so the
+  // note under the list cannot drift from the definition the server graded the row against.
+  evidence: string;
+  guards: string | null;
+  dispatchBasis: string | null;
+  dispatchDegree: number;
 };
 
 type FileFindings = {
@@ -429,13 +436,13 @@ function EffectWidget({ expanded, insight, headers = [], callbacks, deltas }: { 
           {insight.anchors.map((finding, index) => (
             <span className={`rig-diff-finding-row anchor confidence-${finding.confidence}`} key={`anchor:${finding.witnessProvider}:${index}`}>
               {anchorLabel(finding)}
-              <span className="rig-diff-finding-detail">{finding.caller} · {finding.iterationKind} · {finding.confidence} confidence{finding.witnessResource ? ` · ${finding.witnessResource}` : ""}</span>
+              <span className="rig-diff-finding-detail">{finding.caller} · {finding.iterationKind} · {finding.confidence} confidence{finding.guards ? ` · guarded by ${finding.guards}` : ""}{finding.witnessResource ? ` · ${finding.witnessResource}` : ""}</span>
             </span>
           ))}
         </div>
         : null}
       {insight && (insight.anchors.length > 0 || insight.amplifications.length > 0)
-        ? <span className="rig-diff-candidate-note">Static iteration candidate — not proof of runtime N+1 or a query count.</span>
+        ? <span className="rig-diff-candidate-note">{anchorEvidenceNote(insight.anchors, insight.amplifications.length)}</span>
         : null}
       {insight?.sites.map((site, index) => {
         const target = site.targetMethodId || site.enclosingMethodId;
@@ -879,7 +886,7 @@ function FileDiffView({ model, callbacks }: { model: FileDiffModel; callbacks: F
               methodTitle,
               ...(insight?.effects || []).map(inlineEffectLabel),
               hazard ? "Hazard findings — click for details" : "",
-              amplified ? "Iteration candidate — not proof of runtime N+1" : "",
+              amplified ? anchorGutterHint(insight?.anchors || []) : "",
             ].filter(Boolean).join("\n");
             return wrapInAnchor(
               <span

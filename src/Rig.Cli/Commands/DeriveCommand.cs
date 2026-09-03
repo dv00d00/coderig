@@ -379,7 +379,10 @@ internal static class DeriveCommand
                 foreach (var a in group.OrderBy(x => x.WitnessDepth).ThenBy(x => x.FilePath, StringComparer.Ordinal).Take(opts.Limit))
                 {
                     output.WriteLine(
-                        $"{Indent.L2}{ShortenPath(a.FilePath)}:{a.Line}  🔁[{a.IterationKind}] -> {ShortName(a.WitnessResource)}  d{a.WitnessDepth} [{a.Confidence}]"
+                        // Confidence AND Evidence, because depth alone undersold the strong rows: a d0
+                        // unconditional call reached with no dispatch inference printed exactly like a d0
+                        // witness found through a name-guessed virtual hop. Evidence names which one.
+                        $"{Indent.L2}{ShortenPath(a.FilePath)}:{a.Line}  🔁[{a.IterationKind}] -> {ShortName(a.WitnessResource)}  d{a.WitnessDepth} [{a.Confidence}·{a.Evidence}]"
                     );
                 }
 

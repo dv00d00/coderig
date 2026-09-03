@@ -94,7 +94,10 @@ public sealed class FileFindingsWebContractTests
                     WitnessProvider: "entity_cache",
                     WitnessOperation: "read",
                     WitnessResource: "Profile",
-                    WitnessDepth: 6
+                    WitnessDepth: 6,
+                    Guards: null,
+                    DispatchBasis: "roslyn",
+                    DispatchDegree: 1
                 ),
             ],
             CrossMethodDerived: true
@@ -106,6 +109,93 @@ public sealed class FileFindingsWebContractTests
         anchor.Caller.ShouldBe("Orders.Load");
         anchor.WitnessDepth.ShouldBe(6);
         anchor.Confidence.ShouldBe("low"); // depth 6 -> a LEAD, and the overlay labels it as one
+        anchor.DispatchBasis.ShouldBe("roslyn");
+        anchor.DispatchDegree.ShouldBe(1);
+    }
+
+    // The evidence tier the note under the finding list is allowed to claim. Pinned by a test because the
+    // three inputs are independent and the failure is SILENT: get it wrong and a guessed virtual hop reads as
+    // a confirmed per-iteration call, which is the exact overclaim the tier exists to prevent.
+    [Test]
+    [Arguments(0, null, null, 0, "direct")] // unconditional in the loop, witness in the callee's own body
+    [Arguments(1, null, null, 0, "direct")] // one hop down, still no dispatch on the path
+    [Arguments(0, "if (order.IsActive)", null, 0, "candidate")] // the CALL itself may not run every iteration
+    [Arguments(0, null, "roslyn", 0, "candidate")] // exact hops, but dispatch was crossed
+    [Arguments(4, null, null, 0, "candidate")] // real calls all the way, just further out
+    [Arguments(0, null, "heuristic", 0, "inferred")] // a name/arity guess beats every other strength
+    [Arguments(0, null, null, 3, "inferred")] // one source method fanned out to 3 targets
+    [Arguments(9, "if (x)", "heuristic", 12, "inferred")] // every doubt at once
+    public void The_anchor_evidence_tier_grades_guards_dispatch_and_depth_together(
+        int depth,
+        string? guards,
+        string? dispatchBasis,
+        int dispatchDegree,
+        string expected
+    )
+    {
+        var anchor = new CrossMethodAmplificationDataset.AnchorFinding(
+            Caller: Enclosing,
+            FilePath: File,
+            Line: 232,
+            IterationKind: "foreach",
+            WitnessProvider: "efcore",
+            WitnessOperation: "read",
+            WitnessResource: "Profile",
+            WitnessDepth: depth,
+            Guards: guards,
+            DispatchBasis: dispatchBasis,
+            DispatchDegree: dispatchDegree
+        );
+
+        anchor.Evidence.ShouldBe(expected);
+
+        // Evidence is a strict REFINEMENT of the calibrated depth tier, not a second independent axis: the
+        // two can never disagree about which anchors are the strong ones.
+        if (anchor.Evidence == "direct")
+        {
+            anchor.Confidence.ShouldBe("high");
+        }
+
+        // An empty guard string is the same fact as null (no control dependence), and a store that writes one
+        // must not silently downgrade the row.
+        (anchor with { Guards = guards is null ? "" : guards }).Evidence.ShouldBe(expected);
+    }
+
+    // The wire carries the tier AND the raw fields it came from, so the client can say WHY a row is not
+    // direct without re-deriving the tier and drifting from this definition.
+    [Test]
+    public void An_inferred_anchor_reaches_the_wire_with_the_fields_that_caused_it()
+    {
+        var anchor = FileEffectsEndpoint
+            .ToFindingsResponse(
+                File,
+                new FileFindingsQueryService.Findings(
+                    [],
+                    [],
+                    [
+                        new CrossMethodAmplificationDataset.AnchorFinding(
+                            Caller: Enclosing,
+                            FilePath: File,
+                            Line: 377,
+                            IterationKind: "foreach",
+                            WitnessProvider: "db_command",
+                            WitnessOperation: "execute",
+                            WitnessResource: "Layout",
+                            WitnessDepth: 2,
+                            Guards: "if (node.HasKey)",
+                            DispatchBasis: "heuristic",
+                            DispatchDegree: 5
+                        ),
+                    ],
+                    CrossMethodDerived: true
+                )
+            )
+            .Anchors.ShouldHaveSingleItem();
+
+        anchor.Evidence.ShouldBe("inferred");
+        anchor.Guards.ShouldBe("if (node.HasKey)");
+        anchor.DispatchBasis.ShouldBe("heuristic");
+        anchor.DispatchDegree.ShouldBe(5);
     }
 
     // The distinction the overlay's disclosure rests on: no anchors because there are none, versus no anchors

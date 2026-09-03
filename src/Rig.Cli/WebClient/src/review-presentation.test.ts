@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  amplificationLabel, anchorLabel, effectFamilyLabel, findingsStatus, inlineEffectLabel, disclosureLabel,
+  amplificationLabel, anchorEvidenceNote, anchorGutterHint, anchorLabel, effectFamilyLabel, findingsStatus,
+  inlineEffectLabel, disclosureLabel,
   readReviewEffectMode, reviewEffectModeKey, reviewEffectModes, saveReviewEffectMode,
   sameVisibleAnnotations,
   canSuppressBaseGutter,
@@ -39,12 +40,57 @@ test("effects expose readable family, depth and uncertain dispatch explicitly", 
   assert.equal(anchorLabel({ witnessProvider: "efcore", witnessOperation: "read", witnessDepth: 2 }), "efcore:read · reached from iterating call · depth 2 · candidate");
 });
 
+// The tier is the SERVER's; these only pin that the label says which one, and says WHY when the reason is
+// one a reader would act on differently (a fan-out to N impls is not the same doubt as a guessed hop).
+test("an anchor label carries its evidence tier and, when inferred, the doubt that caused it", () => {
+  const row = { witnessProvider: "efcore", witnessOperation: "read", witnessDepth: 0 };
+  assert.equal(anchorLabel({ ...row, evidence: "direct" }), "efcore:read · reached from iterating call · depth 0 · per-iteration call");
+  assert.equal(
+    anchorLabel({ ...row, witnessDepth: 5, evidence: "inferred", dispatchBasis: "heuristic", dispatchDegree: 0 }),
+    "efcore:read · reached from iterating call · depth 5 · inferred reach · (guessed dispatch hop)",
+  );
+  assert.equal(
+    anchorLabel({ ...row, witnessDepth: 3, evidence: "inferred", dispatchBasis: "roslyn", dispatchDegree: 7 }),
+    "efcore:read · reached from iterating call · depth 3 · inferred reach · (dispatch fan-out 7)",
+  );
+  // An absent tier must degrade to the WEAK word, never the strong one.
+  assert.equal(anchorLabel(row), "efcore:read · reached from iterating call · depth 0 · candidate");
+});
+
+test("the note claims per-iteration issuance only where the evidence is direct, and never claims a query count", () => {
+  const direct = { evidence: "direct" };
+  const candidate = { evidence: "candidate" };
+
+  assert.equal(anchorEvidenceNote([candidate, { evidence: "inferred" }]), "Static iteration candidate — not proof of runtime N+1 or a query count.");
+  assert.equal(anchorEvidenceNote([]), "Static iteration candidate — not proof of runtime N+1 or a query count.");
+  // An un-graded row is not a direct one.
+  assert.equal(anchorEvidenceNote([{}]), "Static iteration candidate — not proof of runtime N+1 or a query count.");
+
+  const strong = anchorEvidenceNote([direct]);
+  assert.match(strong, /^One call is issued once per iteration/);
+  assert.doesNotMatch(strong, /candidate/);
+  assert.match(anchorEvidenceNote([direct, direct]), /^2 calls are issued once per iteration/);
+
+  // Mixed: the strong claim stands AND the weaker rows keep their hedge. Local (tier-2) amplifications count
+  // toward the hedged rows, because the note sits under both lists.
+  assert.match(anchorEvidenceNote([direct, candidate]), /The remaining row is a static candidate\.$/);
+  assert.match(anchorEvidenceNote([direct, candidate], 2), /The remaining 3 rows are static candidates\.$/);
+
+  // The half that is true at every tier is never dropped.
+  for (const note of [anchorEvidenceNote([direct]), anchorEvidenceNote([direct, candidate], 1)]) {
+    assert.match(note, /not a query count|not proof of runtime N\+1/i);
+  }
+
+  assert.equal(anchorGutterHint([candidate]), "Iteration candidate — not proof of runtime N+1");
+  assert.equal(anchorGutterHint([candidate, direct]), "Per-iteration call — N is data-dependent, not a query count");
+});
+
 test("readiness distinguishes loading, failure, absent/unindexed source and zero findings", () => {
   assert.equal(findingsStatus({ semanticState: "available" }).state, "loading");
   assert.equal(findingsStatus({ semanticState: "available", findings: null }).state, "unavailable");
   assert.equal(findingsStatus({ semanticState: "not-indexed" }).state, "not-indexed");
   assert.equal(findingsStatus({ semanticState: "not-present" }).state, "not-present");
-  const empty = { hazards: [], amplifications: [], anchors: [], crossMethodAvailable: true };
+  const empty = { hazards: [], amplifications: [], anchors: [] as Array<{ evidence?: string }>, crossMethodAvailable: true };
   assert.equal(findingsStatus({ semanticState: "available", findings: empty }).label, "no findings");
   assert.equal(findingsStatus({ semanticState: "available", findings: { ...empty, crossMethodAvailable: false } }).label, "no findings · cross-method off");
   assert.equal(findingsStatus({ semanticState: "available", findings: { ...empty, amplifications: Array(11).fill({}), crossMethodAvailable: false } }).label, "11 findings · cross-method off");

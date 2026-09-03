@@ -47,15 +47,67 @@ export function amplificationLabel(finding: { provider: string; operation: strin
   return `${finding.provider}:${finding.operation} · inside iteration`;
 }
 
-export function anchorLabel(finding: {
+// The server's tier (CrossMethodAmplificationDataset.AnchorFinding.Evidence). Never re-derived here: the
+// note this drives is a claim about evidence, and a client that recomputed the tier could drift from the
+// definition the server calibrated it against.
+export type AnchorEvidence = "direct" | "candidate" | "inferred";
+
+type AnchorRow = {
   witnessProvider: string; witnessOperation: string; witnessDepth: number;
-}): string {
-  return `${finding.witnessProvider}:${finding.witnessOperation} · reached from iterating call · depth ${finding.witnessDepth} · candidate`;
+  evidence?: string; dispatchBasis?: string | null; dispatchDegree?: number;
+};
+
+const evidenceWords: Record<string, string> = {
+  direct: "per-iteration call",
+  inferred: "inferred reach",
+  candidate: "candidate",
+};
+
+// Why a row is only "inferred", from the two fields that can cause it — a fan-out to N implementations is a
+// different doubt from a name-guessed hop, and a reader deciding whether to chase the row needs to know which.
+function inferredReason(finding: AnchorRow): string {
+  if ((finding.dispatchDegree ?? 0) > 1) return `dispatch fan-out ${finding.dispatchDegree}`;
+  return finding.dispatchBasis === "heuristic" ? "guessed dispatch hop" : "";
+}
+
+export function anchorLabel(finding: AnchorRow): string {
+  const evidence = finding.evidence ?? "candidate";
+  const reason = evidence === "inferred" ? inferredReason(finding) : "";
+  return [
+    `${finding.witnessProvider}:${finding.witnessOperation}`,
+    "reached from iterating call",
+    `depth ${finding.witnessDepth}`,
+    evidenceWords[evidence] || evidence,
+    reason ? `(${reason})` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+// The note under the finding list. It used to be one flat sentence over every row, which undersold the
+// strongest tier: a depth-0 unconditional call reached with no dispatch inference read exactly like a depth-5
+// witness found through a guessed virtual hop. Now the strong claim is made where it holds and the hedge is
+// kept where it belongs — and the half of the old sentence that is true at EVERY tier (no query count, because
+// N is data-dependent and a callee may cache) is never dropped.
+export function anchorEvidenceNote(anchors: Array<{ evidence?: string }>, localAmplifications = 0): string {
+  const direct = anchors.filter((anchor) => anchor.evidence === "direct").length;
+  const hedged = anchors.length - direct + localAmplifications;
+  if (direct === 0) {
+    return "Static iteration candidate — not proof of runtime N+1 or a query count.";
+  }
+  const strong = `${direct === 1 ? "One call is" : `${direct} calls are`} issued once per iteration: unconditional inside the loop, `
+    + "with the effect reached without dispatch inference. Not a query count — N is data-dependent and a callee may cache.";
+  return hedged === 0 ? strong : `${strong} The remaining ${hedged === 1 ? "row is a static candidate" : `${hedged} rows are static candidates`}.`;
+}
+
+// The one-line form for a gutter tooltip, where the full note does not fit.
+export function anchorGutterHint(anchors: Array<{ evidence?: string }>): string {
+  return anchors.some((anchor) => anchor.evidence === "direct")
+    ? "Per-iteration call — N is data-dependent, not a query count"
+    : "Iteration candidate — not proof of runtime N+1";
 }
 
 export function findingsStatus(revision: {
   semanticState: "available" | "not-indexed" | "not-present";
-  findings?: { hazards: unknown[]; amplifications: unknown[]; anchors: unknown[]; crossMethodAvailable: boolean } | null;
+  findings?: { hazards: unknown[]; amplifications: unknown[]; anchors: Array<{ evidence?: string }>; crossMethodAvailable: boolean } | null;
 }): { state: string; label: string; detail: string } {
   if (revision.semanticState === "not-present") {
     return { state: "not-present", label: "file absent", detail: "This revision has no file to analyze." };
@@ -74,8 +126,10 @@ export function findingsStatus(revision: {
   return {
     state: crossMethodAvailable ? "ready" : "partial",
     label: `${count === 0 ? "no" : count} findings${crossMethodAvailable ? "" : " · cross-method off"}`,
+    // The tier-3 half of this sentence is graded the same way the note under the list is: claiming
+    // "candidates" over a set that contains a direct per-iteration call undersells it.
     detail: crossMethodAvailable
-      ? "Local and cross-method findings loaded. Iteration findings are candidates, not proof of runtime N+1."
+      ? `Local and cross-method findings loaded. ${anchorEvidenceNote(anchors)}`
       : "Local findings loaded. Cross-method analysis (tier 3) is disabled for this store; absence of anchors is not a negative result.",
   };
 }

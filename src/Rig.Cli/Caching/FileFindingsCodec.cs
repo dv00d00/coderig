@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Rig.Cli.Commands;
@@ -107,7 +107,10 @@ internal static class FileFindingsCodec
             WitnessProvider: a.WitnessProvider,
             WitnessOperation: a.WitnessOperation,
             WitnessResource: a.WitnessResource,
-            WitnessDepth: a.WitnessDepth
+            WitnessDepth: a.WitnessDepth,
+            Guards: a.Guards,
+            DispatchBasis: a.DispatchBasis,
+            DispatchDegree: a.DispatchDegree
         );
 
     private static CrossMethodAmplificationDataset.AnchorFinding Unmap(FileAnchorFindingDto a) =>
@@ -119,13 +122,16 @@ internal static class FileFindingsCodec
             WitnessProvider: a.WitnessProvider,
             WitnessOperation: a.WitnessOperation,
             WitnessResource: a.WitnessResource,
-            WitnessDepth: a.WitnessDepth
+            WitnessDepth: a.WitnessDepth,
+            Guards: a.Guards,
+            DispatchBasis: a.DispatchBasis,
+            DispatchDegree: a.DispatchDegree
         );
 }
 
 // The serializable wire shapes — flat twins of DeriveCommand.HazardFinding and
 // CrossMethodAmplificationDataset.AnchorFinding (both are nested records the serializer can't be pointed at
-// directly). AnchorFinding.Confidence is DERIVED from WitnessDepth, so it is deliberately not stored.
+// directly). AnchorFinding.Confidence and .Evidence are DERIVED, so they are deliberately not stored.
 internal sealed record FileFindingDto(
     string Type,
     string Confidence,
@@ -147,7 +153,11 @@ internal sealed record FileAnchorFindingDto(
     string WitnessProvider,
     string WitnessOperation,
     string WitnessResource,
-    int WitnessDepth
+    int WitnessDepth,
+    // Raw evidence, stored: Evidence is derived from these three plus WitnessDepth, so it is not.
+    string? Guards,
+    string? DispatchBasis,
+    int DispatchDegree
 );
 
 internal sealed record FileFindingsPayload(

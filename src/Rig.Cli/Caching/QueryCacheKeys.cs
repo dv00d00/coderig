@@ -81,7 +81,12 @@ internal static class QueryCacheKeys
     // client IndexedDB entry would keep serving the pre-tier mark list forever. No SERVER key uses this constant
     // — the /api/hazards marks are recomputed per call off the (separately keyed) effect cache — it exists to move
     // DerivationSchemaToken, which is the client's only invalidation signal.
-    internal const int FindingViewSchema = 1;
+    // v1->v2: the displayed tier-3 anchor grain carries its EVIDENCE (anchor guards, dispatch basis, dispatch
+    // degree) and the `Evidence` tier derived from them, so `filefindings|` blobs written under v1 decode with
+    // those three fields absent — which would read as the STRONGEST tier ("direct") on every stale anchor.
+    // Bumped rather than made nullable-tolerant: an over-claiming cache hit is the one failure this note is
+    // being added to prevent.
+    internal const int FindingViewSchema = 2;
 
     // v1: tree/reaches/path web effect views hide intrinsic alloc/throw by default and disclose that state.
     // Query payloads now depend on the intrinsic view flag; move the browser derivation version once so a

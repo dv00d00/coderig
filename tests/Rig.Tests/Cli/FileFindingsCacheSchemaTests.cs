@@ -35,10 +35,11 @@ public sealed class FileFindingsCacheSchemaTests
         // ANYWHERE moves both lines below, and that is the point: the bump IS the signal that flushes every
         // warm findings blob, on disk and (via /api/meta's derivationVersion) in the browser. Updating these
         // two lines is the deliberate edit that records it.
-        QueryCacheKeys.DerivationSchemaToken().ShouldBe("2.8.4.5.8.1.1.2.3.3.6");
+        // FindingViewSchema 1->2 (2026-09-03): the tier-3 anchor grain now carries its evidence.
+        QueryCacheKeys.DerivationSchemaToken().ShouldBe("2.8.4.5.8.2.1.2.3.3.6");
         QueryCacheKeys
             .FileFindingsCacheKey("store", "rules", Path)
-            .ShouldBe("53F64C7E887CB36E6D034745B4EF608F1B81EF9C7BB8952693F97C400B9406AA");
+            .ShouldBe("A526654D4A6413E1B7982956E42D683A062327F6ACCF773EBEA6056453FBDFAA");
     }
 
     [Test]
@@ -121,7 +122,10 @@ public sealed class FileFindingsCacheSchemaTests
                     WitnessProvider: "entity_cache",
                     WitnessOperation: "read",
                     WitnessResource: "Profile",
-                    WitnessDepth: 6
+                    WitnessDepth: 6,
+                    Guards: "if (order.IsActive)",
+                    DispatchBasis: "heuristic",
+                    DispatchDegree: 4
                 ),
             ],
             CrossMethodDerived: true

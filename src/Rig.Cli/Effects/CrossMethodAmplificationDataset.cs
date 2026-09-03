@@ -49,13 +49,42 @@ internal static class CrossMethodAmplificationDataset
         string WitnessProvider,
         string WitnessOperation,
         string WitnessResource,
-        int WitnessDepth
+        int WitnessDepth,
+        // The three evidence columns the (anchor x witness) dataset always carried and the displayed grain
+        // used to drop (TSV columns 18, 19, 21). Without them every anchor renders under one flat hedge, so a
+        // depth-0 unconditional call reached through real calls reads exactly like a depth-5 witness found
+        // only through a name-guessed virtual hop. Guards are the ANCHOR call site's control-dependence set
+        // (null/"" == the call is unconditional in its loop); DispatchBasis is the reach provenance
+        // (null == no dispatch hop at all, "roslyn" == exact mined hops, "heuristic" == at least one guess);
+        // DispatchDegree is >1 only when one source method fanned out to N targets on the shortest path.
+        string? Guards,
+        string? DispatchBasis,
+        int DispatchDegree
     )
     {
         public string Confidence =>
             WitnessDepth <= 1 ? "high"
             : WitnessDepth <= 4 ? "medium"
             : "low";
+
+        // How much of the claim the STATIC evidence actually supports — a strict refinement of Confidence,
+        // not a second independent axis: "direct" implies Confidence is "high", and the two can never
+        // disagree about which anchors are the strong ones. Confidence stays depth-only because that is what
+        // the 2026-08-04 hand audit calibrated (93% TP+TP-weak); this adds the two doubts that audit could
+        // not see from depth alone.
+        //
+        //   direct    — the call is unconditional inside its loop, the witness is in the callee's own body or
+        //               one hop down, and the reach crossed no dispatch inference. Per-iteration ISSUANCE of
+        //               the call is established. Still NOT a query count: N is data-dependent and nothing
+        //               here says the witness effect is unconditional in ITS own frame (the correlation
+        //               carries the anchor's guards, never the witness's).
+        //   inferred  — a name/arity-guessed dispatch hop, or a fan-out to N>1 targets, sits on the path, so
+        //               the witness may live in an implementation this anchor never reaches.
+        //   candidate — everything else: reachable and looped, with more frames between than direct allows.
+        public string Evidence =>
+            DispatchBasis == "heuristic" || DispatchDegree > 1 ? "inferred"
+            : WitnessDepth <= 1 && DispatchBasis is null && string.IsNullOrEmpty(Guards) ? "direct"
+            : "candidate";
     }
 
     internal static IReadOnlyList<AnchorFinding> AnchorFindings(
@@ -73,7 +102,10 @@ internal static class CrossMethodAmplificationDataset
                 WitnessOperation: p.Finding.WitnessOperation ?? "",
                 WitnessResource: p.Finding.WitnessResourceKey ?? "",
                 // Always populated on presence findings; 0 (the strongest tier) only as a defensive fallback.
-                WitnessDepth: p.Finding.WitnessDepth ?? 0
+                WitnessDepth: p.Finding.WitnessDepth ?? 0,
+                Guards: p.Anchor.Event.EnclosingGuards,
+                DispatchBasis: p.Finding.WitnessDispatchBasis,
+                DispatchDegree: p.Finding.WitnessDispatchDegree ?? 0
             ))
             .OrderBy(f => f.FilePath, StringComparer.Ordinal)
             .ThenBy(f => f.Line)

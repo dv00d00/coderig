@@ -329,7 +329,11 @@ internal static class FileEffectsEndpoint
                     anchor.WitnessOperation,
                     anchor.WitnessResource,
                     anchor.WitnessDepth,
-                    anchor.Confidence
+                    anchor.Confidence,
+                    anchor.Evidence,
+                    anchor.Guards,
+                    anchor.DispatchBasis,
+                    anchor.DispatchDegree
                 ))
                 .ToArray(),
             // A tier-3 count of zero is ambiguous on its own — no anchors in this file, or no rule section at
