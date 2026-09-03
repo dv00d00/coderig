@@ -3,6 +3,7 @@
 **Status:** todo · **Found:** 2026-09-03, shipping
 [cli-web-collapse-1](../done/cli-web-collapse-1-impact-selection-into-the-engine.md) · **Triage:** needs-info
 **Family:** impact / web cache
+**Decision:** won't do — declined 2026-09-03.
 
 ## What changed and why
 
@@ -50,3 +51,9 @@ simpler than widening the shared gate.
 
 - A decision recorded either way, with the cold-path number that justifies it.
 - If per-key concurrency lands, two cold loads for distinct stores overlap and the warm hit stays ~0.09 s.
+
+## Decision — won't do (2026-09-03)
+
+Accept the measured trade: roughly one extra second on the first request buys a ~0.09 s warm toggle path.
+Per-key concurrency would widen shared-cache complexity to optimise a one-time cold cost with no observed
+interactive regression.

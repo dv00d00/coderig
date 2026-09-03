@@ -1,7 +1,8 @@
 # `tree`/`reaches` cold cost is one 46k-node CHA closure, reloaded per seed, and `--depth` cannot reduce it
 
 **Status:** todo · **Priority: HIGH** (13-17s per unseen seed in the web UI; the surface reads as broken) ·
-**Found:** 2026-09-03, RCA of the web tree lens · **Triage:** ready-for-agent
+**Found:** 2026-09-03, RCA of the web tree lens
+**Triage:** ready-for-agent
 **Family:** performance / traversal graph loading
 
 ## The observation

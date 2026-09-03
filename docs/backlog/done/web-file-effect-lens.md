@@ -76,6 +76,6 @@ selected call.
 - [Add effect-aware per-file inventory and an honest Effects-changed filter](../todo/web-review-effect-aware-file-inventory.md).
 - [Link Impact changes directly into Review](../done/web-review-impact-deep-links.md).
 - [Expand hunk context on demand without loading full files](../todo/web-review-expand-context.md).
-- [Adapt remote pull-request providers only after the local review contract is complete](../todo/web-review-provider-adapters.md).
+- [Remote pull-request provider adapters](../wont-do/web-review-provider-adapters.md) — declined; Review stays local and store-backed.
 - [Resolve a concrete witness path lazily from web or Rider](../todo/file-lens-grain-5-lazy-witness-path.md).
 - [Promote the file lens from family grain to provider grain](../todo/file-lens-grain-2-provider-grain.md).

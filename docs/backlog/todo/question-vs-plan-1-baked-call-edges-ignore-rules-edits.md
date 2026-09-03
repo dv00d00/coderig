@@ -4,6 +4,7 @@
 the reach set itself moves, not just an annotation) · **Found:** 2026-08-21, while single-sourcing the fact
 projections ([live-background-index](../done/live-background-index.md)) · **Family:** cache-invalidation /
 query correctness
+**Triage:** needs-info — choose O1 fail-closed, O2 documented rematerialisation, or O3 both.
 
 ## The bug
 

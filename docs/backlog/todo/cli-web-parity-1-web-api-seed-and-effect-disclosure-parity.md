@@ -2,6 +2,8 @@
 
 **Status:** todo · **Priority: MEDIUM** (the CLI's own version of this cost a full session of misdiagnosis; the web view can now silently disagree with `rig` on the same store) · **Found:** 2026-07-27 (review of the seed-resolution fix) · **Family:** web / disclosure-parity
 **Related:** [[pattern-resolution-divergence-tree-vs-reaches]] (the CLI fix this is the web half of), [[impact-usability-parity-filter-and-alloc-noise]] (the intrinsic axis)
+**Triage:** needs-triage — this is an omnibus of independent disclosure, filtering, depth, parameter-validation,
+and cache issues, with two slices already terminal; split the remaining defects before dispatch.
 
 ## Why this exists
 

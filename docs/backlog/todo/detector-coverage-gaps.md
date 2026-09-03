@@ -3,6 +3,8 @@
 **Status:** TODO / MEDDBASE-CALIBRATION (inputs AVAILABLE — see the un-park note below) — the corpus and four detector families are shipped, but the remaining
 FR-1 precision slices and VS-G2/G3/G4/G7 residuals require the MedDBase source, rules, store, or real-store
 calibration.
+**Triage:** needs-triage — the remaining FR-1 and VS-G2/G3/G4/G7 items are independent extraction, rules,
+and calibration slices; split them before choosing implementers.
 
 **Un-parked 2026-08-20:** the 2026-07-19 "inputs unavailable" premise no longer holds. `c:/git/meddbase-analysis`
 holds `rig.rules.json` + `deployments.json` and `.rig/` stores through **`ae2cdb64e1cb`** (2026-08-18, 3.9 GB,

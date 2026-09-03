@@ -3,6 +3,7 @@
 **Status:** todo · **Priority: LOW-MEDIUM** (wasted index time and inflated counts; it became visible because a
 leaked test project dominated a compile-health calibration, contributing 24,309 of 24,545 error diagnostics) ·
 **Found:** 2026-08-21, calibrating the compile-health disclosure · **Family:** indexing / scoping
+**Triage:** ready-for-agent
 
 ## The gap
 

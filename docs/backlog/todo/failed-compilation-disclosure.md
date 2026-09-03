@@ -7,6 +7,7 @@ edit; the failure is a confident "nothing calls this", not an error) · **Found:
 [equivalence-test-matrix](../../spikes/equivalence-test-matrix.md) § "Non-compiling tree" while specifying the
 [live-background-index](../done/live-background-index.md) spike pool · **Family:** disclosure / extraction
 provenance
+**Triage:** ready-for-agent
 
 **Decision:** the **product owner chose the prefix-with-disclosure approach on 2026-08-20** — facts derived
 from partial/failed binding must be prefixed with a disclosure rather than silently presented as sound, and the

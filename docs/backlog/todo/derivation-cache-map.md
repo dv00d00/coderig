@@ -1,13 +1,13 @@
 # Caching and live derivation — wayfinder
 
-**Status:** wayfinder map · 6 children, child 4 retired as already fixed and five remain · **Opened:** 2026-09-02 ·
+**Status:** wayfinder map · 6 children, two terminal and four remain · **Opened:** 2026-09-02 ·
 **Family:** performance / query cache / live index
 
 ## Shared root cause
 
 A derived artifact is rebuilt **per query** instead of once per generation or once per store. Each child is one
 artifact caught doing that — the whole-store EP set, the cross-method correlation, the live EP memos, the graph
-index, and the shaped graph itself — and in every case the cheaper scope already exists somewhere in the
+index, and the now-shipped warm shaped graph — and in every case the cheaper scope already exists somewhere in the
 program (`IQueryArtifactCache`, `LiveFactSource.ArtifactMemo`, `QueryCacheKeys`).
 
 ## Children, in dependency order
@@ -23,8 +23,8 @@ program (`IQueryArtifactCache`, `LiveFactSource.ArtifactMemo`, `QueryCacheKeys`)
    — closed 2026-09-02, found already fixed by inspection: both consumers already route through the cache, no new key, no new schema axis.
 5. [Baseline a `rig serve` query batch](./derivation-cache-6-rig-serve-batch-baseline.md) — the measurement
    that decides the one below; only meaningful once 1 has landed.
-6. [Warm the shaped graph across queries in `rig serve`](./derivation-cache-5-warm-graph-across-queries.md) —
-   design-gated umbrella, blocked by that baseline.
+6. [Warm the shaped graph across queries in `rig serve`](../done/derivation-cache-5-warm-graph-across-queries.md) —
+   shipped bounded process cache; the baseline above now decides whether to keep and productionise it.
 
 ## Already measured
 
@@ -56,7 +56,7 @@ Cards are referenced by name below, because the list above is now ordered rather
   `FactGraphData` object per query, so a resident graph would still rebuild its traversal index every query
   and would measure as a partial win for a reason unrelated to residency.
 
-**Recommended, still Dmytro's call:** the landing order above — event-handoff memo, then the hazards
-correlation cache, then the live EP memos, with the warm graph last and gated on the baseline card. The EP
-consumer routing is independent of the graph question and can land at any point.
+**Recommended, still Dmytro's call:** land the event-handoff memo, then the hazards correlation cache, then the
+live EP memos; run the batch baseline after the event-handoff memo to decide whether the already-shipped warm
+graph should be kept and productionised. The EP consumer routing and warm graph are already terminal records.
 - Each child's own open questions live on that child's card, not here.

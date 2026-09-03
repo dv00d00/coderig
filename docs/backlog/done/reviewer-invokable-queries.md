@@ -81,6 +81,6 @@ tail. Everything above is unchanged. The open items now live on their own cards:
 - [`rig peers` — sibling entry-point discovery](../needs-review/rig-peers-sibling-entry-point-discovery.md) — ranked item 2.
 - [`reaches --without-guard` — the guard-on-path query](../needs-review/reaches-without-guard-query.md) — item 3.
 - [`rig assert` — reviewer-authored policy gates](../needs-review/rig-assert-reviewer-authored-policy-gates.md) — item 4.
-- [Encode the parity preset and read framing in the rig skill](../todo/parity-preset-in-the-rig-skill.md) — item 1's stated remainder.
+- [Encode the parity preset and read framing in the rig skill](./parity-preset-in-the-rig-skill.md) — accepted as shipped.
 - [Serialization-sink typing](../needs-review/serialization-sink-typing.md) — item 5.
 - [Transaction-scope facts](../needs-review/transaction-scope-facts.md) — item 6.

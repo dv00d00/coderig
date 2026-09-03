@@ -5,8 +5,8 @@
 
 **Terminal note — 2026-09-03:** the count divergence shipped as part of
 [CLI/web collapse child 1](./cli-web-collapse-1-impact-selection-into-the-engine.md) in `cacb5d92`.
-The unavailable historical row's attribution was split into
-[impact-extra-row-attribution](../todo/impact-extra-row-attribution.md).
+The unavailable historical row's attribution was deliberately left unresolved on 2026-09-03: its store pair
+is gone and no product behavior depends on the answer.
 
 ### Repro
 

@@ -1,6 +1,8 @@
 # `non-transactional-write-loop`: a write batch with no enclosing transaction (partial-failure hazard)
 
 **Status:** todo · **Found:** 2026-06-26 (appointment-lifecycle deep-dive, debt-chase champion) · **Family:** detector-recall (new candidate)
+**Triage:** needs-info — decide suppress-versus-downgrade semantics and the path-level transaction-context
+substrate before this detector can be implemented honestly.
 
 ## The gap
 rig's loop-related detectors (`n_plus_1`, `dual_write`) fire on **read** loops (per-iteration `llblgen:read`/`fetch`).

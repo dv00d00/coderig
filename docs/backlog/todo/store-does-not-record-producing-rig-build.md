@@ -2,6 +2,7 @@
 
 **Status:** todo
 **Source:** demo prep, 2026-07-31 — found while assembling a peer demo on the MedDBase store
+**Triage:** ready-for-agent
 
 ### The problem
 

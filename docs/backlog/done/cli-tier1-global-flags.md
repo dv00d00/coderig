@@ -27,7 +27,7 @@
   `PhaseTimings` + OS/proc CPU/disk/RAM sampler + `TimingReport`, via a disposable `QueryTiming` helper)
   on `tree`/`callers`/`reaches`/`path`/`dispatch-fans`/`effects-diff`. It paid off immediately —
   attributed the reverse-query ~8s floor to **graph load (disk-IO, 1.5 GB read/query, CPU-idle), not
-  traversal** (see [derivation-cache-5-warm-graph-across-queries.md](../todo/derivation-cache-5-warm-graph-across-queries.md)).
+  traversal** (see [derivation-cache-5-warm-graph-across-queries.md](./derivation-cache-5-warm-graph-across-queries.md)).
 - **`impact --time` ✅ SHIPPED (`d2c71d1b`, 2026-07-06)** — uses the same `QueryTiming`/
   `TimingReport` model and telemetry CSV as indexing. The finer phase split remains separately tracked in
   [web timing unification](aaa-web-timing-unification-ui.md).

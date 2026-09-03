@@ -3,6 +3,8 @@
 **Status:** todo
 **Source:** extracted from `docs/rig-review-issues.md`, 2026-06-25 (D8 / `--files` path issue and D4
 boundary-marker item from the UX section)
+**Triage:** needs-triage — D8 path identity and D4 boundary disclosure are independently shippable defects
+and need separate cards under the one-file-per-issue rule.
 
 ### D8 — `--files` paths are shortened tails, not solution-root-relative
 

@@ -2,6 +2,8 @@
 
 **Status:** open bug. Found 2026-08-24 by an agent using rig on rig's own source during unrelated work,
 which is the point worth keeping: this is the failure mode rig exists to prevent, hit by rig.
+**Triage:** needs-triage — the card combines accessor resolution, lambda-root display, and unverified
+field/event/path variants; split or explicitly scope those before implementation.
 
 ## The bug
 

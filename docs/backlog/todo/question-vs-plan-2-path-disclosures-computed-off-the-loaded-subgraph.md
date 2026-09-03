@@ -4,6 +4,8 @@
 choice; the path answer itself is unaffected, but "matched 6 distinct symbols" is exactly the kind of line a
 reader trusts to be a property of the question, not of the query plan) · **Found:** 2026-08-21, by the
 live-vs-store equality gate while migrating `path` onto `IQueryFactSource` · **Family:** disclosure / query paths
+**Triage:** needs-info — decide whether the `Fact graph:` diagnostic moves behind `--time` or becomes a
+plan-independent answer field.
 
 ## The bug
 

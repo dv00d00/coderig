@@ -10,7 +10,8 @@ This file is only the things that aren't obvious from those and that you'd other
 
 ### Issue tracker
 
-Work is tracked as one Markdown card per issue under `docs/backlog/{todo,progress,done}`. See `docs/agents/issue-tracker.md`.
+Work is tracked as one Markdown card per issue under
+`docs/backlog/{todo,progress,needs-review,done,wont-do}`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
@@ -31,7 +32,7 @@ This is a single-context repository. The canonical glossary is `docs/ubiquitous-
   also exposes `serve` (interactive web explorer), `impact`/`effects-diff`, hazard views, deployment
   attribution, per-commit stores, and assembly-reference usage. Treat README's command table and
   `Rig.Cli/CommandLine/Root.cs` as the current surface, not archived milestone docs.
-- Work is tracked as files in `docs/backlog/{todo,progress,done}/`; the old `docs/progress.md` and
+- Work is tracked as files in `docs/backlog/{todo,progress,needs-review,done,wont-do}/`; the old `docs/progress.md` and
   `docs/handover.md` no longer exist. The 2026-07-19 code audit leaves 16 todo cards and 5 locally actionable
   partial items in `progress/`; the directory listing is authoritative. Four cards with shipped slices but
   MedDBase-dependent remaining work live in `todo/` while that external source/store is unavailable.

@@ -4,6 +4,7 @@
 traversal index once per GENERATION" and "once per QUERY" — worth ~0.4-0.5s of pure CPU per live query on
 MedDBase, on top of the graph the host already holds) · **Found:** 2026-08-24, while memoizing
 `FactPathFinder.BuildIndex` / `BuildReverseMaps` on graph identity · **Family:** live index / performance
+**Triage:** ready-for-agent
 
 ## What now works
 
@@ -53,7 +54,8 @@ meant to be: **built once per generation**, not once per query.
 
 ## Why this is the FIRST implementation ticket in the caching cluster
 
-It is the precondition for [warming the shaped graph across queries in `rig serve`](./derivation-cache-5-warm-graph-across-queries.md),
+It is the precondition for fully benefiting from the shipped
+[warm graph across queries in `rig serve`](../done/derivation-cache-5-warm-graph-across-queries.md),
 not a subordinate of it. The index memo is keyed on graph OBJECT identity, and all seven traversal entry
 points listed above hand their graph through `MarkEventSubscriptionHandoffs` first. A graph kept resident in
 the server process would therefore still be handed through that rewrite and still yield a fresh

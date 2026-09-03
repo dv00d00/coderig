@@ -3,6 +3,8 @@
 **Status:** todo
 **Source:** demo prep, 2026-07-31 — hit while scripting per-EP effect counts; produced wrong numbers for
 several minutes before the discrepancy was noticed
+**Triage:** needs-info — choose rejection of `--view` with TSV or a real view-aware TSV projection; warning-only
+is explicitly insufficient.
 
 ### Repro
 

@@ -10,6 +10,7 @@ UNBLOCKED, but sequenced, not drive-by: condition extraction is an extraction ch
 re-index (`rig index <MedDBase.slnx> --rules rig.rules.json` from `meddbase-analysis`, ~3 min on the warm
 dtb cache) before the 40-site recalibration can be re-run. · **Found:** 2026-06-26 (adversarial source verification of all 40 MedDBase
 sites) · **Family:** detector-precision
+**Triage:** ready-for-agent
 
 ## Shipped: bucket #1 — the lock-enclosed tier (2026-07-02)
 

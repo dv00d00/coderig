@@ -27,7 +27,7 @@ shapes to model. That model is rules data, not core C#.
 Guard sets are **direct** (one-hop) control dependence, so the `⎇` annotation is "the nearest gating
 predicate", not the complete firing condition; an early-return chain attaches its guards up the chain, not
 onto the call site. That is a decided wontfix — see
-[guard-set-direct-vs-transitive-control-dependence](../done/guard-set-direct-vs-transitive-control-dependence.md).
+[guard-set-direct-vs-transitive-control-dependence](../wont-do/guard-set-direct-vs-transitive-control-dependence.md).
 Consequence for this card: `--without-guard` can honestly answer "no edge on this path carries predicate G",
 and must not claim "G cannot hold". ANDing predicate *text* across methods is also semantically loose
 (`name` here ≠ `name` elsewhere).

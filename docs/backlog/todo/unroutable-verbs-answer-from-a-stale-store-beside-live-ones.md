@@ -1,6 +1,7 @@
 # `symbols`/`show`/`refs` answer from the STORE while `callers` answers LIVE, one command apart
 
 **Status:** open bug. Found 2026-08-24 by an agent reviewing an MR, in the same shell, one command apart.
+**Triage:** ready-for-agent
 
 ## What happens
 

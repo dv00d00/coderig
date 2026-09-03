@@ -4,6 +4,8 @@
 whenever `deployments.json` is configured — which it is on `meddbase-analysis`; and it is absent from the one
 instrument that would show it) · **Found:** 2026-08-21, reviewing the `tree` migration ·
 **Family:** live index / performance
+**Triage:** needs-info — the rules-fingerprint key and the measured warm-versus-lazy policy must be settled
+before moving the memo onto `LiveFactSource`.
 
 ## The bug
 

@@ -26,7 +26,7 @@ tsv|json`, and `impact --time`. Record: [cli-tier1-global-flags](../done/cli-tie
 
 `--time` on the traversal verbs paid for itself immediately — it attributed the reverse-query ~8s floor to
 **graph load (disk IO, 1.5 GB read per query, CPU-idle), not traversal**, which is the finding behind
-[warm-graph-across-queries](../todo/derivation-cache-5-warm-graph-across-queries.md). Nothing comparable is
+[warm-graph-across-queries](../done/derivation-cache-5-warm-graph-across-queries.md). Nothing comparable is
 outstanding on `derive`/`entrypoints`, and `--no-cache` on those paths is a debugging affordance with no
 named consumer. Both are cheap; neither is asked for.
 

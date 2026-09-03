@@ -3,6 +3,7 @@
 **Status:** open decision (Dmytro's call). The tier itself SHIPPED 2026-08-03 (on by default, `--no-amplification`
 opt-out); this item is only about the SCOPE of what it displays — i.e. `observations.amplification` (**tier 2**,
 the intra-method looped effect).
+**Decision:** won't do — declined 2026-09-03.
 
 **Related decision already taken, in the OPPOSITE direction (2026-08-04, `0fd62eb8`):** the *tier-3*
 `crossMethodAmplification` witness gate went **all-IO** — empty `witnesses` = every discovered provider minus
@@ -77,3 +78,9 @@ only when a user asks for intrinsics AND the scope is widened.
 
 Whatever is chosen, the change is `observations.amplification` in `builtin-rules.json` plus a line in the
 "CANDIDATES FOR EXPANSION" comment right above it, and re-measuring the section size on the real store.
+
+## Decision — won't do (2026-09-03)
+
+Keep the shipped network-crossing scope. Widening would mostly duplicate existing `n_plus_1`, race, and
+contention findings while adding hundreds of lower-actionability rows. The generic observation count continues
+to disclose out-of-scope looped effects, so the narrower presentation does not discard facts.

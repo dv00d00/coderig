@@ -1,6 +1,7 @@
 # Guard sets are DIRECT control dependence — the `⎇` annotation under-reports the full firing condition
 
 **Status:** todo · **Priority: LOW** (correct-by-design; a disclosure-completeness gap, not a wrong answer) · **Found:** 2026-06-28 (dogfooding `tree` on `MMS.PerformanceLogger.Factory` → `ClassFactory.CreateInstance`) · **Family:** effect-precision / disclosure-completeness
+**Decision:** wontfix — moved to `wont-do/` on 2026-09-03.
 **Related:** [[branch-aware-effects-shipped]] (the feature this refines)
 
 ## The observation
@@ -100,8 +101,8 @@ shape above), and the inter-procedural AND along a root→effect path that
 
 ## Wontfix — 2026-09-02
 
-Moved `todo/` -> `done/` as a **wontfix**, per the tracker convention that a wontfix decision moves the card
-to `done` and records the reason. The reason is this card's own recommendation, quoted:
+Moved from `todo/` as a **wontfix** and migrated from `done/` to the dedicated `wont-do/` terminal stage on
+2026-09-03. The reason is this card's own recommendation, quoted:
 
 > **Recommendation (LOW)** — "Leave as-is for now and read the `⎇` annotation as **"the nearest gating
 > predicate"**, a disclosure hint — NOT the complete precondition."

@@ -35,7 +35,7 @@ Which relations count as "peer", and whether they are rules data. Resource-ident
 effect sites behind `AppointmentEntity`** and **16.6% of llblgen effects carrying no entity resource at all**
 (`LinqMetaData` 2,195, `CommonEntityBase` 554, `int` 359). So resource-identity peering is coarse; see
 [telemetry-join-to-effect-sites](../todo/telemetry-join-to-effect-sites.md) for the measured cardinality and
-[quoted-query-resource-attribution](../todo/quoted-query-resource-attribution.md) for the missing-resource half.
+[quoted-query-resource-attribution](../wont-do/quoted-query-resource-attribution.md) for the declined missing-resource half.
 
 ## What counts as finishing
 

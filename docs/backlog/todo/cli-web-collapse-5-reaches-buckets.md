@@ -1,6 +1,7 @@
 # `reaches` bucket classification becomes part of the result
 
 **Status:** todo · designed 2026-09-02, no code written · **Family:** query correctness / CLI-web parity
+**Triage:** ready-for-agent
 
 Shared rationale and the three renderer rules are on [the wayfinder map](./cli-web-collapse-map.md). This card
 carries scope, ownership, verification and status only.

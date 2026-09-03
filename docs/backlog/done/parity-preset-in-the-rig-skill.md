@@ -1,8 +1,9 @@
 # Encode the parity preset and its read framing in the rig skill
 
 **Status:** todo · **Family:** reviewer-invokable queries · agent skill
-**Extracted from:** [reviewer-invokable-queries](../done/reviewer-invokable-queries.md) (item 1's stated remainder), 2026-09-02
+**Extracted from:** [reviewer-invokable-queries](./reviewer-invokable-queries.md) (item 1's stated remainder), 2026-09-02
 **Triage:** ready-for-agent
+**Decision:** accepted as shipped 2026-09-03.
 
 ## What was decided, and what is left
 
@@ -37,4 +38,10 @@ deletes the destination first. Never hand-edit the installed copy.
 - The skill does not claim rig has a `parity` command — it does not.
 - The provider tokens in the preset are named as MedDBase-ruleset vocabulary, not as rig behaviour (the
   skill/docs half of this was finding F8 of
-  [core-purity-project-vocabulary](../done/core-purity-project-vocabulary.md)).
+  [core-purity-project-vocabulary](./core-purity-project-vocabulary.md)).
+
+## Closure (2026-09-03)
+
+The canonical skill documents the behavior-parity token list as MedDBase domain policy rather than a built-in
+alias, and `REFERENCE.md` supplies the symmetric-difference framing. The additional SmartLetter worked example
+does not justify keeping a separate active card.

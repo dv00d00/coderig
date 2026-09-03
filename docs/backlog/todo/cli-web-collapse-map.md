@@ -153,7 +153,7 @@ added in both directions:
 
 **Relates, not superseded:**
 
-- [CLI/web parity — wayfinder](./cli-web-parity-map.md) and
+- [CLI/web parity — terminal wayfinder](../done/cli-web-parity-map.md) and
   [Seed, effect and filter disclosure on `/api/*`](./cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md)
   — this family removes the mechanism by which those gaps appear; the individual disclosures it names are
   still their own work.
@@ -173,4 +173,4 @@ added in both directions:
 | --- | --- |
 | the thesis verdict, and the accident/legitimate/temporary classification | verified against read code |
 | line-count estimates on child 2 | approximate, read from ranges |
-| the extra `echoactor …Inbox` row's attribution, intrinsic-only versus hazard-only | UNSETTLED; the procedure is on [impact-extra-row-attribution](./impact-extra-row-attribution.md) |
+| the extra `echoactor …Inbox` row's attribution, intrinsic-only versus hazard-only | UNSETTLED and intentionally discarded on 2026-09-03: the historical store pair is unavailable and no product behavior depends on the answer |

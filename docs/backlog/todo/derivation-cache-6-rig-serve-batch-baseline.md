@@ -28,8 +28,9 @@ Retaining a graph that size is a real memory commitment, and it should not be sp
 
 ## The decision it feeds
 
-Proceed with [warming the shaped graph across queries](./derivation-cache-5-warm-graph-across-queries.md)
-only if BOTH hold on the fresh numbers:
+Keep and productionise the shipped
+[warm graph across queries](../done/derivation-cache-5-warm-graph-across-queries.md) only if BOTH hold on the fresh
+numbers:
 
 1. repeated queries still spend most of their wall time in identical graph loads; and
 2. the expected review workflow issues enough queries to amortize ~1.7 GB of retained memory.

@@ -27,7 +27,7 @@ Cardinality, measured on store `409c330b99dd`:
 
 And **3,108 of 18,768 llblgen effects (16.6%) carry no entity resource at all** (`LinqMetaData` 2,195,
 `CommonEntityBase` 554, `int` 359) — tracked separately as
-[quoted-query-resource-attribution](./quoted-query-resource-attribution.md), also postponed.
+[quoted-query-resource-attribution](../wont-do/quoted-query-resource-attribution.md), declined after review.
 
 ## The options, and where each stands
 

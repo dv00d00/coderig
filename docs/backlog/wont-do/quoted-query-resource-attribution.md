@@ -2,6 +2,7 @@
 
 **Status:** todo — postponed pending a high-effort extraction and resource-model decision.
 **Triage:** needs-triage
+**Decision:** won't do — declined 2026-09-03 after the extraction and resource-model review.
 
 ## The gap the v5 expression-tree gate exposed
 
@@ -37,3 +38,9 @@ Keep the amplification/anchor semantics unchanged: the effect sits at the query 
 query in a real loop anchors normally; nothing per-row is claimed.
 
 Depends on nothing; supersedes the `type_argument`-for-ctors idea recorded earlier.
+
+## Decision — won't do (2026-09-03)
+
+Do not add a quoted-query resource model for the measured residual. It would introduce new extraction facts and
+multi-resource derivation semantics to recover one confirmed real table-touch class, while the broader runtime
+oracle still cannot validate the mapping precisely enough to justify that complexity.

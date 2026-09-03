@@ -16,7 +16,7 @@ Use current code and navigation, not archived milestone prose:
 - Per-command options: each command's `Build` method or `dotnet run --project src/Rig.Cli -- <command> --help`.
 - Product overview and concise command table: `README.md`.
 - Documentation map: `docs/README.md`; vocabulary: `docs/ubiquitous-language.md`.
-- Work state: files under `docs/backlog/{todo,progress,done}/`.
+- Work state: files under `docs/backlog/{todo,progress,needs-review,done,wont-do}/`.
 - Operator-facing `rig` skill: `.agents/skills/rig/{SKILL.md,REFERENCE.md}`.
 
 When the sources disagree, treat `Root.cs` and the command builders as the executable API, then update

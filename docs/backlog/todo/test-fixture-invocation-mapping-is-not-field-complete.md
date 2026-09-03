@@ -4,6 +4,7 @@
 facts that differ from what the real pipeline emits, so an arm can look covered when it is unreachable, and an
 absence can be asserted that only holds because the fixture dropped the field) · **Found:** 2026-08-21, exposed
 by grouping `FactInvocation`'s members · **Family:** test infrastructure / fact projections
+**Triage:** ready-for-agent
 
 ## The gap
 
@@ -62,4 +63,4 @@ fixture behaviour?" — rather than a value to re-baseline. That is the whole va
 - Fourth copy of the mapping single-sourced by
   [bounded reach inputs dropping EnclosingScopes](../done/bounded-reach-inputs-drop-enclosing-scopes-shipped.md).
   The first three were in production; this one is in the tests that are supposed to catch exactly this class of
-  drift, which is the part worth being uncomfortable about.
+drift, which is the part worth being uncomfortable about.

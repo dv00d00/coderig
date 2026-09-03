@@ -176,7 +176,7 @@ byte identity re-checked against a baseline captured BEFORE dispatch, and the D4
 
 **Not done, each now its own card:**
 
-- [The impact location memo trades a cold fast path for the warm hit](../todo/impact-location-memo-cold-cost.md)
+- [The impact location memo trades a cold fast path for the warm hit](../wont-do/impact-location-memo-cold-cost.md) — accepted as-is
 - [Two web surfaces still call `perEp.length` "behavioral"](../todo/web-impact-mislabels-per-ep-count-as-behavioral.md)
 
 The four selection statics (`FilterPerEpEffects`, `EffectChangedEpCount`, `ClassifyStructuralCause`,

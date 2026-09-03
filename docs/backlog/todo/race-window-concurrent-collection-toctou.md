@@ -1,6 +1,7 @@
 # `race_window` recall gap: check-then-act over a concurrent/shared COLLECTION
 
 **Status:** todo · **Found:** 2026-06-26 (MR !10788 review) · **Family:** detector-recall (FR-1)
+**Triage:** ready-for-agent
 
 ## The gap
 `race_window` (`FactHazardDeriver.DeriveRaceWindows`) pairs a `shared_state:read` with a `shared_state:mutate`

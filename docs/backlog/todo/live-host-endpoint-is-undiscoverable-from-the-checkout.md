@@ -3,6 +3,8 @@
 **Status:** open bug. Found 2026-08-24 by an agent reviewing an MR in `meddbase-main-application-2` with a
 live host serving that solution. It recovered — by reading rig's own source — and reported the recovery cost
 as the finding.
+**Triage:** needs-triage — the card proposes three independently shippable fixes and changes the endpoint
+identity contract without an accepted migration/compatibility plan.
 
 ## What happens
 

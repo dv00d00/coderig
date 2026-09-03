@@ -553,7 +553,7 @@ re-indexed once — ~253 s on MedDBase (`done/live-background-index.md` § "Why"
   removed 2026-07-06). Nothing in this design needs one.
 - Note for the reviewer: `/api/meta`'s `derivationVersion` **already** lacks a store-identity axis — a
   separate live bug, tracked at
-  [api-meta-derivation-version-lacks-store-identity](../backlog/todo/cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md).
+  [api-meta-derivation-version-lacks-store-identity](../backlog/done/cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md).
   This feature does not fix it and does not depend on it, but a browser on a re-indexed same-commit store will
   serve a stale disclosure until it lands. **Say so in review; do not silently rely on the bump above to cover
   it.**

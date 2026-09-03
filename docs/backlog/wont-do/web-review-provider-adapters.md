@@ -2,6 +2,7 @@
 
 **Status:** todo — provider and authentication policy not chosen. · **Family:** web review / integrations
 **Triage:** needs-info
+**Decision:** won't do — declined 2026-09-03.
 
 ## Goal
 
@@ -35,3 +36,9 @@ does not inherit a local changed-file blind spot.
 
 - Posting comments, approvals, merge status, checks, or write access to the provider.
 - Supporting GitHub, GitLab, and Bitbucket in the first slice.
+
+## Decision — won't do (2026-09-03)
+
+Keep Web Review local and store-backed. A remote provider adapter expands the product into credential,
+provider, and deployment policy without improving the semantic source of truth; users can continue selecting
+the immutable base/head stores directly.
