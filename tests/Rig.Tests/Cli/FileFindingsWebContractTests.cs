@@ -2,6 +2,7 @@ using Rig.Cli.Commands;
 using Rig.Cli.Effects;
 using Rig.Cli.Services;
 using Rig.Cli.Web;
+using Rig.Domain.Data;
 using Shouldly;
 
 namespace Rig.Tests.Cli;
@@ -97,7 +98,8 @@ public sealed class FileFindingsWebContractTests
                     WitnessDepth: 6,
                     Guards: null,
                     DispatchBasis: "roslyn",
-                    DispatchDegree: 1
+                    DispatchDegree: 1,
+                    IterationDetail: "order in orders"
                 ),
             ],
             CrossMethodDerived: true
@@ -114,25 +116,37 @@ public sealed class FileFindingsWebContractTests
     }
 
     // The evidence tier the note under the finding list is allowed to claim. Pinned by a test because the
-    // three inputs are independent and the failure is SILENT: get it wrong and a guessed virtual hop reads as
+    // four inputs are independent and the failure is SILENT: get it wrong and a guessed virtual hop reads as
     // a confirmed per-iteration call, which is the exact overclaim the tier exists to prevent.
+    //
+    // `guardPredicate` is the raw branch text; the test ENCODES it, because the tier decodes and an unencoded
+    // string decodes to zero guards — a fixture that skipped the encoding would assert nothing.
     [Test]
-    [Arguments(0, null, null, 0, "direct")] // unconditional in the loop, witness in the callee's own body
-    [Arguments(1, null, null, 0, "direct")] // one hop down, still no dispatch on the path
-    [Arguments(0, "if (order.IsActive)", null, 0, "candidate")] // the CALL itself may not run every iteration
-    [Arguments(0, null, "roslyn", 0, "candidate")] // exact hops, but dispatch was crossed
-    [Arguments(4, null, null, 0, "candidate")] // real calls all the way, just further out
-    [Arguments(0, null, "heuristic", 0, "inferred")] // a name/arity guess beats every other strength
-    [Arguments(0, null, null, 3, "inferred")] // one source method fanned out to 3 targets
-    [Arguments(9, "if (x)", "heuristic", 12, "inferred")] // every doubt at once
+    [Arguments(0, null, "order in orders", null, 0, "direct")] // unconditional in the loop, witness in the callee's body
+    [Arguments(1, null, "order in orders", null, 0, "direct")] // one hop down, still no dispatch on the path
+    [Arguments(0, "order.IsActive", "order in orders", null, 0, "candidate")] // the CALL may not run every iteration
+    // THE 40% CASE: `foreach` contributes a control dependence about itself, whose predicate IS the iterated
+    // collection. It does not make the call conditional, and 619 of 1,530 guarded MedDBase rows have no other
+    // guard — so grading on the raw guard string downgraded two fifths of the guarded evidence.
+    [Arguments(0, "orders", "order in orders", null, 0, "direct")]
+    [Arguments(0, "orders", "order in orders.Where(o => o.Live)", null, 0, "candidate")] // a DIFFERENT collection is a real guard
+    [Arguments(0, "count > 0", "count > 0", null, 0, "candidate")] // a `while` carries no " in ", so nothing is filtered
+    [Arguments(0, null, "order in orders", "roslyn", 0, "candidate")] // exact hops, but dispatch was crossed
+    [Arguments(4, null, "order in orders", null, 0, "candidate")] // real calls all the way, just further out
+    [Arguments(0, null, "order in orders", "heuristic", 0, "inferred")] // a name/arity guess beats every other strength
+    [Arguments(0, null, "order in orders", null, 3, "inferred")] // one source method fanned out to 3 targets
+    [Arguments(9, "x", "order in orders", "heuristic", 12, "inferred")] // every doubt at once
     public void The_anchor_evidence_tier_grades_guards_dispatch_and_depth_together(
         int depth,
-        string? guards,
+        string? guardPredicate,
+        string iterationDetail,
         string? dispatchBasis,
         int dispatchDegree,
         string expected
     )
     {
+        var guards = guardPredicate is null ? null : FactStructuralContext.EncodeGuards([(guardPredicate, true)]);
+
         var anchor = new CrossMethodAmplificationDataset.AnchorFinding(
             Caller: Enclosing,
             FilePath: File,
@@ -144,7 +158,8 @@ public sealed class FileFindingsWebContractTests
             WitnessDepth: depth,
             Guards: guards,
             DispatchBasis: dispatchBasis,
-            DispatchDegree: dispatchDegree
+            DispatchDegree: dispatchDegree,
+            IterationDetail: iterationDetail
         );
 
         anchor.Evidence.ShouldBe(expected);
@@ -182,9 +197,12 @@ public sealed class FileFindingsWebContractTests
                             WitnessOperation: "execute",
                             WitnessResource: "Layout",
                             WitnessDepth: 2,
-                            Guards: "if (node.HasKey)",
+                            // Two guards, ENCODED as the store holds them, one of them the redundant foreach
+                            // guard and one a real else-arm — so this pins the whole render, not just decoding.
+                            Guards: FactStructuralContext.EncodeGuards([("nodes", true), ("node.HasKey", false)]),
                             DispatchBasis: "heuristic",
-                            DispatchDegree: 5
+                            DispatchDegree: 5,
+                            IterationDetail: "node in nodes"
                         ),
                     ],
                     CrossMethodDerived: true
@@ -193,9 +211,14 @@ public sealed class FileFindingsWebContractTests
             .Anchors.ShouldHaveSingleItem();
 
         anchor.Evidence.ShouldBe("inferred");
-        anchor.Guards.ShouldBe("if (node.HasKey)");
         anchor.DispatchBasis.ShouldBe("heuristic");
         anchor.DispatchDegree.ShouldBe(5);
+
+        // DISPLAY text on the wire, never the encoded fact: the separators and the polarity flag are internal,
+        // the client cannot decode them, and rendering the raw string leaked "\x1f1" into the review UI. The
+        // loop-redundant `nodes` guard is dropped and the false-polarity arm is negated.
+        anchor.Guards.ShouldBe("!node.HasKey");
+        anchor.Guards.ShouldNotContain("");
     }
 
     // The distinction the overlay's disclosure rests on: no anchors because there are none, versus no anchors

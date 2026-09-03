@@ -1,3 +1,4 @@
+using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 
@@ -51,15 +52,19 @@ internal static class CrossMethodAmplificationDataset
         string WitnessResource,
         int WitnessDepth,
         // The three evidence columns the (anchor x witness) dataset always carried and the displayed grain
-        // used to drop (TSV columns 18, 19, 21). Without them every anchor renders under one flat hedge, so a
-        // depth-0 unconditional call reached through real calls reads exactly like a depth-5 witness found
-        // only through a name-guessed virtual hop. Guards are the ANCHOR call site's control-dependence set
-        // (null/"" == the call is unconditional in its loop); DispatchBasis is the reach provenance
-        // (null == no dispatch hop at all, "roslyn" == exact mined hops, "heuristic" == at least one guess);
-        // DispatchDegree is >1 only when one source method fanned out to N targets on the shortest path.
+        // used to drop (TSV columns 18, 19, 21), plus the iteration DETAIL the guard filter needs. Without
+        // them every anchor renders under one flat hedge, so a depth-0 unconditional call reached through real
+        // calls reads exactly like a depth-5 witness found only through a name-guessed virtual hop.
+        //
+        // Guards is the ANCHOR call site's ENCODED control-dependence set (FactStructuralContext.EncodeGuards
+        // — separators and polarity flags, never display text: render it, don't print it). DispatchBasis is
+        // the reach provenance (null == no dispatch hop at all, "roslyn" == exact mined hops, "heuristic" ==
+        // at least one name/arity guess). DispatchDegree is >1 only when one source method fanned out to N
+        // targets on the shortest path. IterationDetail is the loop's own `x in COLL` text.
         string? Guards,
         string? DispatchBasis,
-        int DispatchDegree
+        int DispatchDegree,
+        string IterationDetail
     )
     {
         public string Confidence =>
@@ -81,10 +86,21 @@ internal static class CrossMethodAmplificationDataset
         //   inferred  — a name/arity-guessed dispatch hop, or a fan-out to N>1 targets, sits on the path, so
         //               the witness may live in an implementation this anchor never reaches.
         //   candidate — everything else: reachable and looped, with more frames between than direct allows.
+        //
+        // The guard test runs on DecodeGuardsBeyondLoop, not on `Guards` being empty: a `foreach` contributes
+        // a control dependence about ITSELF (predicate == the iterated collection), and on MedDBase that
+        // redundant guard is the ONLY guard on 619 of 1,530 guarded rows. Testing the raw string downgraded
+        // two fifths of the guarded evidence for a guard that means "this is a foreach".
         public string Evidence =>
             DispatchBasis == "heuristic" || DispatchDegree > 1 ? "inferred"
-            : WitnessDepth <= 1 && DispatchBasis is null && string.IsNullOrEmpty(Guards) ? "direct"
+            : WitnessDepth <= 1 && DispatchBasis is null && FactStructuralContext.DecodeGuardsBeyondLoop(Guards, IterationDetail).Count == 0
+                ? "direct"
             : "candidate";
+
+        // The anchor's guards as DISPLAY text — decoded, whitespace-collapsed, else-arms negated, the
+        // loop-redundant foreach guard dropped, untruncated (the web ellipsises in CSS). "" when nothing
+        // remains, which is exactly when the row is not guarded in any way a reader should act on.
+        public string DisplayGuards => TreeRenderer.ShortGuards(Guards, IterationDetail, maxLength: int.MaxValue);
     }
 
     internal static IReadOnlyList<AnchorFinding> AnchorFindings(
@@ -105,7 +121,8 @@ internal static class CrossMethodAmplificationDataset
                 WitnessDepth: p.Finding.WitnessDepth ?? 0,
                 Guards: p.Anchor.Event.EnclosingGuards,
                 DispatchBasis: p.Finding.WitnessDispatchBasis,
-                DispatchDegree: p.Finding.WitnessDispatchDegree ?? 0
+                DispatchDegree: p.Finding.WitnessDispatchDegree ?? 0,
+                IterationDetail: p.Anchor.IterationDetail
             ))
             .OrderBy(f => f.FilePath, StringComparer.Ordinal)
             .ThenBy(f => f.Line)

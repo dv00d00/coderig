@@ -110,7 +110,8 @@ internal static class FileFindingsCodec
             WitnessDepth: a.WitnessDepth,
             Guards: a.Guards,
             DispatchBasis: a.DispatchBasis,
-            DispatchDegree: a.DispatchDegree
+            DispatchDegree: a.DispatchDegree,
+            IterationDetail: a.IterationDetail
         );
 
     private static CrossMethodAmplificationDataset.AnchorFinding Unmap(FileAnchorFindingDto a) =>
@@ -125,7 +126,8 @@ internal static class FileFindingsCodec
             WitnessDepth: a.WitnessDepth,
             Guards: a.Guards,
             DispatchBasis: a.DispatchBasis,
-            DispatchDegree: a.DispatchDegree
+            DispatchDegree: a.DispatchDegree,
+            IterationDetail: a.IterationDetail
         );
 }
 
@@ -157,7 +159,8 @@ internal sealed record FileAnchorFindingDto(
     // Raw evidence, stored: Evidence is derived from these three plus WitnessDepth, so it is not.
     string? Guards,
     string? DispatchBasis,
-    int DispatchDegree
+    int DispatchDegree,
+    string IterationDetail
 );
 
 internal sealed record FileFindingsPayload(

@@ -148,4 +148,44 @@ public static class FactStructuralContext
 
         return result;
     }
+
+    // The guards MINUS the one a `foreach` contributes about itself. Roslyn surfaces the enumerator's
+    // MoveNext as a control dependence whose predicate is the ITERATED COLLECTION, so a call that is
+    // unconditional inside `foreach (var row in Rows)` still decodes with a guard whose text is `Rows`.
+    // That guard says "this is a foreach", which the loop marker already said; it does NOT make the call
+    // conditional.
+    //
+    // Shared rather than duplicated because two callers ask the same question for different reasons and must
+    // not diverge: the tree renderer decides whether to draw the ⎇ glyph, and the tier-3 anchor's evidence
+    // grade decides whether a looped call is UNCONDITIONAL per iteration. Measured on MedDBase 2026-09-03:
+    // 619 of 1,530 guarded (anchor x witness) rows — 40% — carry nothing but this redundant guard, so a grade
+    // that skipped this filter downgraded two fifths of its guarded evidence for a guard that means nothing.
+    public static IReadOnlyList<(string Predicate, bool WhenTrue)> DecodeGuardsBeyondLoop(string? encoded, string? loopDetail)
+    {
+        var guards = DecodeGuards(encoded);
+        var collection = ForeachCollection(loopDetail);
+        if (guards.Count == 0 || collection is null)
+        {
+            return guards;
+        }
+
+        return guards.Where(g => !string.Equals(CollapseWhitespace(g.Predicate), collection, StringComparison.Ordinal)).ToList();
+    }
+
+    // The COLL of a `x in COLL` loop detail; null for while/for, which carry no iterated collection (and
+    // empirically do not emit the redundant condition-guard).
+    public static string? ForeachCollection(string? loopDetail)
+    {
+        if (string.IsNullOrEmpty(loopDetail))
+        {
+            return null;
+        }
+
+        var inAt = loopDetail!.IndexOf(" in ", StringComparison.Ordinal);
+        return inAt < 0 ? null : CollapseWhitespace(loopDetail.Substring(inAt + 4));
+    }
+
+    // Guard predicates are source TEXT, so a multi-line condition arrives with its newlines and indentation.
+    public static string CollapseWhitespace(string s) =>
+        string.Join(' ', s.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
 }

@@ -125,7 +125,8 @@ public sealed class FileFindingsCacheSchemaTests
                     WitnessDepth: 6,
                     Guards: "if (order.IsActive)",
                     DispatchBasis: "heuristic",
-                    DispatchDegree: 4
+                    DispatchDegree: 4,
+                    IterationDetail: "order in orders"
                 ),
             ],
             CrossMethodDerived: true

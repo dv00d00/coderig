@@ -243,19 +243,12 @@ internal static class TreeRenderer
 
     // The COLL of a `foreach (ident in COLL)` loop detail (StructuralContext's "{ident} in {expr}" form),
     // whitespace-collapsed for comparison; null when the detail is a while/for/null (no " in " marker).
-    private static string? ForeachCollection(string? loopDetail)
-    {
-        if (string.IsNullOrEmpty(loopDetail))
-        {
-            return null;
-        }
+    // Both now live on FactStructuralContext, beside the guard codec: the tier-3 anchor's evidence grade asks
+    // the same loop-redundancy question for a SEMANTIC reason (is this looped call unconditional?), and the
+    // two answers must not diverge.
+    private static string? ForeachCollection(string? loopDetail) => FactStructuralContext.ForeachCollection(loopDetail);
 
-        var inAt = loopDetail!.IndexOf(" in ", StringComparison.Ordinal);
-        return inAt < 0 ? null : CollapseWhitespace(loopDetail.Substring(inAt + 4));
-    }
-
-    private static string CollapseWhitespace(string s) =>
-        string.Join(' ', s.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+    private static string CollapseWhitespace(string s) => FactStructuralContext.CollapseWhitespace(s);
 
     // Collects effect-bearing methods in DFS (source) order, deduped — the backing of `tree --effects`.
     internal static void CollectEffectful(

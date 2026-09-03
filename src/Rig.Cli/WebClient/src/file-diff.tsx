@@ -95,7 +95,7 @@ type FileAnchor = {
   // The server's evidence tier plus the two fields that explain it. Sent rather than re-derived here, so the
   // note under the list cannot drift from the definition the server graded the row against.
   evidence: string;
-  guards: string | null;
+  guards: string;
   dispatchBasis: string | null;
   dispatchDegree: number;
 };

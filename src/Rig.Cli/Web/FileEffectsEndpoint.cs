@@ -331,7 +331,8 @@ internal static class FileEffectsEndpoint
                     anchor.WitnessDepth,
                     anchor.Confidence,
                     anchor.Evidence,
-                    anchor.Guards,
+                    // DISPLAY text, not the encoded fact: the client cannot decode separators or polarity.
+                    anchor.DisplayGuards,
                     anchor.DispatchBasis,
                     anchor.DispatchDegree
                 ))

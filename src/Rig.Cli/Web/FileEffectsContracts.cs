@@ -87,7 +87,9 @@ internal sealed record FileAnchorDto(
     int WitnessDepth,
     string Confidence,
     string Evidence,
-    string? Guards,
+    // Rendered display text, "" when the row carries no guard a reader should act on — never the
+    // encoded fact, and never null, so the client can test it as a plain string.
+    string Guards,
     string? DispatchBasis,
     int DispatchDegree
 );
