@@ -124,3 +124,33 @@ Found by Playwright smoke run 2026-09-03 against `rig serve` on the `aae396ea7e8
 (`/api/files`, `/api/search`, `/api/hotspots`, `/api/entrypoints`, `/api/providers`, `/api/runs`,
 `/api/meta`) served the dirty store fine. Both stores on the machine are dirty, so Review was unreachable by
 default rather than in an edge case.
+
+## Shipped 2026-09-03 — and what the real-data check does and does not prove
+
+`SchemaVersion.Index` 8 -> 9; `source_files.Dirty` written by `Writes.SaveAsync` from
+`GitProvenanceProbe.CaptureDirtyFiles`, captured at index start and end and unioned; `ToReviewFile` scopes
+the caveat per file, with the not-indexed-both-sides reason still taking priority. `TODO(dirty-provenance)`
+deleted. 5 new tests in `DirtyFileProvenanceTests` plus the two flipped ones.
+
+**A real bug surfaced in the probe.** `GitProvenanceProbe.Run` ended in `stdout.Trim()`, which eats the
+leading space of a porcelain record whose index is unmodified (`" M path"`), shifting its status field so the
+parse drops it. Because `Trim()` only touches the ends of the string and ` ` is not whitespace, it dropped
+**the first record only** — not every unstaged file, as first reported. Fixed by splitting `Run` (trimmed,
+existing callers) from `RunRaw` (verbatim, used by the `-z` parse). `StandardOutputEncoding = UTF8` added on
+the shared `ProcessStartInfo` for the same failure direction: OEM decoding of a non-ASCII path yields a
+string matching no indexed file.
+
+**Reindexed to v9** (`409c330b99dd-dirty`, 3m40s, 446,293 symbols, 2,444,657 refs). 12,121 `source_files`
+rows, **0 marked dirty** — and that zero is *correct*, not vacuous: each of the four dirty paths
+(`.slnf`, two `cluster.conf`, a `Web.config`) returns `indexed_rows=0`, so none is an indexed source file.
+This is the acceptance case from above, on real data, where the old gate served nothing at all.
+
+**Still unproven: the review path end-to-end.** That needs a store PAIR, and only one side is v9 —
+`aae396ea7e8e-dirty` is still v8, so `SchemaGate` will refuse it (correctly). Validating the 108-changed-file
+review means checking out `3826-service-credits-overrides` and indexing it too, which is a working-tree
+change in someone else's repo. The positive direction — a dirty `.cs` coming back not-semantic-ready — is
+covered by fixtures only; proving it on MedDBase would mean dirtying a real `.cs` file.
+
+**Not done, flagged rather than smuggled in:** no automated test for the start+end union itself (it needs a
+real index interrupted mid-run), and the two UI bugs under "Also in the blast radius" are untouched —
+`wwwroot` was out of scope for this slice.
