@@ -1,6 +1,6 @@
 # `MarkEventSubscriptionHandoffs` mints a new graph per query, so the graph-index memo never survives a query boundary
 
-**Status:** todo · **Priority: MEDIUM-HIGH** (it is the difference between "the resident host builds its
+**Status:** done — shipped 2026-09-03 · **Priority: MEDIUM-HIGH** (it is the difference between "the resident host builds its
 traversal index once per GENERATION" and "once per QUERY" — worth ~0.4-0.5s of pure CPU per live query on
 MedDBase, on top of the graph the host already holds) · **Found:** 2026-08-24, while memoizing
 `FactPathFinder.BuildIndex` / `BuildReverseMaps` on graph identity · **Family:** live index / performance
@@ -73,3 +73,11 @@ sharing change on the live path — it wants its own diff and its own live/store
 
 - `docs/backlog/todo/derivation-cache-3-live-ep-derivation-is-per-query-not-per-generation.md` — the same shape of bug (a memo
   that says "per generation" but is scoped to a query) in the EP derivation.
+
+## Resolution
+
+`MarkEventSubscriptionHandoffs` now weakly memoizes the rewrite by the identity pair `(graph,
+eventSubscriptionSites)`. Repeated live queries in one generation therefore receive the same marked graph
+object and reuse the existing graph-index memo; a different site-set instance is recomputed, so no stale
+classification crosses generations. Four focused regression tests cover stable reuse, equivalent-but-distinct
+sets, different classifications and the empty-set fast path. Release build and the 1,421-test main suite pass.

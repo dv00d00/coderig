@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using Rig.Domain.Data;
 using static System.Globalization.CultureInfo;
@@ -6,6 +7,35 @@ namespace Rig.Domain.Functions;
 
 public static partial class FactPathFinder
 {
+    private static readonly ConditionalWeakTable<FactGraphData, EventSubscriptionHandoffMemo> EventSubscriptionHandoffMemos = new();
+
+    // Per graph, site-set identity is the other half of the cache key. Both keys are weak: a retired graph
+    // generation and any transient site-set variant can be collected without an explicit invalidation pass.
+    private sealed class EventSubscriptionHandoffMemo
+    {
+        private readonly object gate = new();
+        private readonly ConditionalWeakTable<ISet<EventSubscriptionSite>, EventSubscriptionHandoffRewrite> rewrites = new();
+
+        public FactGraphData GetOrRewrite(FactGraphData graph, ISet<EventSubscriptionSite> eventSites)
+        {
+            lock (gate)
+            {
+                if (!rewrites.TryGetValue(eventSites, out var rewrite))
+                {
+                    var marked = RewriteEventSubscriptionHandoffs(graph, eventSites);
+                    // null means the rewrite was a no-op and the caller should return its graph parameter.
+                    // Keeping the original graph in this value would create a strong value -> weak-key path.
+                    rewrite = new EventSubscriptionHandoffRewrite(ReferenceEquals(marked, graph) ? null : marked);
+                    rewrites.Add(eventSites, rewrite);
+                }
+
+                return rewrite.MarkedGraph ?? graph;
+            }
+        }
+    }
+
+    private sealed record EventSubscriptionHandoffRewrite(FactGraphData? MarkedGraph);
+
     // Monomorphizes generic-FACTORY call edges (see FactGenericFactoryRule): an edge
     // `caller -> Factory<X,..>` whose call-site construct type arg X is concrete is rewritten to
     // `caller -> X.Target`, so the traversal goes straight to the constructed type's method and skips the
@@ -22,7 +52,8 @@ public static partial class FactPathFinder
     // edge co-located (same Caller/File/Line) with an event read — a "read" ref whose target is an event
     // (DocID "E:" prefix). A raise (`MyEvent?.Invoke`) reads the event too but has no co-located method-
     // group, so only real += / -= subscriptions match. Reclassified edges are sync-cut by default and
-    // walked under --async (tagged "⤳ via event"). Pure: returns a new graph; --raw skips this entirely.
+    // walked under --async (tagged "⤳ via event"). Pure: returns or reuses a rewritten graph; --raw skips
+    // this entirely.
     public static FactGraphData MarkEventSubscriptionHandoffs(FactGraphData graph, ISet<EventSubscriptionSite> eventSites)
     {
         if (eventSites.Count == 0)
@@ -30,6 +61,12 @@ public static partial class FactPathFinder
             return graph;
         }
 
+        var memo = EventSubscriptionHandoffMemos.GetValue(graph, static _ => new EventSubscriptionHandoffMemo());
+        return memo.GetOrRewrite(graph, eventSites);
+    }
+
+    private static FactGraphData RewriteEventSubscriptionHandoffs(FactGraphData graph, ISet<EventSubscriptionSite> eventSites)
+    {
         var changed = false;
         var rewritten = new List<CallEdge>(graph.CallEdges.Count);
         foreach (var e in graph.CallEdges)
