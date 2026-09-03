@@ -452,37 +452,8 @@ internal static class AmplifyCommand
         }
     }
 
-    // Collapse EVERY whitespace run (tabs, CR, LF, the newlines a multi-line LINQ query detail carries) to a
-    // single space, and trim. A raw newline inside a mined loop detail SPLITS a tsv row — `derive --format
-    // tsv` still leaks them, and reproducing that here would break any consumer that parses these rows.
-    internal static string Clean(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return "";
-        }
-
-        var sb = new System.Text.StringBuilder(value!.Length);
-        var pendingSpace = false;
-        foreach (var c in value)
-        {
-            if (char.IsWhiteSpace(c))
-            {
-                pendingSpace = sb.Length > 0;
-                continue;
-            }
-
-            if (pendingSpace)
-            {
-                sb.Append(' ');
-                pendingSpace = false;
-            }
-
-            sb.Append(c);
-        }
-
-        return sb.ToString();
-    }
+    // Kept as the command-level seam for existing callers/tests; the TSV policy itself is shared with derive.
+    internal static string Clean(string? value) => TsvCell.Clean(value);
 
     private static void WriteHuman(
         TextWriter output,

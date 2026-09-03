@@ -196,7 +196,7 @@ tail. Everything above is unchanged. The open items now live on their own cards:
 - [Interior hops are their own near-duplicate findings](../needs-review/amplify-interior-hops-are-near-duplicates.md)
 - [Recursion findings duplicate per SCC](../needs-review/amplify-recursion-findings-duplicate-per-scc.md)
 - [Fact-layer loop-nesting depth would retire the span-containment heuristic](../needs-review/fact-layer-loop-nesting-depth.md)
-- [Multi-line `LoopDetail` breaks `derive --format tsv` row parsing](../todo/loop-detail-newlines-break-derive-tsv-rows.md)
+- [Multi-line `LoopDetail` breaks `derive --format tsv` row parsing](./loop-detail-newlines-break-derive-tsv-rows.md)
 
 The "pre-existing violations of the same principle" recorded above (`EffectDerivation.cs:257`,
 `FactHazardDeriver.cs:333-335`) were fixed as F1 and F3 of

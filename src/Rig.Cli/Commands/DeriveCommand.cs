@@ -765,14 +765,14 @@ internal static class DeriveCommand
     // evidence — type, confidence, reason, cell/context, enclosing, file, line, detail — the comma-joined
     // `effect`-row observation Type list can't carry. Pure + internal so the column contract is unit-testable.
     internal static string HazardTsvRow(HazardFinding h) =>
-        $"hazard\t{h.Type}\t{h.Confidence}\t{h.Reason}\t{h.Context}\t{h.Enclosing}\t{h.FilePath}\t{h.Line}\t{h.Detail}";
+        $"hazard\t{TsvCell.Clean(h.Type)}\t{TsvCell.Clean(h.Confidence)}\t{TsvCell.Clean(h.Reason)}\t{TsvCell.Clean(h.Context)}\t{TsvCell.Clean(h.Enclosing)}\t{TsvCell.Clean(h.FilePath)}\t{h.Line}\t{TsvCell.Clean(h.Detail)}";
 
     // The tsv `amplification` row: the `hazard` column contract verbatim (so one parser handles both), plus the
     // two columns amplification exists for — the effect's PROVIDER and OPERATION. A DISTINCT row type on purpose:
     // `hazard` is the closed hazard set for every downstream consumer and the skill doc, and column-1 filtering
     // (`awk -F'\t' '$1=="amplification"'`) is the documented idiom. Pure + internal so the contract is pinned.
     internal static string AmplificationTsvRow(HazardFinding a) =>
-        $"amplification\t{a.Type}\t{a.Confidence}\t{a.Reason}\t{a.Context}\t{a.Enclosing}\t{a.FilePath}\t{a.Line}\t{a.Detail}\t{a.Provider}\t{a.Operation}";
+        $"amplification\t{TsvCell.Clean(a.Type)}\t{TsvCell.Clean(a.Confidence)}\t{TsvCell.Clean(a.Reason)}\t{TsvCell.Clean(a.Context)}\t{TsvCell.Clean(a.Enclosing)}\t{TsvCell.Clean(a.FilePath)}\t{a.Line}\t{TsvCell.Clean(a.Detail)}\t{TsvCell.Clean(a.Provider)}\t{TsvCell.Clean(a.Operation)}";
 
     // Confidence tiers in disclosure order (high first), so a per-type breakdown reads worst-first.
     private static readonly string[] ConfidenceOrder = ["high", "medium", "low"];

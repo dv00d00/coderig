@@ -1,6 +1,6 @@
 # Multi-line `LoopDetail` leaks raw newlines into `derive --format tsv` and breaks row parsing
 
-**Status:** todo · **Family:** output-fidelity / TSV
+**Status:** done 2026-09-03 · **Family:** output-fidelity / TSV
 **Extracted from:** [nonlinear-amplification-degree](../done/nonlinear-amplification-degree.md) ("Notes"), 2026-09-02
 **Triage:** ready-for-agent
 
@@ -28,3 +28,9 @@ A row that silently splits corrupts a count without erroring.
 - A fixture with a multi-line LINQ query asserting the row count, not just the content.
 - No change to the human renderer's text; this is an emitter fix.
 - No `*Schema` bump: TSV rendering is not a cached derivation payload.
+
+## Verification
+
+- `DeriveTsvLoopDetailTests`: 2/2 passed, including physical-row count and 9/11-column contracts.
+- Full Release build: 0 warnings, 0 errors.
+- Main suite: 1,416/1,416 passed; full integration matrix passed apart from its one documented skip.
