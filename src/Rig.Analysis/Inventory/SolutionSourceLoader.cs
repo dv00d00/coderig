@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
 using Buildalyzer;
@@ -528,11 +529,7 @@ internal static class SolutionSourceLoader
         // types and corrupt dependents. Shared by the cache-miss and cache-off paths.
         CheckedBuild? BuildChecked(string projectFilePath, Func<IAnalyzerResult?> build)
         {
-            var built = build();
-            if (built is null)
-            {
-                return null;
-            }
+            var built = build() ?? throw new BuildalyzerNoResultsException(projectFilePath);
 
             var info = ProjectBuildInfo.FromAnalyzerResult(built);
             var name = Path.GetFileNameWithoutExtension(projectFilePath);
@@ -543,11 +540,7 @@ internal static class SolutionSourceLoader
                     progress,
                     $"WARN: '{name}' design-time build produced 0 source files — retrying ({attempt}/{DegradedBuildRetries})"
                 );
-                var retried = build();
-                if (retried is null)
-                {
-                    break;
-                }
+                var retried = build() ?? throw new BuildalyzerNoResultsException(projectFilePath);
 
                 built = retried;
                 info = ProjectBuildInfo.FromAnalyzerResult(retried);
@@ -708,7 +701,7 @@ internal static class SolutionSourceLoader
     }
 
     // Runs parallel design-time builds for all in-scope C# projects in a solution file.
-    // Filters by scope/test-exclusion before launching builds, then surfaces any DegradedBuildException
+    // Filters by scope/test-exclusion before launching builds, then surfaces trust-critical build failures
     // unwrapped from the AggregateException Parallel.ForEach produces.
     private static List<ProjectBuildInfo> BuildSolutionProjectResults(
         string solutionPath,
@@ -724,9 +717,7 @@ internal static class SolutionSourceLoader
         Func<string, Func<IAnalyzerResult?>, ProjectBuildInfo?> buildOrLoad
     )
     {
-#pragma warning disable CS0618
-        var manager = new AnalyzerManager(solutionPath, options);
-#pragma warning restore CS0618
+        var manager = CreateSolutionAnalyzerManager(solutionPath, options);
         // Skip non-C# projects, rule-excluded projects, and (when scoped) everything outside the entry
         // closure — before paying for their design-time builds.
         var candidates = manager
@@ -789,19 +780,17 @@ internal static class SolutionSourceLoader
                     var projectWatch = perProject is null ? null : Stopwatch.StartNew();
                     try
                     {
-                        var info = buildOrLoad(
-                            Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString()),
-                            () => BuildCompileOnly(projectAnalyzer, framework, restore)
-                        );
-                        if (info is not null)
-                        {
-                            resultsBag.Add(info);
-                        }
+                        var projectFilePath = Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString());
+                        var info =
+                            buildOrLoad(projectFilePath, () => BuildCompileOnly(projectAnalyzer, framework, restore))
+                            ?? throw new BuildalyzerNoResultsException(projectFilePath);
+                        resultsBag.Add(info);
                     }
-                    catch (Exception ex) when (ex is not DegradedBuildException and not FrameworkSelectionException)
+                    catch (Exception ex)
+                        when (ex is not DegradedBuildException and not FrameworkSelectionException and not BuildalyzerNoResultsException)
                     {
-                        // A per-project build failure is non-fatal: skip it and carry on. A DegradedBuildException
-                        // (0 sources after retries) is the EXCEPTION — it's filtered out here so it propagates.
+                        // An ordinary per-project build failure is non-fatal: skip it and carry on. Trust-critical
+                        // incomplete-result failures are filtered out here so they propagate and abort the index.
                         ReportProgress(progress, $"MSBuild: skipping {projectName} — build failed: {ex.Message.Split('\n')[0].Trim()}");
                     }
                     finally
@@ -830,6 +819,12 @@ internal static class SolutionSourceLoader
                 throw frameworkFailure;
             }
 
+            var noResultsFailure = aggregate.Flatten().InnerExceptions.OfType<BuildalyzerNoResultsException>().FirstOrDefault();
+            if (noResultsFailure is not null)
+            {
+                throw noResultsFailure;
+            }
+
             throw;
         }
         buildsWatch.Stop();
@@ -840,6 +835,78 @@ internal static class SolutionSourceLoader
         }
 
         return resultsBag.ToList();
+    }
+
+    private static AnalyzerManager CreateSolutionAnalyzerManager(string solutionPath, AnalyzerManagerOptions options)
+    {
+        if (!string.Equals(Path.GetExtension(solutionPath), ".slnx", StringComparison.OrdinalIgnoreCase))
+        {
+#pragma warning disable CS0618
+            return new AnalyzerManager(solutionPath, options);
+#pragma warning restore CS0618
+        }
+
+        var fullSolutionPath = Path.GetFullPath(solutionPath);
+        var solutionDirectory = Path.GetDirectoryName(fullSolutionPath)!;
+        var document = XDocument.Load(fullSolutionPath, LoadOptions.PreserveWhitespace);
+        foreach (var project in document.Descendants().Where(element => element.Name.LocalName == "Project"))
+        {
+            var path = project.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "Path");
+            if (path is null || string.IsNullOrWhiteSpace(path.Value))
+            {
+                continue;
+            }
+
+            path.Value = Path.GetFullPath(path.Value, solutionDirectory);
+        }
+
+        var normalizedPath = NormalizedSlnxTempFilePrefix(fullSolutionPath) + Guid.NewGuid().ToString("N") + ".slnx";
+        try
+        {
+            using (var stream = new FileStream(normalizedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                document.Save(stream, SaveOptions.DisableFormatting);
+            }
+
+#pragma warning disable CS0618
+            var manager = new AnalyzerManager(normalizedPath, options);
+#pragma warning restore CS0618
+            // The disposable manifest lives under OS temp so indexing a read-only checkout remains a read.
+            // Restore every solution identity property before any project is built; MSBuild requires the
+            // SolutionDir value to end in a directory separator.
+            var solutionDirProperty = Path.EndsInDirectorySeparator(solutionDirectory)
+                ? solutionDirectory
+                : solutionDirectory + Path.DirectorySeparatorChar;
+            manager.SetGlobalProperty("SolutionDir", solutionDirProperty);
+            manager.SetGlobalProperty("SolutionPath", fullSolutionPath);
+            manager.SetGlobalProperty("SolutionFileName", Path.GetFileName(fullSolutionPath));
+            manager.SetGlobalProperty("SolutionName", Path.GetFileNameWithoutExtension(fullSolutionPath));
+            manager.SetGlobalProperty("SolutionExt", Path.GetExtension(fullSolutionPath));
+            foreach (var projectAnalyzer in manager.Projects.Values)
+            {
+                // Buildalyzer project globals take precedence over manager globals. Apply the original
+                // solution identity at that higher-precedence layer so $(SolutionDir) cannot point at temp.
+                projectAnalyzer.SetGlobalProperty("SolutionDir", solutionDirProperty);
+                projectAnalyzer.SetGlobalProperty("SolutionPath", fullSolutionPath);
+                projectAnalyzer.SetGlobalProperty("SolutionFileName", Path.GetFileName(fullSolutionPath));
+                projectAnalyzer.SetGlobalProperty("SolutionName", Path.GetFileNameWithoutExtension(fullSolutionPath));
+                projectAnalyzer.SetGlobalProperty("SolutionExt", Path.GetExtension(fullSolutionPath));
+            }
+
+            return manager;
+        }
+        finally
+        {
+            // Failure to clean up must be visible rather than silently leaking a disposable manifest.
+            File.Delete(normalizedPath);
+        }
+    }
+
+    internal static string NormalizedSlnxTempFilePrefix(string solutionPath)
+    {
+        var fullSolutionPath = Path.GetFullPath(solutionPath);
+        var pathHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fullSolutionPath)))[..16].ToLowerInvariant();
+        return Path.Combine(Path.GetTempPath(), $"rig-normalized-slnx-{pathHash}-");
     }
 
     // Reports scope filtering decisions to the progress sink: how many projects were narrowed by the
@@ -1914,6 +1981,9 @@ internal static class SolutionSourceLoader
     // index command's existing load-failure handler catches it (clean exit, no raw stack trace), and is a
     // distinct type so the per-project "skip on build failure" catch can let it through to abort the run.
     private sealed class DegradedBuildException(string message) : InvalidOperationException(message);
+
+    private sealed class BuildalyzerNoResultsException(string projectFilePath)
+        : InvalidOperationException($"Buildalyzer produced no build results for '{projectFilePath}'.");
 
     private sealed class FrameworkSelectionException(string message) : InvalidOperationException(message);
 

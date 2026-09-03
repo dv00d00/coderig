@@ -170,6 +170,12 @@
       TestClass="StrongNameCompilationOptionsTests"
     />
     <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\SlnxOutOfTreeProjectTests.cs"
+      Link="Analysis\SlnxOutOfTreeProjectTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="SlnxOutOfTreeProjectTests"
+    />
+    <IndependentIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Cli\CallersAsyncUnderreportTests.cs"
       Link="Cli\CallersAsyncUnderreportTests.cs"
       Namespace="Rig.Tests.Cli"

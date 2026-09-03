@@ -1,6 +1,6 @@
 # An .slnx project path that escapes the solution directory is silently dropped
 
-**Status:** todo
+**Status:** done — shipped 2026-09-03
 **Triage:** ready-for-agent
 
 ## Symptom
@@ -97,3 +97,14 @@ Two independent changes; the first is the important one.
 
 `C:\Git\AngleSharp.ReadOnlyDom\scripts\rig-index.ps1` generates a normalised copy of the solution
 with out-of-tree paths rewritten absolute, and indexes that.
+
+## Resolution
+
+`.slnx` project paths are now resolved against the original solution directory before Buildalyzer sees the
+manifest. The disposable normalized manifest lives under the OS temp directory, while the original
+`SolutionDir` and solution identity are restored at project-global precedence; read-only checkouts remain
+untouched. A null Buildalyzer result now aborts indexing with the affected project path instead of silently
+dropping it. A fresh-process MSBuild regression fixture proves the sibling project's symbols, a first-party
+cross-project invocation, and a source inclusion that depends on the original `$(SolutionDir)`. The full
+ship gate passed: 1,421 main tests, 83 shared integration tests (+1 known skip), all 17 independent classes,
+and 33 live tests.
