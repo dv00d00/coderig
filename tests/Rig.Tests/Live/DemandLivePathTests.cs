@@ -36,7 +36,11 @@ public sealed class DemandLivePathTests
             playground.WorkingDirectory,
             ["path", "TeamsController.CreateViaInterface", "TeamRepository.AddAsync"]
         );
-        await AssertParityAsync(host, playground.WorkingDirectory, ["path", "PaymentGatewayCaller.Dispatch", "PaymentGatewayProcess.Ask"]);
+        var payment = await AssertParityAsync(
+            host,
+            playground.WorkingDirectory,
+            ["path", "PaymentGatewayCaller.Dispatch", "PaymentGatewayProcess.Ask"]
+        );
         var syncEvent = await AssertParityAsync(
             host,
             playground.WorkingDirectory,
@@ -50,17 +54,25 @@ public sealed class DemandLivePathTests
         syncEvent.Exit.ShouldBe(1);
         asyncEvent.Exit.ShouldBe(0);
 
-        // CHANGED 2026-08-24 (live materialize-once): this used to assert the live `path` banner reported a
-        // PARTIAL forward slice, because the graph was projected per query from the seed. It is now the
-        // generation's whole materialized graph — the traversal-shaped projection PLUS its delivery edges —
-        // so the banner reports at least the traversal-graph oracle, and strictly more wherever the ruleset
-        // configures delivery (this playground raises a real C# event, so it does). The banner has always
-        // been a documented load DIAGNOSTIC whose value depends on the fact source, never on the answer;
-        // WithoutBanner above is why the parity comparisons are unaffected.
-        var rules = RuleSetLoader.Load(playground.WorkingDirectory);
-        var fullGraphOracle = new LiveFactSource(await host.GetCurrentFactsAsync(), rules).TraversalGraph;
-        var materializedCallEdges = FactGraphCallEdgeCount(dispatch.Out);
-        materializedCallEdges.ShouldBeGreaterThan(fullGraphOracle.CallEdges.Count);
+        // MATERIALIZE-ONCE (2026-08-24), asserted as the invariant it actually is: the live `path` banner
+        // reports the GENERATION's whole graph, so every query in the generation reports the SAME numbers —
+        // three different seed pairs and both traversal modes above. A regression to per-query projection
+        // (the pre-2026-08-24 behaviour) makes these diverge immediately, because each seed expands a
+        // different closure; `--async` reporting the same count is the separate half of the claim, that
+        // delivery edges are folded in unconditionally rather than costing a second materialization.
+        //
+        // REPLACED 2026-09-03 a `ShouldBeGreaterThan(new LiveFactSource(await host.GetCurrentFactsAsync(),
+        // rules).TraversalGraph.CallEdges.Count)`, which had been failing 44-vs-87 deterministically. That
+        // oracle compares two DIFFERENT FACT MODELS: GetCurrentFactsAsync returns `.FlattenedFacts`
+        // (WatchCommand.cs:947), so it built the legacy whole-graph projection — the arm
+        // Flattened_fact_compatibility_is_explicitly_diagnosed_as_legacy_fallback below pins as
+        // LegacyWholeGraphFallback and which WatchHost never takes — while the banner reports the KEYED
+        // resident snapshot's materialized graph. There is no superset relation between them, and the more
+        // precise keyed projection carrying FEWER edges is the expected direction, not a regression.
+        var banners = new[] { dispatch, payment, syncEvent, asyncEvent }.Select(r => FactGraphCallEdgeCount(r.Out)).ToArray();
+
+        banners.ShouldAllBe(count => count > 0);
+        banners.Distinct().Count().ShouldBe(1, $"materialize-once means one graph per generation; got {string.Join(", ", banners)}");
     }
 
     [Test]

@@ -8,12 +8,31 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# FAIL FAST on the tool-store lock. A running `rig` (typically `rig serve`) holds
-# ~/.dotnet/tools/.store/rig/<version>, so the install step below cannot swap the binary. That step is the
-# LAST thing this script does, so without this check the lock costs a full build plus every test lane —
-# ~10 minutes with -FullTests — before throwing. The uninstall is deliberately swallowed (Continue +
-# *> $null) so it does not even fail at the first opportunity. Checked here instead: same diagnosis, zero
-# work wasted. -SkipToolInstall never publishes, so it is exempt by construction.
+# FAIL FAST on either lock a running rig holds. Two DIFFERENT processes, two different failures, and the
+# second one is the trap: checking only the first is what cost a full build on 2026-09-03.
+#
+#   1. The installed tool (`rig serve`, process name `rig`) holds ~/.dotnet/tools/.store/rig/<version>, so the
+#      INSTALL step cannot swap the binary. That step is the LAST thing this script does, so without a check
+#      the lock costs a full build plus every test lane — ~10 minutes with -FullTests — before throwing. The
+#      uninstall is deliberately swallowed (Continue + *> $null) so it does not even fail at the first
+#      opportunity. -SkipToolInstall never publishes, so it is exempt from this one by construction.
+#
+#   2. A LOCALLY-BUILT host (`dotnet src/Rig.Cli/bin/Release/net10.0/Rig.Cli.dll serve`, process name
+#      `dotnet`) holds bin/Release/*.dll, so the BUILD fails with MSB3026 "being used by another process" —
+#      much earlier, and reading like a compile error rather than a lock. -SkipToolInstall does NOT exempt
+#      this: the build still runs. CLAUDE.md recommends exactly this host as the way to see wwwroot edits
+#      without repacking, so it is the likelier of the two in practice — and the name check above cannot see
+#      it, because the process is `dotnet`.
+$binHolders = @(
+    Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*Rig.Cli.dll*" }
+)
+if ($binHolders.Count -gt 0) {
+    throw ("A locally-built rig is running (PID " + (($binHolders | ForEach-Object { $_.ProcessId }) -join ", ") +
+        ") and holds src/Rig.Cli/bin/$Configuration/**/*.dll, so the build below would fail with MSB3026. " +
+        "Stop it and re-run: Stop-Process -Id " + (($binHolders | ForEach-Object { $_.ProcessId }) -join ", ") + " -Force")
+}
+
 if (-not $SkipToolInstall) {
     $holding = @(Get-Process -Name rig -ErrorAction SilentlyContinue)
     if ($holding.Count -gt 0) {
