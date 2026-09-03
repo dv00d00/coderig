@@ -10,7 +10,17 @@ public static class ProvidersService
 {
     // Families are the third token tier, ahead of the two that already existed. The explorer's autocomplete
     // wants them first for the same reason the CLI listing does: it is the token a reader picks.
-    public sealed record ProviderTokens(IReadOnlyList<string> Providers, IReadOnlyList<string> ProviderOps, IReadOnlyList<string> Families);
+    //
+    // FamilyProviders carries the same families as a GROUPING, because the family list is config-defined and
+    // of arbitrary size: the web lens groups its badges and writes its legend from this, and the alternative
+    // was the hand-copied table it used to keep. Additive — `Families` stays the flat name list other callers
+    // read, and it is also the authoritative ORDER (a JSON object's key order is not a contract).
+    public sealed record ProviderTokens(
+        IReadOnlyList<string> Providers,
+        IReadOnlyList<string> ProviderOps,
+        IReadOnlyList<string> Families,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> FamilyProviders
+    );
 
     public static ProviderTokens List(string workingDirectory, IReadOnlyList<string>? extraRules = null)
     {
@@ -18,7 +28,10 @@ public static class ProvidersService
         return new ProviderTokens(
             Providers: KnownProviders(rules).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList(),
             ProviderOps: KnownProviderOps(rules).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList(),
-            Families: ProviderCatalog.DeclaredFamilies(rules)
+            Families: ProviderCatalog.DeclaredFamilies(rules),
+            FamilyProviders: ProviderCatalog
+                .DeclaredFamilyProviders(rules)
+                .ToDictionary(family => family.Family, family => family.Providers, StringComparer.Ordinal)
         );
     }
 }

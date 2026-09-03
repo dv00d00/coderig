@@ -124,7 +124,10 @@ function qs(params) {
 export const api = {
   meta: () => getJson("/api/meta"),
   runs: () => getJson("/api/runs"), // LATEST pointer moves → never cached
-  providers: () => cached("providers", "/api/providers"),
+  // `|fam` is a PAYLOAD-SHAPE token, not a new query: the response gained the family->providers grouping, and
+  // an IndexedDB entry written before that (the derivation version only moves on a rules/schema change, which
+  // this is not) would keep serving a body with no families in it.
+  providers: () => cached("providers|fam", "/api/providers"),
   hotspots: (storeId, explicitStore, sort, top, noLambdas, intrinsic) =>
     cached(
       `hotspots|${storeId}|${sort}|${top}|${!!noLambdas}|${!!intrinsic}`,

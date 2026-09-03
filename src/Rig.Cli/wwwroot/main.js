@@ -39,6 +39,7 @@ import {
 import {
   FileEffectsView,
   setFileFindings,
+  setFamilyCatalog,
   lensFilterDefaults,
   navTargets,
 } from "./filelens.js";
@@ -1684,10 +1685,20 @@ function setupWatches() {
   } catch {
     /* cache degrades to per-session */
   }
-  api.providers().then((p) => {
-    set({ providers: p });
-    renderMsList("");
-  });
+  // ONE fetch per session (cached in memory + IndexedDB under the derivation version), and the only source of
+  // the effect-family vocabulary: the filter autocomplete and the file lens both read it. It must FAIL SOFT —
+  // a metadata call is not allowed to blank the lens, so on failure the catalog stays unset and every mark
+  // falls back to its provider name (the legend says so).
+  api
+    .providers()
+    .then((p) => {
+      set({ providers: p });
+      setFamilyCatalog(p);
+      renderMsList("");
+    })
+    .catch(() => {
+      /* no token list, no family grouping — both surfaces degrade in place */
+    });
   try {
     const runs = await api.runs();
     set({ runs });

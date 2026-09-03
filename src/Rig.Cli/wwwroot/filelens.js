@@ -28,25 +28,39 @@ import { baseName, shortLabel } from "./components.js";
 
 // ---- vocabulary tables ---------------------------------------------------------------------------------
 
-// Family -> providers, straight from `rig derive --list-providers`. This is the GROUPING for the grain
-// toggle: `family` (8 buckets, the default density) collapses providers; `provider` expands them. The map is
-// presentation data — a legend and a fallback label — never a re-derivation of what the store said.
-export const FAMILY_PROVIDERS = {
-  blob: ["aws_s3", "azure_blob", "object_store", "parquet"],
-  bus: ["mediatr", "rabbitmq"],
-  cache: ["cache", "entity_cache", "inproc_cache", "redis"],
-  db: ["dapper", "db_command", "db_connection", "db_reader", "db_transaction", "efcore", "linq2db", "llblgen", "repository", "yessql"],
-  echo: ["actor", "chamber_msg", "echo_publish", "eventbus", "gcp_pubsub", "queue", "webhook"],
-  io: ["io"],
-  rpc: ["clientpage_proxy", "fhir", "http", "http_response", "ldap", "openai", "sendgrid", "smtp", "soap", "socket", "twilio", "xero"],
-  search: ["azure_search", "elasticsearch"],
-};
-const PROVIDER_FAMILY = Object.fromEntries(
-  Object.entries(FAMILY_PROVIDERS).flatMap(([family, providers]) => providers.map((p) => [p, family])),
-);
-export const familyOf = (provider) => PROVIDER_FAMILY[provider] || provider;
+// Family -> providers, SERVED by /api/providers (ProviderCatalog over the effective rule set) and set here
+// once at boot. The family list is config-defined and of arbitrary size — this file used to keep a hand-copy
+// of eight, which was a union of two rule sets and wrong on any repo that declares its own. This is the
+// GROUPING for the grain toggle: `family` collapses providers, `provider` expands them.
+let familyProviders = null; // family -> providers; null until /api/providers answers
+let familyOrder = []; // the served family order (the `families` array — a JSON object's key order is not one)
+let providerFamily = null; // provider -> family, inverted from the above
 
-// One-line gloss per family, for the legend. A reader should not need to guess what `echo` means.
+export function setFamilyCatalog(dto) {
+  const map = dto && dto.familyProviders && typeof dto.familyProviders === "object" ? dto.familyProviders : null;
+  familyProviders = map;
+  familyOrder = map ? (dto.families || []).filter((fam) => fam in map) : [];
+  providerFamily = map
+    ? Object.fromEntries(Object.entries(map).flatMap(([family, providers]) => (providers || []).map((p) => [p, family])))
+    : null;
+}
+
+// The declared families, in served order. EMPTY means the catalog never arrived, which is not the same as a
+// rule set that declares none — familyCatalogKnown() tells them apart and the legend says which it is.
+export const declaredFamilies = () => familyOrder;
+export const familyCatalogKnown = () => !!familyProviders;
+export const providersIn = (family) => (familyProviders && familyProviders[family]) || [];
+
+// The one family name this file may spell: the bucket for a provider the rule set declares in no family. It
+// is NOT promoted to a family of its own — a gutter mark reading `twilio` beside one reading `db` claims a
+// peer vocabulary that the rules do not have. The provider name stays in every such mark's tooltip.
+// With no catalog served, identity is the honest fallback: coarse labels beat a blank gutter.
+export const OTHER_FAMILY = "other";
+export const familyOf = (provider) => (providerFamily ? providerFamily[provider] || OTHER_FAMILY : provider);
+
+// One-line gloss per family, for the legend. A reader should not need to guess what `echo` means. NOT
+// authoritative and deliberately not in the rules: rules describe DETECTION, not presentation prose. A
+// family with no gloss here renders with no gloss — never a placeholder, never a crash.
 export const FAMILY_HELP = {
   blob: "object / blob storage — S3, Azure Blob, parquet files",
   bus: "in-process message bus — MediatR, RabbitMQ",
@@ -786,7 +800,11 @@ function FilterBar(s, actions, model, result) {
       seg(
         "grain",
         f.grain,
-        "collapse to the 8 families (default) or expand to provider:operation",
+        // The count is the SERVED family count, not a literal: it varies by rule set. Without the catalog
+        // there is no honest number, so the copy drops it rather than naming a wrong one.
+        declaredFamilies().length
+          ? `collapse to the ${declaredFamilies().length} families these rules declare (default) or expand to provider:operation`
+          : "collapse to families (default) or expand to provider:operation",
         cycle("grain", ["family", "provider"]),
         f.grain !== "family",
       ),
@@ -874,9 +892,18 @@ function Legend(open, onToggle) {
           h(
             "div",
             { class: "lg-fams" },
-            ...Object.keys(FAMILY_PROVIDERS).map((fam) =>
-              h("span", { class: "lg-fam", title: `${FAMILY_HELP[fam]}\nproviders: ${FAMILY_PROVIDERS[fam].join(", ")}` }, fam),
+            // The families THIS store's rules declare, served by /api/providers. A gloss is optional (see
+            // FAMILY_HELP): an unglossed family still lists its providers.
+            ...declaredFamilies().map((fam) =>
+              h("span", { class: "lg-fam", title: [FAMILY_HELP[fam], `providers: ${providersIn(fam).join(", ")}`].filter(Boolean).join("\n") }, fam),
             ),
+            familyCatalogKnown()
+              ? null
+              : h(
+                  "span",
+                  { class: "lg-none", title: "GET /api/providers did not answer, so the family vocabulary is unknown to this page" },
+                  "family list unavailable — marks are labelled by provider",
+                ),
           ),
         )
       : null,

@@ -1766,6 +1766,13 @@
         cursor: help;
         font: 10px ui-monospace, monospace;
       }
+      /* The family vocabulary is served, so it can be MISSING. The lens still renders (provider labels), and
+         says so here rather than showing an empty strip that reads as "this store declares no families". */
+      .lg-none {
+        color: var(--warn);
+        cursor: help;
+        font: 10px ui-monospace, monospace;
+      }
       .file-outline-title {
         display: flex;
         justify-content: space-between;

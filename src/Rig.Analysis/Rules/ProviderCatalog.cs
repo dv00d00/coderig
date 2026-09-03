@@ -31,6 +31,26 @@ public static class ProviderCatalog
             .ToArray();
     }
 
+    // family -> the providers declared in it, over exactly the families DeclaredFamilies lists — a family
+    // whose providers have no effect rules included. This is the GROUPING a reader's vocabulary needs (the
+    // web legend, the grain toggle), so it must cover every declared family: one named in `families` with no
+    // entry here would render as a family whose providers are missing rather than empty. EffectfulFamilies
+    // stays separate because it answers a different question — which families are worth a traversal.
+    public static IReadOnlyList<(string Family, IReadOnlyList<string> Providers)> DeclaredFamilyProviders(RuleSet rules)
+    {
+        ArgumentNullException.ThrowIfNull(rules);
+        return rules
+            .ProviderFamilies.GroupBy(pair => pair.Value, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group =>
+                (
+                    group.Key,
+                    (IReadOnlyList<string>)group.Select(pair => pair.Key).OrderBy(provider => provider, StringComparer.Ordinal).ToArray()
+                )
+            )
+            .ToArray();
+    }
+
     // family -> the providers declared in it, restricted to providers that actually have EFFECT RULES. A
     // family whose providers never produce an effect would otherwise cost a whole reverse traversal per
     // generation to project nothing (the Rider read model builds one closure per family).

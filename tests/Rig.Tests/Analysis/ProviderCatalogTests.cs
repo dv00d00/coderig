@@ -65,6 +65,32 @@ public sealed class ProviderCatalogTests
             .ShouldBe([("cache", "redis"), ("db", "db_command,llblgen")]);
     }
 
+    // The GROUPING the web lens is served covers exactly what DeclaredFamilies lists — the ruleless family
+    // included. A family present in the name list but absent from the grouping would render in the legend
+    // with no providers behind it, which reads as a family that declares none.
+    [Test]
+    public void The_served_family_grouping_covers_every_declared_family_including_a_ruleless_one()
+    {
+        var rules = new RuleSet
+        {
+            ProviderFamilies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["llblgen"] = "db",
+                ["db_command"] = "db",
+                ["redis"] = "cache",
+                ["ghost"] = "spooky",
+            },
+        };
+
+        var grouping = ProviderCatalog.DeclaredFamilyProviders(rules);
+
+        grouping.Select(family => family.Family).ShouldBe(ProviderCatalog.DeclaredFamilies(rules));
+        grouping
+            .Select(family => (family.Family, string.Join(",", family.Providers)))
+            .ShouldBe([("cache", "redis"), ("db", "db_command,llblgen"), ("spooky", "ghost")]);
+        ProviderCatalog.DeclaredFamilyProviders(new RuleSet()).ShouldBeEmpty();
+    }
+
     [Test]
     public void The_rider_selector_set_comes_from_the_families_not_from_core_csharp()
     {
