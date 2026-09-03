@@ -135,30 +135,7 @@ public static class FactProjection
     }
 
     public static IReadOnlyList<FactInvocation> Invocations(AnalysisResult result) =>
-        result
-            .References!.Where(r => r.RefKind == "invocation")
-            .Select(r => new FactInvocation(
-                Target: r.TargetSymbolId,
-                Enclosing: r.EnclosingSymbolId,
-                FilePath: r.FilePath,
-                Line: r.Line,
-                Args: new FactCallArguments(
-                    Receiver: r.ReceiverType,
-                    FirstTemplate: r.FirstArgumentTemplate,
-                    FirstType: r.FirstArgumentType,
-                    FirstName: r.FirstArgumentName,
-                    Templates: r.ArgumentTemplates,
-                    Names: r.ArgumentNames
-                ),
-                Loop: new FactLoopContext(Kind: r.EnclosingLoopKind, Detail: r.EnclosingLoopDetail),
-                Nesting: new FactCallSiteNesting(
-                    Invocations: r.EnclosingInvocations,
-                    CatchTypes: r.EnclosingCatchTypes,
-                    Scopes: r.EnclosingScopes
-                ),
-                TypeArguments: r.TypeArguments
-            ))
-            .ToArray();
+        result.References!.Where(r => r.RefKind == RefKinds.Invocation).Select(FactInvocationProjection.Project).ToArray();
 
     public static IReadOnlyList<SymbolRef> ThrowRefs(AnalysisResult result) =>
         result

@@ -1,6 +1,6 @@
 # The test fixture builds `FactInvocation`s that production never produces — 4 fields silently absent
 
-**Status:** todo · **Priority: MEDIUM** (not a product bug; a GATE bug — several derivation tests run against
+**Status:** done 2026-09-03 · **Priority: MEDIUM** (not a product bug; a GATE bug — several derivation tests run against
 facts that differ from what the real pipeline emits, so an arm can look covered when it is unreachable, and an
 absence can be asserted that only holds because the fixture dropped the field) · **Found:** 2026-08-21, exposed
 by grouping `FactInvocation`'s members · **Family:** test infrastructure / fact projections
@@ -64,3 +64,9 @@ fixture behaviour?" — rather than a value to re-baseline. That is the whole va
   [bounded reach inputs dropping EnclosingScopes](../done/bounded-reach-inputs-drop-enclosing-scopes-shipped.md).
   The first three were in production; this one is in the tests that are supposed to catch exactly this class of
 drift, which is the part worth being uncomfortable about.
+
+## Verification
+
+- `FactInvocationFixtureProjectionTests`: 1/1 passed with every projection input non-default.
+- Main suite: 1,417/1,417 passed; no existing assertion depended on the incomplete fixture behavior.
+- Release build completed with 0 warnings and 0 errors.

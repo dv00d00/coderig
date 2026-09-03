@@ -1033,7 +1033,7 @@ lines apart) — all pairs correspond.
 ### The payoff was not readability
 
 The refactor immediately exposed a gate defect that had been invisible:
-**[`tests/Rig.Tests/Fixtures/FactProjection.cs` builds `FactInvocation`s production never produces](../todo/test-fixture-invocation-mapping-is-not-field-complete.md)**
+**[`tests/Rig.Tests/Fixtures/FactProjection.cs` builds `FactInvocation`s production never produces](./test-fixture-invocation-mapping-is-not-field-complete.md)**
 — a FOURTH hand-written copy of the mapping, missing `Nesting.Guards`, `Loop.ElementType`, `Loop.BindType` and
 `InExpressionTree`. Six test files derive effects through it, so any arm gated on those four cannot fire there,
 and an asserted ABSENCE may hold only because the fixture withheld the field.
