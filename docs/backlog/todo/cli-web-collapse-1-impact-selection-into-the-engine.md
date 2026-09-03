@@ -33,9 +33,11 @@ Per D1-rev, also:
 `Web/RigApiEndpoints.cs`, `wwwroot/api.js:176-179`, `wwwroot/main.js:622`, and the impact view in
 `components.js`.
 
-This is the ONLY slice in the family that touches `RigApiEndpoints.cs`. That file changed on 2026-09-02
-(`/api/meta` now folds the store key into `DerivationVersion`), so it is read current rather than from a
-remembered shape.
+This is the only slice in the COLLAPSE family that touches `RigApiEndpoints.cs`, but it is no longer the only
+slice touching it at all: that file changed on 2026-09-02 (`/api/meta` folds the store key into
+`DerivationVersion`) and again on 2026-09-03 (`/api/providers` gained the family→provider grouping, per
+[family-list-comes-from-rules](./family-list-comes-from-rules-not-a-client-hardcode.md)). Read it current;
+a remembered shape will be wrong.
 
 ## The third count this slice settles
 
@@ -52,8 +54,16 @@ They agree under the default filter only because `FilterPerEpEffects` drops haza
 (`ImpactEngine.cs:553`, `:566-569`), which contradicts the engine's stated intent that hazard-only EPs surface
 per-EP. With `--intrinsic` they diverge.
 
-Recommendation, not a decision: `Select` keeps EPs with any hazard, amplification or guard delta in `PerEp`,
-and reports `BehavioralEpCount` separately. One definition, three surfaces.
+**D4, 2026-09-03 — decided, and it is no longer a recommendation.** `Select` keeps every EP with any hazard,
+amplification or guard delta in `PerEp`, and reports `BehavioralEpCount` separately. One definition, three
+surfaces. Hazard-only EPs stop being dropped by `FilterPerEpEffects`, which is what the engine's stated
+intent always said should happen.
+
+**This changes a number on the wire.** `impact_summary behavioral_eps` will differ under `--intrinsic` from
+what it prints today, so the verification below must capture the new value deliberately rather than assert
+byte-identical output the way [child 2](./cli-web-collapse-2-callers-engine.md) could. Under the DEFAULT
+filter the two counts already agree, so the default-filter output is expected to stay unchanged — that part
+is still a byte-identical check, and a diff there means the collapse changed something it should not have.
 
 ## D1's mechanism — resolved 2026-09-03 as B
 

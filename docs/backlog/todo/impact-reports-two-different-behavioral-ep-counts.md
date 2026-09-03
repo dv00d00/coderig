@@ -1,7 +1,13 @@
 # `rig impact` reports two different behavioral-EP counts from one run
 
 **Status:** todo · **Found:** 2026-09-02 by inspection · **Family:** impact / count definitions
-**Triage:** needs-info (which definition is the product's "behavioral" is a decision, not a bug fix)
+**Triage:** ready-for-agent
+**Decision:** D4, 2026-09-03 — **`PerEp` keeps every EP with any hazard, amplification or guard delta, and
+`BehavioralEpCount` is reported separately.** One definition, three surfaces (CLI, CI gates, web). Hazard-only
+EPs stop being silently dropped, which restores the engine's stated intent. Accepted cost: the
+`impact_summary behavioral_eps` value **changes under `--intrinsic`** for anything parsing `--format tsv`.
+Implemented as part of [cli-web-collapse-1](./cli-web-collapse-1-impact-selection-into-the-engine.md), which
+owns the `Select` this definition lives in.
 
 ## What happens
 
