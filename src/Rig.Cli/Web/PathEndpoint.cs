@@ -31,6 +31,7 @@ public static class PathEndpoint
 
                 try
                 {
+                    var compilation = await WebCompilationHealth.LoadAsync(workingDirectory, NullIfBlank(store));
                     var result = await PathQueryService.BuildAsync(
                         workingDirectory: workingDirectory,
                         fromPattern: from,
@@ -53,8 +54,10 @@ public static class PathEndpoint
                             Line: step.Line,
                             Effects: ToEffectDtos(
                                 result.EffectsBySymbol.TryGetValue(step.SymbolId, out var effects) ? effects : [],
-                                result.EffectEmoji
-                            )
+                                result.EffectEmoji,
+                                compilation.CompileErrorFiles
+                            ),
+                            BindingHealth: WebCompilationHealth.BindingHealth(compilation, step.FilePath)
                         ))
                         .ToList();
 
@@ -65,7 +68,8 @@ public static class PathEndpoint
                         Nodes: nodes,
                         FromMatches: result.FromMatches,
                         ToMatches: result.ToMatches,
-                        IntrinsicHidden: result.IntrinsicHidden
+                        IntrinsicHidden: result.IntrinsicHidden,
+                        CompileErrors: WebCompilationHealth.ToDto(compilation)
                     );
                     return Results.Json(response);
                 }
@@ -80,14 +84,19 @@ public static class PathEndpoint
     // Aggregate one method's DerivedEffects into distinct provider:operation EffectDtos with a call-site
     // count and the repo's glyph — the same projection TreeMapper.BuildEffectIndex produces per node, kept
     // as a small local helper here rather than exposing TreeMapper's (internal, tree-shaped) version.
-    private static IReadOnlyList<EffectDto> ToEffectDtos(IReadOnlyList<DerivedEffect> effects, IReadOnlyDictionary<string, string> emoji) =>
+    private static IReadOnlyList<EffectDto> ToEffectDtos(
+        IReadOnlyList<DerivedEffect> effects,
+        IReadOnlyDictionary<string, string> emoji,
+        IReadOnlySet<string> compileErrorFiles
+    ) =>
         effects
             .GroupBy(e => (e.Provider, e.Operation))
             .Select(g => new EffectDto(
                 Provider: g.Key.Provider,
                 Operation: g.Key.Operation,
                 Glyph: EmojiLookup.For(emoji, provider: g.Key.Provider, operation: g.Key.Operation),
-                Sites: g.Count()
+                Sites: g.Count(),
+                BindingHealth: g.Any(effect => CompilationFilePath.Contains(compileErrorFiles, effect.FilePath)) ? "compile_error" : "ok"
             ))
             .OrderBy(e => e.Provider, StringComparer.Ordinal)
             .ThenBy(e => e.Operation, StringComparer.Ordinal)

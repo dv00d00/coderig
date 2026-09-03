@@ -117,7 +117,9 @@ internal static class LlmSummaryRenderer
         // Opaque/collapse render rules: a matching node is drawn as a leaf (its subtree folded away, a
         // `opaque:<label>` / `collapsed:<label>` flag emitted). Null / Empty (e.g. under --raw) → no folding,
         // matching the historical unfolded output. Threaded so this format folds like the pretty renderer.
-        FactRenderRules? renderRules = null
+        FactRenderRules? renderRules = null,
+        IReadOnlySet<string>? compileErrorSymbols = null,
+        IReadOnlySet<string>? compileErrorEffectSymbols = null
     )
     {
         var rules = renderRules ?? FactRenderRules.Empty;
@@ -145,7 +147,9 @@ internal static class LlmSummaryRenderer
                 suppress: suppress,
                 elided: elided,
                 guards: guards,
-                renderRules: rules
+                renderRules: rules,
+                compileErrorSymbols: compileErrorSymbols,
+                compileErrorEffectSymbols: compileErrorEffectSymbols
             );
         }
     }
@@ -169,7 +173,9 @@ internal static class LlmSummaryRenderer
         // --guards: append the per-node control-dependence guard condition as a trailing `guards` column.
         bool guards = false,
         // Opaque/collapse render rules (see Render). Null / Empty → no folding.
-        FactRenderRules? renderRules = null
+        FactRenderRules? renderRules = null,
+        IReadOnlySet<string>? compileErrorSymbols = null,
+        IReadOnlySet<string>? compileErrorEffectSymbols = null
     )
     {
         var rules = renderRules ?? FactRenderRules.Empty;
@@ -206,7 +212,9 @@ internal static class LlmSummaryRenderer
                 firstEmissionId: firstEmissionId,
                 parentIdAtDepth: parentIdAtDepth,
                 guards: guards,
-                renderRules: rules
+                renderRules: rules,
+                compileErrorSymbols: compileErrorSymbols,
+                compileErrorEffectSymbols: compileErrorEffectSymbols
             );
         }
     }
@@ -481,6 +489,59 @@ internal static class LlmSummaryRenderer
         }
     }
 
+    // A row inherits compile health only from data that is actually aggregated into that row: its own
+    // effects, suppressed descendants rolled up by the LLM projection, and a collapse seam's hidden
+    // subtree. The declaration-file marker remains separate because a clean declaration may aggregate an
+    // effect whose call site is in a broken file (and vice versa).
+    private static bool HasAggregatedCompileErrorEffect(
+        TraceNode node,
+        SuppressSet suppress,
+        bool isCollapseFold,
+        IReadOnlySet<string>? compileErrorEffectSymbols
+    )
+    {
+        if (compileErrorEffectSymbols is null)
+        {
+            return false;
+        }
+
+        if (compileErrorEffectSymbols.Contains(node.SymbolId))
+        {
+            return true;
+        }
+
+        if (isCollapseFold && node.Children.Any(child => SubtreeHasCompileErrorEffect(child, compileErrorEffectSymbols)))
+        {
+            return true;
+        }
+
+        return suppress != SuppressSet.None
+            && node.Children.Any(child =>
+                IsSuppressed(child.SymbolId, suppress) && SuppressedChainHasCompileErrorEffect(child, suppress, compileErrorEffectSymbols)
+            );
+    }
+
+    private static bool SuppressedChainHasCompileErrorEffect(
+        TraceNode node,
+        SuppressSet suppress,
+        IReadOnlySet<string> compileErrorEffectSymbols
+    )
+    {
+        if (compileErrorEffectSymbols.Contains(node.SymbolId))
+        {
+            return true;
+        }
+
+        return !node.Truncated
+            && node.Children.Any(child =>
+                IsSuppressed(child.SymbolId, suppress) && SuppressedChainHasCompileErrorEffect(child, suppress, compileErrorEffectSymbols)
+            );
+    }
+
+    private static bool SubtreeHasCompileErrorEffect(TraceNode node, IReadOnlySet<string> compileErrorEffectSymbols) =>
+        compileErrorEffectSymbols.Contains(node.SymbolId)
+        || (!node.Truncated && node.Children.Any(child => SubtreeHasCompileErrorEffect(child, compileErrorEffectSymbols)));
+
     private static void WalkNode(
         TraceNode node,
         int depth,
@@ -492,7 +553,9 @@ internal static class LlmSummaryRenderer
         // Forest-wide elided-edge oracle for the EffectfulPaths prune (see Render).
         ElidedEffectScope elided,
         bool guards = false,
-        FactRenderRules? renderRules = null
+        FactRenderRules? renderRules = null,
+        IReadOnlySet<string>? compileErrorSymbols = null,
+        IReadOnlySet<string>? compileErrorEffectSymbols = null
     )
     {
         var rules = renderRules ?? FactRenderRules.Empty;
@@ -524,7 +587,9 @@ internal static class LlmSummaryRenderer
                     suppress: suppress,
                     elided: elided,
                     guards: guards,
-                    renderRules: rules
+                    renderRules: rules,
+                    compileErrorSymbols: compileErrorSymbols,
+                    compileErrorEffectSymbols: compileErrorEffectSymbols
                 );
             }
 
@@ -607,6 +672,13 @@ internal static class LlmSummaryRenderer
             // AlreadyExpanded → "seen"; DepthCapped → "depth-capped"; BudgetCapped → "budget-capped".
             // A folded node adds opaque:<label> / collapsed:<label> so the fold is greppable + machine-parseable.
             var flags = AppendFoldFlag(BuildFlags(node), fold);
+            if (
+                compileErrorSymbols?.Contains(node.SymbolId) == true
+                || HasAggregatedCompileErrorEffect(node, suppress, isCollapseFold, compileErrorEffectSymbols)
+            )
+            {
+                flags = AppendFlag(flags, "compile-error");
+            }
 
             // Each projection has a fixed column count (paths/full = 6, effects = 7); empty fields
             // are empty strings. The row ends at the last column — no trailing tab, even when the
@@ -649,7 +721,9 @@ internal static class LlmSummaryRenderer
                 suppress: suppress,
                 elided: elided,
                 guards: guards,
-                renderRules: rules
+                renderRules: rules,
+                compileErrorSymbols: compileErrorSymbols,
+                compileErrorEffectSymbols: compileErrorEffectSymbols
             );
         }
     }
@@ -700,6 +774,8 @@ internal static class LlmSummaryRenderer
         return flags.Length > 0 ? flags + "|" + token : token;
     }
 
+    private static string AppendFlag(string flags, string token) => flags.Length > 0 ? flags + "|" + token : token;
+
     // llm-ids walk: mirrors WalkNode exactly (same selection/suppression/effects logic) but emits 8-column
     // rows with explicit id/parent_id surrogate linkage and seen:<canonicalId> back-references.
     private static void WalkNodeWithIds(
@@ -716,7 +792,9 @@ internal static class LlmSummaryRenderer
         Dictionary<string, int> firstEmissionId,
         List<int> parentIdAtDepth,
         bool guards = false,
-        FactRenderRules? renderRules = null
+        FactRenderRules? renderRules = null,
+        IReadOnlySet<string>? compileErrorSymbols = null,
+        IReadOnlySet<string>? compileErrorEffectSymbols = null
     )
     {
         var rules = renderRules ?? FactRenderRules.Empty;
@@ -748,7 +826,9 @@ internal static class LlmSummaryRenderer
                     firstEmissionId: firstEmissionId,
                     parentIdAtDepth: parentIdAtDepth,
                     guards: guards,
-                    renderRules: rules
+                    renderRules: rules,
+                    compileErrorSymbols: compileErrorSymbols,
+                    compileErrorEffectSymbols: compileErrorEffectSymbols
                 );
             }
 
@@ -873,6 +953,13 @@ internal static class LlmSummaryRenderer
 
             // A folded node adds opaque:<label> / collapsed:<label> (same fold the pretty renderer shows).
             flags = AppendFoldFlag(flags, fold);
+            if (
+                compileErrorSymbols?.Contains(node.SymbolId) == true
+                || HasAggregatedCompileErrorEffect(node, suppress, isCollapseFold, compileErrorEffectSymbols)
+            )
+            {
+                flags = AppendFlag(flags, "compile-error");
+            }
 
             var row = new List<string>
             {
@@ -920,7 +1007,9 @@ internal static class LlmSummaryRenderer
                 firstEmissionId: firstEmissionId,
                 parentIdAtDepth: parentIdAtDepth,
                 guards: guards,
-                renderRules: rules
+                renderRules: rules,
+                compileErrorSymbols: compileErrorSymbols,
+                compileErrorEffectSymbols: compileErrorEffectSymbols
             );
         }
     }

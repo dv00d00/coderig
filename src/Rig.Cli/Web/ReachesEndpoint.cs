@@ -31,12 +31,14 @@ internal static class ReachesEndpoint
 
                 try
                 {
+                    var compilation = await WebCompilationHealth.LoadAsync(workingDirectory, NullIfBlank(store));
                     var result = await ReachesQueryService.BuildAsync(
                         workingDirectory: workingDirectory,
                         fromPattern: from,
                         storeRef: NullIfBlank(store),
                         async: async ?? false,
-                        intrinsic: intrinsic ?? false
+                        intrinsic: intrinsic ?? false,
+                        compileErrorFiles: compilation.CompileErrorFiles
                     );
                     var response = new ReachesResponseDto(
                         From: result.FromPattern,
@@ -47,10 +49,12 @@ internal static class ReachesEndpoint
                                 Provider: e.Provider,
                                 Operation: e.Operation,
                                 Glyph: e.Glyph,
-                                Sites: e.Sites
+                                Sites: e.Sites,
+                                BindingHealth: e.BindingHealth
                             ))
                             .ToList(),
-                        IntrinsicHidden: result.IntrinsicHidden
+                        IntrinsicHidden: result.IntrinsicHidden,
+                        CompileErrors: WebCompilationHealth.ToDto(compilation)
                     );
                     return Results.Json(response);
                 }

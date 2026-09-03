@@ -104,7 +104,20 @@ internal sealed record FileFindingsResponseDto(
     bool CrossMethodAvailable
 );
 
-internal sealed record RigMetaResponseDto(string DerivationVersion, string WorkingDirectory, string StoreDirectory, string StoreId);
+internal sealed record CompileProjectDto(string Name, string Reason);
+
+internal sealed record CompileErrorsDto(int Files, int Total, IReadOnlyList<CompileProjectDto> Projects)
+{
+    internal bool IsClean => Files == 0 && Total == 0 && Projects.Count == 0;
+}
+
+internal sealed record RigMetaResponseDto(
+    string DerivationVersion,
+    string WorkingDirectory,
+    string StoreDirectory,
+    string StoreId,
+    CompileErrorsDto? CompileErrors = null
+);
 
 internal sealed record FileSourceResponseDto(
     string File,

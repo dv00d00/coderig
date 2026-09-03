@@ -68,6 +68,22 @@ function setBusy(on) {
   refs.reviewGo.disabled = on;
 }
 
+function showCompileWarning(meta) {
+  const health = meta?.compileErrors;
+  const partial = health?.projects?.length || 0;
+  const unhealthy = (health?.files || 0) > 0 || (health?.total || 0) > 0 || partial > 0;
+  refs.compileWarning.classList.toggle("hidden", !unhealthy);
+  refs.compileWarning.textContent = unhealthy
+    ? `⚠ This store came from a tree that did not fully compile: ${health.files} file(s), ${health.total} error diagnostic(s), ${partial} partial project(s). Facts may be MISSING or WRONG; rows marked ~compile-error need verification.`
+    : "";
+}
+
+function refreshCompileWarning(storeId) {
+  api.meta(storeId).then(showCompileWarning).catch(() => {
+    refs.compileWarning.classList.add("hidden");
+  });
+}
+
 // ---- data actions ---------------------------------------------------------------------------------------
 // `recordHistory=false` is the escape hatch used by restoreCrumb (popstate / a breadcrumb click) and by
 // openDiffTree (which records its OWN crumb before delegating here) — see the "pivot history" section below.
@@ -548,7 +564,11 @@ async function loadHazards() {
   const s = get();
   if (!s.tree || !s.hazards) return;
   try {
-    set({ hazardMarks: await api.hazards(resolved(), explicit(), s.treeFrom) });
+    const response = await api.hazards(resolved(), explicit(), s.treeFrom);
+    set({
+      hazardMarks: response.marks ?? response,
+      hazardCompileErrors: response.compileErrors ?? null,
+    });
   } catch (e) {
     status("hazards: " + e.message, true);
   }
@@ -1504,6 +1524,7 @@ function setupWatches() {
       const solPath = latest ? latest.solutionPath || "" : "";
       refs.storeDir.textContent = solPath;
       refs.storeDir.title = solPath; // full path on hover — the span ellipsis-truncates when narrow
+      refreshCompileWarning(s.storeId);
     },
   );
   watch(
@@ -1687,8 +1708,9 @@ function setupWatches() {
   setupWatches();
   // Derivation version first — it keys the cache and purges a stale persisted store before any cached fetch.
   try {
-    const meta = await api.meta();
+    const meta = await api.meta(new URLSearchParams(initialSearch).get("store"));
     await setCacheVersion(meta.derivationVersion);
+    showCompileWarning(meta);
   } catch {
     /* cache degrades to per-session */
   }

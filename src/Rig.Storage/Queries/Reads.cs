@@ -44,6 +44,164 @@ public static class Reads
             .ToList();
     }
 
+    public static async Task<IReadOnlyList<SourceFileInfo>?> LoadCompileErrorFilesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (!await context.Database.CanConnectAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        var rows = await context
+            .SourceFiles.Where(sourceFile => sourceFile.CompileErrorCount > 0)
+            .Select(sourceFile => new
+            {
+                sourceFile.RunId,
+                sourceFile.ProjectName,
+                sourceFile.FilePath,
+                sourceFile.Status,
+                sourceFile.Confidence,
+                sourceFile.Basis,
+                sourceFile.Reason,
+                sourceFile.Evidence,
+                sourceFile.CompileErrorCount,
+                sourceFile.CompileErrorCodes,
+                sourceFile.CompileErrorFirst,
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows.GroupBy(file => CompilationFilePath.Key(file.FilePath), CompilationFilePath.Comparer)
+            .Select(group =>
+            {
+                var representative = group
+                    .OrderBy(file => file.ProjectName, StringComparer.Ordinal)
+                    .ThenBy(file => file.RunId, StringComparer.Ordinal)
+                    .First();
+                return new SourceFileInfo(
+                    representative.ProjectName,
+                    representative.FilePath,
+                    representative.Status,
+                    representative.Confidence,
+                    representative.Basis,
+                    representative.Reason,
+                    representative.Evidence,
+                    group.GroupBy(file => file.RunId, StringComparer.Ordinal).Sum(run => run.Max(file => file.CompileErrorCount)),
+                    AggregateCodes(group.Select(file => file.CompileErrorCodes)),
+                    group
+                        .Select(file => file.CompileErrorFirst)
+                        .Where(message => message.Length > 0)
+                        .Order(StringComparer.Ordinal)
+                        .FirstOrDefault()
+                        ?? ""
+                );
+            })
+            .OrderBy(file => file.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public static async Task<IReadOnlyList<string>> LoadIndexedSourceFilePathsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    ) =>
+        await context
+            .SourceFiles.Where(sourceFile => sourceFile.Status != "skipped")
+            .Select(sourceFile => sourceFile.FilePath)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+    public static async Task<CompilationHealth> LoadCompilationHealthAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (!await context.Database.CanConnectAsync(cancellationToken))
+        {
+            return CompilationHealth.Empty;
+        }
+
+        var runRows = await context
+            .Runs.Select(run => new
+            {
+                run.Id,
+                run.CompileErrorTotal,
+                run.PartialProjects,
+            })
+            .ToListAsync(cancellationToken);
+        var fileRows = await context
+            .SourceFiles.Where(file => file.CompileErrorCount > 0)
+            .Select(file => new
+            {
+                file.RunId,
+                file.FilePath,
+                file.CompileErrorCount,
+                file.CompileErrorCodes,
+                file.CompileErrorFirst,
+            })
+            .ToListAsync(cancellationToken);
+
+        var files = fileRows
+            .GroupBy(file => CompilationFilePath.Key(file.FilePath), CompilationFilePath.Comparer)
+            .Select(group => new FileCompileHealth(
+                group.First().FilePath,
+                group.GroupBy(file => file.RunId, StringComparer.Ordinal).Sum(run => run.Max(file => file.CompileErrorCount)),
+                AggregateCodes(group.Select(file => file.CompileErrorCodes)),
+                group
+                    .Select(file => file.CompileErrorFirst)
+                    .Where(message => message.Length > 0)
+                    .Order(StringComparer.Ordinal)
+                    .FirstOrDefault()
+                    ?? ""
+            ))
+            .OrderBy(file => file.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var locatedByRun = fileRows
+            .GroupBy(file => file.RunId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group =>
+                    group
+                        .GroupBy(file => CompilationFilePath.Key(file.FilePath), CompilationFilePath.Comparer)
+                        .Sum(files => files.Max(file => file.CompileErrorCount)),
+                StringComparer.Ordinal
+            );
+        var unlocated = runRows.Sum(run => Math.Max(0, run.CompileErrorTotal - locatedByRun.GetValueOrDefault(run.Id)));
+        var partialProjects = runRows
+            .SelectMany(run => DecodePartialProjects(run.PartialProjects))
+            .Distinct()
+            .OrderBy(project => project.ProjectName, StringComparer.Ordinal)
+            .ThenBy(project => project.Reason, StringComparer.Ordinal)
+            .ToArray();
+
+        return new CompilationHealth(files, partialProjects, unlocated);
+    }
+
+    private static IEnumerable<ProjectCompileFailure> DecodePartialProjects(string? encoded)
+    {
+        foreach (var item in (encoded ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separator = item.LastIndexOf(':');
+            if (separator > 0 && separator < item.Length - 1)
+            {
+                yield return new ProjectCompileFailure(item[..separator], item[(separator + 1)..]);
+            }
+        }
+    }
+
+    private static string AggregateCodes(IEnumerable<string> encodedCodes)
+    {
+        const int maxCodes = 8;
+        var codes = encodedCodes
+            .SelectMany(encoded => encoded.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var listed = codes.Take(maxCodes).ToArray();
+        return codes.Length > listed.Length ? $"{string.Join(',', listed)},+{codes.Length - listed.Length}" : string.Join(',', listed);
+    }
+
     // Skipped source files, run-agnostic: deduped by file path across all runs.
     public static async Task<IReadOnlyList<SourceFileInfo>?> LoadSkippedSourceFilesAsync(
         RigDbContext context,
@@ -64,7 +222,10 @@ public static class Reads
                 Confidence: x.Confidence,
                 Basis: x.Basis,
                 Reason: x.Reason,
-                Evidence: x.Evidence
+                Evidence: x.Evidence,
+                CompileErrorCount: x.CompileErrorCount,
+                CompileErrorCodes: x.CompileErrorCodes,
+                CompileErrorFirst: x.CompileErrorFirst
             ))
             .ToListAsync(cancellationToken);
 
@@ -97,7 +258,10 @@ public static class Reads
                 SourceBranch: run.SourceBranch,
                 SourceDirty: run.SourceDirty,
                 ExtractionVersion: run.ExtractionVersion,
-                ProducingRigBuild: run.ProducingRigBuild
+                ProducingRigBuild: run.ProducingRigBuild,
+                CompileErrorFiles: run.CompileErrorFiles,
+                CompileErrorTotal: run.CompileErrorTotal,
+                PartialProjects: run.PartialProjects
             ))
             .ToListAsync(cancellationToken);
     }

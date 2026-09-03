@@ -21,7 +21,7 @@ internal sealed class CompilationHealthCollector
     private const int MaxCodesListed = 8;
     private const int MaxMessageLength = 200;
 
-    private readonly ConcurrentDictionary<string, FileBucket> _files = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FileBucket> _files = new(CompilationFilePath.Comparer);
     private readonly ConcurrentDictionary<(string Project, string Reason), byte> _projects = new();
     private int _unlocated;
 
@@ -46,8 +46,10 @@ internal sealed class CompilationHealthCollector
             return;
         }
 
-        _files.GetOrAdd(path, _ => new FileBucket()).Add(diagnostic);
+        _files.GetOrAdd(CompilationFilePath.Key(path), _ => new FileBucket()).Add(diagnostic);
     }
+
+    public void AddUnlocatedError() => Interlocked.Increment(ref _unlocated);
 
     // Record a location-less project failure (ProjectCompileFailure.NoCompilation / GeneratorEmit /
     // GeneratorRun). Idempotent per (project, reason) — the generator wiring pass can hit the same

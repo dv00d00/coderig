@@ -13,9 +13,25 @@ internal sealed record ImpactProvenanceDto(
     IReadOnlyList<string> ProducingRigBuilds
 );
 
-internal sealed record ImpactEffectDto(string Provider, string Operation, string Resource, string Enclosing, string? File, int Line);
+internal sealed record ImpactEffectDto(
+    string Provider,
+    string Operation,
+    string Resource,
+    string Enclosing,
+    string? File,
+    int Line,
+    string BindingHealth = "ok"
+);
 
-internal sealed record ImpactHazardDto(string Type, string Cell, string Enclosing, string Confidence, string? File, int Line);
+internal sealed record ImpactHazardDto(
+    string Type,
+    string Cell,
+    string Enclosing,
+    string Confidence,
+    string? File,
+    int Line,
+    string BindingHealth = "ok"
+);
 
 // The AMPLIFICATION tier's per-EP delta entry (from Impact.EpAmplification): a provider:operation whose effect is
 // now reached INSIDE an iteration context (or no longer is), with the reachable site count. A SEPARATE dto and
@@ -40,7 +56,8 @@ internal sealed record ImpactEpDeltaDto(
     // Amplification delta — defaulted empty so an existing client (and any test constructing this dto) is
     // unaffected; a client that knows about the tier renders them as a labelled "looped" group.
     IReadOnlyList<ImpactAmplificationDto>? AmplificationsAdded = null,
-    IReadOnlyList<ImpactAmplificationDto>? AmplificationsRemoved = null
+    IReadOnlyList<ImpactAmplificationDto>? AmplificationsRemoved = null,
+    string BindingHealth = "ok"
 );
 
 internal sealed record ImpactKindRouteDto(string Kind, string Route);
@@ -68,5 +85,7 @@ internal sealed record ImpactResponseDto(
     // The count is the withheld effect ENTRIES across every EP (11,745 of 14,059 on the MedDBase pair) — a
     // view that hid 83% of its rows without saying so would read as "barely any change".
     int HiddenIntrinsic = 0,
-    bool ExtractionCompatible = false
+    bool ExtractionCompatible = false,
+    CompileErrorsDto? BaseCompileErrors = null,
+    CompileErrorsDto? HeadCompileErrors = null
 );

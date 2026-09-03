@@ -274,6 +274,7 @@ function HazardMark(marks) {
       "🔁↓ Cross-method: " +
         xm.map((m) => `${m.sites} looped call site(s) (${m.confidence})`).join(", "),
     );
+  if (marks.some((m) => m.bindingHealth === "compile_error")) parts.push("~compile-error");
   const label = parts.join("  ");
   return h("span", { class: "haz", title: label }, label);
 }
@@ -411,6 +412,9 @@ function TreeNode(node, depth, ctx, amp = 0) {
       : null,
     edgeTxt
       ? h("span", { class: "edge" + (heur ? " heur" : "") }, edgeTxt)
+      : null,
+    node.bindingHealth === "compile_error"
+      ? h("span", { class: "edge heur", title: "source file had compile errors; facts may be missing or wrong" }, "~compile-error")
       : null,
     node.fanout > 1
       ? h("span", { class: "fanout" }, `×${node.fanout} fan-out`)
@@ -787,6 +791,7 @@ function EffectLine(sign, e) {
     h("span", { class: "eprov" }, `${e.provider}:${e.operation}`),
     e.resource ? " " + e.resource : "",
     h("span", { class: "eencl" }, " " + shortEncl(e.enclosing)),
+    e.bindingHealth === "compile_error" ? h("span", { class: "edge heur" }, " ~compile-error") : null,
   );
 }
 function HazLine(sign, hz) {
@@ -795,6 +800,7 @@ function HazLine(sign, hz) {
     { class: "effline haz " + (sign === "+" ? "add" : "del") },
     `${sign} ⚠ ${hz.type}(${hz.confidence})`,
     h("span", { class: "eencl" }, " " + shortEncl(hz.enclosing)),
+    hz.bindingHealth === "compile_error" ? h("span", { class: "edge heur" }, " ~compile-error") : null,
   );
 }
 const normalizedReviewPath = (value) => (value || "").replaceAll("\\", "/").toLocaleLowerCase();
@@ -883,6 +889,7 @@ function EpDeltaCard(p, actions, reviewTarget, state) {
     },
     twist,
     h("span", { class: "epd-route" }, p.route),
+    p.bindingHealth === "compile_error" ? h("span", { class: "edge heur" }, "~compile-error") : null,
     // colored add/remove tallies so "mostly additions" vs "heavy removals" reads at a glance across 200 cards
     h(
       "span",
@@ -1016,6 +1023,15 @@ export function ImpactView(s, actions) {
           { class: "impact-trust-warning", role: "alert" },
           `⚠ incompatible extraction versions — base [${(d.base.extractionVersions || []).map((v) => `v${v}`).join(", ") || "missing"}] (${(d.base.producingRigBuilds || []).join(", ") || "unknown build"}); head [${(d.head.extractionVersions || []).map((v) => `v${v}`).join(", ") || "missing"}] (${(d.head.producingRigBuilds || []).join(", ") || "unknown build"}). Re-index both stores with the current rig before trusting this diff.`,
         ),
+    [d.baseCompileErrors, d.headCompileErrors].some((health) =>
+      health && ((health.files || 0) > 0 || (health.total || 0) > 0 || (health.projects || []).length > 0),
+    )
+      ? h(
+          "div",
+          { class: "impact-trust-warning", role: "alert" },
+          `⚠ compilation health is partial — base: ${d.baseCompileErrors?.files || 0} file(s), ${d.baseCompileErrors?.total || 0} error(s), ${(d.baseCompileErrors?.projects || []).length} partial project(s); head: ${d.headCompileErrors?.files || 0} file(s), ${d.headCompileErrors?.total || 0} error(s), ${(d.headCompileErrors?.projects || []).length} partial project(s). Diff rows may be MISSING or WRONG.`,
+        )
+      : null,
     // MANDATORY DISCLOSURE: the effect selection is applied server-side now, so the default response has
     // already withheld alloc/throw. Same wording as the tree/reaches/hotspots notes, and it names the count
     // because a view that quietly dropped 83% of its rows would read as "barely any change".
@@ -1405,6 +1421,7 @@ export function CallersPanel(s, actions) {
           h("span", { class: "eff-glyph" }, e.glyph),
           h("span", { class: "ep-route" }, `${e.provider}:${e.operation}`),
           h("span", { class: "svc-count" }, `×${e.sites}`),
+          e.bindingHealth === "compile_error" ? h("span", { class: "edge heur" }, "~compile-error") : null,
         ),
       ),
     );
@@ -1418,6 +1435,7 @@ export function CallersPanel(s, actions) {
           "div",
           { class: "callers-ep path-node", title: n.id, onClick: () => actions.openTree(n.id) },
           h("span", { class: "ep-route" }, n.name),
+          n.bindingHealth === "compile_error" ? h("span", { class: "edge heur" }, "~compile-error") : null,
           Loc(n, actions),
         ),
       ),
@@ -2065,6 +2083,7 @@ export function Shell(actions) {
   refs.spin = h("span", { class: "spin" });
   refs.status = h("span", { id: "status" });
   refs.statusbar = h("div", { id: "statusbar" }, refs.spin, refs.status);
+  refs.compileWarning = h("div", { class: "compile-health-warning hidden", role: "alert" });
   refs.tree = h("div", { class: "tree" });
   refs.impact = h("div", { class: "tree impact-wrap hidden" });
   refs.refs = h("div", { class: "tree impact-wrap hidden" }); // refs report content area (mirrors refs.impact)
@@ -2085,6 +2104,7 @@ export function Shell(actions) {
     refs.impactToolbar,
     refs.refsToolbar,
     refs.hotspotToolbar,
+    refs.compileWarning,
     refs.statusbar,
     refs.tree,
     refs.file,

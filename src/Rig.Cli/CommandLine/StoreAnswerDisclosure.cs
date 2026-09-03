@@ -19,6 +19,12 @@ internal sealed class StoreAnswerDisclosure
     private readonly HashSet<string> _emittedStoreDirectories = new(
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal
     );
+    private readonly Dictionary<string, (string StoreId, CompilationHealthNotice.StoreSnapshot Snapshot)> _compilationSnapshots = new(
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal
+    );
+    private readonly HashSet<string> _emittedCompilationDirectories = new(
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal
+    );
 
     private StoreAnswerDisclosure(string workingDirectory, TextWriter error)
     {
@@ -42,6 +48,19 @@ internal sealed class StoreAnswerDisclosure
             ? current.DiscloseAsync(context, StoreDirectory(storeDirectoryOrDbPath), explicitStoreRef)
             : Task.CompletedTask;
 
+    internal static bool HasCompileError(string? filePath) =>
+        !string.IsNullOrEmpty(filePath) && Ambient.Value?.HasCompileErrorCore(filePath) == true;
+
+    internal static string BindingHealth(string? filePath) => HasCompileError(filePath) ? "compile_error" : "ok";
+
+    internal static IReadOnlySet<string> CompileErrorFiles =>
+        Ambient.Value?.CompileErrorFilesCore() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    internal static void WriteCompilationHealth() => Ambient.Value?.WriteCompilationHealthCore();
+
+    internal static void WriteCompilationHealth(string role, string storeDirectoryOrDbPath) =>
+        Ambient.Value?.WriteCompilationHealthCore(role, StoreDirectory(storeDirectoryOrDbPath));
+
     private async Task DiscloseAsync(RigDbContext context, string storeDirectory, string? explicitStoreRef)
     {
         var canonicalDirectory = Path.GetFullPath(storeDirectory);
@@ -51,6 +70,16 @@ internal sealed class StoreAnswerDisclosure
             {
                 return;
             }
+        }
+
+        CompilationHealthNotice.StoreSnapshot? compilationSnapshot = null;
+        try
+        {
+            compilationSnapshot = await CompilationHealthNotice.LoadStoreAsync(context);
+        }
+        catch
+        {
+            // A disclosure-only read must not replace the schema gate's ownership of store failures.
         }
 
         string line;
@@ -68,7 +97,66 @@ internal sealed class StoreAnswerDisclosure
 
         lock (_gate)
         {
+            if (compilationSnapshot is not null)
+            {
+                _compilationSnapshots[canonicalDirectory] = (StoreId(canonicalDirectory), compilationSnapshot);
+            }
             _error.WriteLine(line);
+        }
+    }
+
+    private bool HasCompileErrorCore(string filePath)
+    {
+        lock (_gate)
+        {
+            return _compilationSnapshots.Values.Any(value => value.Snapshot.HasCompileError(filePath));
+        }
+    }
+
+    private IReadOnlySet<string> CompileErrorFilesCore()
+    {
+        lock (_gate)
+        {
+            return _compilationSnapshots
+                .Values.SelectMany(value => value.Snapshot.CompileErrorFiles)
+                .ToHashSet(CompilationFilePath.Comparer);
+        }
+    }
+
+    private void WriteCompilationHealthCore()
+    {
+        lock (_gate)
+        {
+            foreach (var (directory, value) in _compilationSnapshots.OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!_emittedCompilationDirectories.Add(directory))
+                {
+                    continue;
+                }
+
+                foreach (var line in CompilationHealthNotice.Note(value.Snapshot.Health, value.Snapshot.IndexedFiles))
+                {
+                    _error.WriteLine($"{line} [store {value.StoreId}] Run `rig files --compile-errors` for details.");
+                }
+            }
+        }
+    }
+
+    private void WriteCompilationHealthCore(string role, string storeDirectory)
+    {
+        var canonicalDirectory = Path.GetFullPath(storeDirectory);
+        lock (_gate)
+        {
+            var emissionKey = $"{role}\u001f{canonicalDirectory}";
+            if (!_emittedCompilationDirectories.Add(emissionKey) || !_compilationSnapshots.TryGetValue(canonicalDirectory, out var value))
+            {
+                return;
+            }
+
+            foreach (var line in CompilationHealthNotice.Note(value.Snapshot.Health, value.Snapshot.IndexedFiles))
+            {
+                _error.WriteLine($"{line} [{role} store {value.StoreId}] Run `rig files --compile-errors` for details.");
+            }
         }
     }
 
@@ -150,13 +238,18 @@ internal sealed class StoreAnswerDisclosure
 
     private string Prefix(string storeDirectory, string? explicitStoreRef, string? indexedCommit)
     {
-        var directoryName = Path.GetFileName(storeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        var storeId = string.Equals(directoryName, StoreLayout.RigDirName, StringComparison.Ordinal) ? "legacy" : directoryName;
+        var storeId = StoreId(storeDirectory);
         var selection =
             explicitStoreRef is not null ? " (pinned)"
             : string.Equals(storeId, StoreLayout.LatestStoreId(_workingDirectory), StringComparison.OrdinalIgnoreCase) ? " (LATEST)"
             : " (default)";
         return $"store: {storeId}{selection} @ {(indexedCommit is null ? "unknown" : Short(indexedCommit))} — ";
+    }
+
+    private static string StoreId(string storeDirectory)
+    {
+        var directoryName = Path.GetFileName(storeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        return string.Equals(directoryName, StoreLayout.RigDirName, StringComparison.Ordinal) ? "legacy" : directoryName;
     }
 
     private static string? NormalizeCommit(string? commit) => string.IsNullOrWhiteSpace(commit) ? null : commit.Trim().ToLowerInvariant();

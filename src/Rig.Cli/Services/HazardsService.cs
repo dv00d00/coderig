@@ -18,7 +18,7 @@ public static class HazardsService
 {
     // One mark per (method, hazard type): the worst confidence the method carries for that type, and how many
     // sites fired. The client groups these by method id and paints a ⚠ on the node.
-    public sealed record HazardMark(string MethodId, string Type, string Confidence, int Sites);
+    public sealed record HazardMark(string MethodId, string Type, string Confidence, int Sites, string BindingHealth = "ok");
 
     public static async Task<IReadOnlyList<HazardMark>> ForTreeAsync(
         string workingDirectory,
@@ -42,6 +42,7 @@ public static class HazardsService
         var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules ?? [], loadedPaths: out var loadedPaths);
         var ws = new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef);
         await using var context = await OpenReadContextGatedAsync(ws);
+        var compilation = await CompilationHealthNotice.LoadStoreAsync(context);
 
         // Build the tree (sync, full) to get the set of reachable methods to filter hazards to.
         var computation = await TreeQueryService.ComputeAsync(
@@ -117,7 +118,8 @@ public static class HazardsService
                 MethodId: g.Key.Enclosing,
                 Type: g.Key.Type,
                 Confidence: g.OrderBy(f => ConfidenceRank(f.Confidence)).First().Confidence,
-                Sites: g.Count()
+                Sites: g.Count(),
+                BindingHealth: g.Any(finding => compilation.HasCompileError(finding.FilePath)) ? "compile_error" : "ok"
             ))
             .ToList();
 
@@ -145,7 +147,8 @@ public static class HazardsService
                         MethodId: g.Key,
                         Type: HazardKinds.CrossMethodAmplification,
                         Confidence: g.OrderBy(a => ConfidenceRank(a.Confidence)).First().Confidence,
-                        Sites: g.Count()
+                        Sites: g.Count(),
+                        BindingHealth: g.Any(anchor => compilation.HasCompileError(anchor.FilePath)) ? "compile_error" : "ok"
                     ))
             );
         }

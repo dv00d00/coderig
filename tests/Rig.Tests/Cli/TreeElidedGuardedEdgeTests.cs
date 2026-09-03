@@ -156,7 +156,9 @@ public sealed class TreeElidedGuardedEdgeTests
         tsvRows
             .Select(r => r.Split('\t'))
             .Where(f => f[0] == "1")
-            .Select(f => $"{f[1].Split('.')[^1]}|{f[^1]}")
+            // bindingHealth is the trailing disclosure column; under --guards the guard remains directly
+            // before it, so adding the disclosure cannot silently replace the guarded-edge oracle.
+            .Select(f => $"{f[1].Split('.')[^1]}|{f[^2]}")
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 

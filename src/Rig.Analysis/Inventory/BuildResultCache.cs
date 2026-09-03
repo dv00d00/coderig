@@ -164,7 +164,9 @@ internal sealed class BuildResultCache(string cacheDirectory, string? framework 
     // Stable filename from the normalised project path (content of the path, not the project).
     private string SidecarPath(string projectFilePath)
     {
-        var identity = Path.GetFullPath(projectFilePath);
+        // v2 carries additional files + analyzer-config paths into the reconstructed Roslyn project.
+        // A v1 hit omits generator MSBuild options and can invent failures such as Razor RZ3600.
+        var identity = "build-output:v2\n" + Path.GetFullPath(projectFilePath);
         if (framework is not null)
         {
             identity += $"\nframework:{framework.ToUpperInvariant()}";

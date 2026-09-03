@@ -217,6 +217,7 @@ internal static class CallersCommand
         var shaped = ShapeRules(opts, rules);
 
         await using var source = await openSource();
+        StoreAnswerDisclosure.WriteCompilationHealth();
 
         var computation = await CallersQueryService.ComputeAsync(
             source: source,

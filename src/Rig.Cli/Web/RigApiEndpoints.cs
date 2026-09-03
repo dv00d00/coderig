@@ -41,19 +41,21 @@ internal static class RigApiEndpoints
         // store id alone is not enough). See QueryCacheKeys.DerivationSchemaToken.
         app.MapGet(
             "/api/meta",
-            (string? store) =>
+            async (string? store) =>
             {
                 try
                 {
                     var location = new WorkspaceLocation(workingDirectory, NullIfBlank(store));
                     var storeDirectory = StoreLayout.ResolveReadStoreDir(location);
                     var storeKey = QueryCacheKeys.StoreKey(Path.Combine(storeDirectory, StoreLayout.DbFileName));
+                    var compilation = await WebCompilationHealth.LoadAsync(workingDirectory, NullIfBlank(store));
                     return Results.Json(
                         new RigMetaResponseDto(
                             DerivationVersion(workingDirectory, storeKey),
                             Path.GetFullPath(workingDirectory),
                             Path.GetFullPath(storeDirectory),
-                            Path.GetFileName(storeDirectory) ?? ""
+                            Path.GetFileName(storeDirectory) ?? "",
+                            WebCompilationHealth.ToDto(compilation)
                         )
                     );
                 }
@@ -293,7 +295,8 @@ internal static class RigApiEndpoints
                         amplification: amplification ?? true,
                         crossMethod: crossMethod ?? true
                     );
-                    return Results.Json(marks);
+                    var compilation = await WebCompilationHealth.LoadAsync(workingDirectory, NullIfBlank(store));
+                    return Results.Json(new HazardsResponseDto(marks, WebCompilationHealth.ToDto(compilation)));
                 }
                 catch (Exception ex)
                 {
@@ -331,16 +334,19 @@ internal static class RigApiEndpoints
                         raw: raw ?? false,
                         intrinsic: intrinsic ?? false
                     );
+                    var compilation = await WebCompilationHealth.LoadAsync(workingDirectory, NullIfBlank(store));
                     var response = TreeMapper.ToResponse(
                         from: from,
                         roots: result.Roots,
                         effects: result.Effects,
                         locations: result.Locations,
                         emoji: result.EffectEmoji,
-                        renderRules: result.Render
+                        renderRules: result.Render,
+                        compileErrorFiles: compilation.CompileErrorFiles
                     ) with
                     {
                         IntrinsicHidden = result.IntrinsicHidden,
+                        CompileErrors = WebCompilationHealth.ToDto(compilation),
                     };
                     return Results.Json(response);
                 }

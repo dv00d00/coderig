@@ -124,6 +124,10 @@ internal static class QueryCacheKeys
     // would keep serving rows/hedges/depths computed over the un-expanded seed set.
     internal const int FileEffectsSchema = 6;
 
+    // v1: persisted compilation-health disclosure is joined at render/view time; move the browser token
+    // so warm IndexedDB responses cannot omit the new binding-health fields and store warning.
+    internal const int DisclosureSchema = 1;
+
     // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped; v3 -> v4: guard-condition
     // deltas added to the payload; v4 -> v5: the per-EP AMPLIFICATION delta (ep_amplification_added/_removed)
     // added to the payload — a warm v4 blob decodes with empty amplification lists and would silently render a
@@ -153,7 +157,7 @@ internal static class QueryCacheKeys
     // version — the client can never keep serving an artifact whose server-side schema advanced. This is the
     // desync guard that a single hand-bumped client constant would lack, and it needs no MVID.
     internal static string DerivationSchemaToken() =>
-        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}.{EffectViewSchema}.{EffectsDiffSchema}.{HotspotSchema}.{ReviewSchema}.{FileEffectsSchema}";
+        $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}.{FindingViewSchema}.{EffectViewSchema}.{EffectsDiffSchema}.{HotspotSchema}.{ReviewSchema}.{FileEffectsSchema}.{DisclosureSchema}";
 
     internal static string FileEffectsCacheKey(string storeKey, string rulesHash, string filePath)
     {

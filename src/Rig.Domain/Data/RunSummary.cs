@@ -16,5 +16,8 @@ public record RunSummary(
     string? SourceBranch = null,
     bool SourceDirty = false,
     int ExtractionVersion = 0,
-    string? ProducingRigBuild = null
+    string? ProducingRigBuild = null,
+    int CompileErrorFiles = 0,
+    int CompileErrorTotal = 0,
+    string? PartialProjects = null
 );

@@ -29,7 +29,8 @@ public static class SchemaVersion
     //         flag cannot say WHICH file is off-commit, so a review could not scope the caveat.
     // v9->v10: persist each run's extraction-semantics version and producing rig build so two-store queries
     //          can reject provenance-skewed facts instead of comparing them as if they meant the same thing.
-    public const int Index = 10;
+    // v10->v11: persist located compilation diagnostics on source files and partial-compilation rollups on runs.
+    public const int Index = 11;
 
     // Bump whenever FactExtractor / extraction semantics change, even when the persisted DB shape does not.
     // This is fact provenance, deliberately independent of Index (shape) and Graph (materialization shape).

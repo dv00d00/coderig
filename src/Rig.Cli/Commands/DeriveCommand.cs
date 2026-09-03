@@ -147,6 +147,7 @@ internal static class DeriveCommand
         // below without a second ResolveReadStoreDir call (io:read ×7). Gated: schema fail-fast at open.
         var (context, rigDir) = await OpenReadContextGatedAsync(io.WorkspaceLocation, withStoreDir: true);
         await using var contextScope = context;
+        StoreAnswerDisclosure.WriteCompilationHealth();
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when
         // the config is absent; `error` is the log sink so config problems surface.
@@ -273,7 +274,7 @@ internal static class DeriveCommand
                 rule: xm
             )
             : [];
-        var crossMethodRows = CrossMethodAmplificationDataset.TsvRows(crossMethodPairs);
+        var crossMethodRows = CrossMethodAmplificationDataset.TsvRows(crossMethodPairs, StoreAnswerDisclosure.BindingHealth);
         // The DISPLAYED grain (tier 3, HazardKinds.CrossMethodAmplification): one finding per anchor call site, CHA
         // fan-out collapsed to the nearest-depth witness. The human view prints these; the pair rows above stay
         // the machine dataset.
@@ -285,7 +286,8 @@ internal static class DeriveCommand
         {
             // TSV column reference (tab-separated; one row per record):
             //   effect      \t provider \t operation \t resource \t enclosing \t file \t line \t observations(csv of Type)
-            //               \t mechanism \t cardinality \t shallowSizeBytes \t sizeConfidence \t sizeBasis
+            //               \t mechanism \t cardinality \t shallowSizeBytes \t sizeConfidence \t sizeBasis \t bindingHealth
+            //   compile_error \t project \t file \t count \t codes \t firstMessage
             //   hazard      \t type \t confidence \t reason \t cell/context \t enclosing \t file \t line \t detail
             //   amplification \t type \t confidence \t reason \t iterationContext \t enclosing \t file \t line \t detail \t provider \t operation
             //   entrypoint  \t kind \t method \t route \t file \t line \t services(csv) \t activeServices(csv) \t fqn
@@ -296,13 +298,21 @@ internal static class DeriveCommand
             {
                 var observations = string.Join(',', (e.Observations ?? []).Select(o => o.Type));
                 io.TextOutput.Output.WriteLine(
-                    $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{observations}\t{e.Mechanism}\t{e.Cardinality}\t{e.ShallowSizeBytes}\t{e.SizeConfidence}\t{e.SizeBasis}"
+                    $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{observations}\t{e.Mechanism}\t{e.Cardinality}\t{e.ShallowSizeBytes}\t{e.SizeConfidence}\t{e.SizeBasis}\t{StoreAnswerDisclosure.BindingHealth(e.FilePath)}"
+                );
+            }
+
+            foreach (var file in await Reads.LoadCompileErrorFilesAsync(context) ?? [])
+            {
+                io.TextOutput.Output.WriteLine(
+                    $"compile_error\t{TsvCell.Clean(file.ProjectName)}\t{TsvCell.Clean(file.FilePath)}\t{file.CompileErrorCount}"
+                        + $"\t{TsvCell.Clean(file.CompileErrorCodes)}\t{TsvCell.Clean(file.CompileErrorFirst)}"
                 );
             }
 
             foreach (var h in allHazards)
             {
-                io.TextOutput.Output.WriteLine(HazardTsvRow(h));
+                io.TextOutput.Output.WriteLine(HazardTsvRow(h, StoreAnswerDisclosure.BindingHealth(h.FilePath)));
             }
 
             // The AMPLIFICATION rows (own row type, never `hazard` — downstream consumers and the skill doc
@@ -311,7 +321,7 @@ internal static class DeriveCommand
             // --no-amplification, so a consumer's `hazard`-filtered pipeline is bit-for-bit unaffected either way.
             foreach (var a in amplificationFindings)
             {
-                io.TextOutput.Output.WriteLine(AmplificationTsvRow(a));
+                io.TextOutput.Output.WriteLine(AmplificationTsvRow(a, StoreAnswerDisclosure.BindingHealth(a.FilePath)));
             }
 
             // See CrossMethodAmplificationDataset for the column reference. Empty unless the rule section is present.
@@ -330,7 +340,7 @@ internal static class DeriveCommand
                 var loaded = deployments.ServicesForFile(ep.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: ep.Requires);
                 io.TextOutput.Output.WriteLine(
-                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{FqnOrRoute(route: ep.Route, filePath: ep.FilePath, line: ep.Line, docIdBySite: docIdBySite)}"
+                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{FqnOrRoute(route: ep.Route, filePath: ep.FilePath, line: ep.Line, docIdBySite: docIdBySite)}\t{StoreAnswerDisclosure.BindingHealth(ep.FilePath)}"
                 );
             }
             return 0;
@@ -344,6 +354,7 @@ internal static class DeriveCommand
             {
                 io.TextOutput.Output.WriteLine(
                     $"{Indent.L3}{ShortName(e.ResourceType)}{AllocationEvidenceFormatter.Suffix(e)}  <- {ShortName(e.EnclosingSymbolId)}  {ShortenPath(e.FilePath)}:{e.Line}"
+                        + (StoreAnswerDisclosure.HasCompileError(e.FilePath) ? "  ~compile-error" : "")
                 );
             }
         }
@@ -351,12 +362,12 @@ internal static class DeriveCommand
         // --- Hazards: the higher-order findings that match PATTERNS over effects (race_window / lazy_init_race /
         //     n_plus_1 / unserializable_payload — see HazardKinds). Promoted out of the generic observations
         //     block into their own section with per-type, per-confidence counts + sampled sites. ---
-        WriteHazards(io.TextOutput.Output, allHazards, opts.Limit);
+        WriteHazards(io.TextOutput.Output, allHazards, opts.Limit, StoreAnswerDisclosure.HasCompileError);
 
         // --- Amplification: the FACT tier, rendered AFTER Hazards (judgments first — a hazard is what a reviewer
         //     must decide about; amplification is inventory to scan). Empty-safe: a no-op under
         //     --no-amplification or when nothing in scope is looped. ---
-        WriteAmplification(io.TextOutput.Output, amplificationFindings, opts.Limit);
+        WriteAmplification(io.TextOutput.Output, amplificationFindings, opts.Limit, StoreAnswerDisclosure.HasCompileError);
 
         // --- Cross-method N+1 (tier 3): the ANCHOR-grain finding view — one row per looped call site, nearest
         //     witness as evidence, depth-tiered confidence. Terse by design (grouped by witness provider:op with
@@ -383,6 +394,7 @@ internal static class DeriveCommand
                         // unconditional call reached with no dispatch inference printed exactly like a d0
                         // witness found through a name-guessed virtual hop. Evidence names which one.
                         $"{Indent.L2}{ShortenPath(a.FilePath)}:{a.Line}  🔁[{a.IterationKind}] -> {ShortName(a.WitnessResource)}  d{a.WitnessDepth} [{a.Confidence}·{a.Evidence}]"
+                            + (StoreAnswerDisclosure.HasCompileError(a.FilePath) ? "  ~compile-error" : "")
                     );
                 }
 
@@ -438,7 +450,8 @@ internal static class DeriveCommand
                     filePath: e.FilePath,
                     line: e.Line,
                     requires: e.Requires,
-                    fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)
+                    fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite),
+                    compileError: StoreAnswerDisclosure.HasCompileError(e.FilePath)
                 );
             }
 
@@ -463,6 +476,7 @@ internal static class DeriveCommand
                 var tag = deployments.IsEmpty ? "" : $"  {EntryPointRenderer.DeployTag(deployments, h.FilePath, h.Requires)}";
                 io.TextOutput.Output.WriteLine(
                     $"{Indent.L3}{ShortName(h.Target)}  ⤳ via {h.Dispatcher}{tag}\n{Indent.L5}registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
+                        + (StoreAnswerDisclosure.HasCompileError(h.FilePath) ? "  ~compile-error" : "")
                 );
             }
             WriteSampleTruncationNote(io.TextOutput.Output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key ?? "");
@@ -764,15 +778,17 @@ internal static class DeriveCommand
     // The tsv `hazard` row for one finding (see the column reference in RunAsync): the full per-hazard
     // evidence — type, confidence, reason, cell/context, enclosing, file, line, detail — the comma-joined
     // `effect`-row observation Type list can't carry. Pure + internal so the column contract is unit-testable.
-    internal static string HazardTsvRow(HazardFinding h) =>
-        $"hazard\t{TsvCell.Clean(h.Type)}\t{TsvCell.Clean(h.Confidence)}\t{TsvCell.Clean(h.Reason)}\t{TsvCell.Clean(h.Context)}\t{TsvCell.Clean(h.Enclosing)}\t{TsvCell.Clean(h.FilePath)}\t{h.Line}\t{TsvCell.Clean(h.Detail)}";
+    internal static string HazardTsvRow(HazardFinding h, string? bindingHealth = null) =>
+        $"hazard\t{TsvCell.Clean(h.Type)}\t{TsvCell.Clean(h.Confidence)}\t{TsvCell.Clean(h.Reason)}\t{TsvCell.Clean(h.Context)}\t{TsvCell.Clean(h.Enclosing)}\t{TsvCell.Clean(h.FilePath)}\t{h.Line}\t{TsvCell.Clean(h.Detail)}"
+        + (bindingHealth is null ? "" : "\t" + bindingHealth);
 
     // The tsv `amplification` row: the `hazard` column contract verbatim (so one parser handles both), plus the
     // two columns amplification exists for — the effect's PROVIDER and OPERATION. A DISTINCT row type on purpose:
     // `hazard` is the closed hazard set for every downstream consumer and the skill doc, and column-1 filtering
     // (`awk -F'\t' '$1=="amplification"'`) is the documented idiom. Pure + internal so the contract is pinned.
-    internal static string AmplificationTsvRow(HazardFinding a) =>
-        $"amplification\t{TsvCell.Clean(a.Type)}\t{TsvCell.Clean(a.Confidence)}\t{TsvCell.Clean(a.Reason)}\t{TsvCell.Clean(a.Context)}\t{TsvCell.Clean(a.Enclosing)}\t{TsvCell.Clean(a.FilePath)}\t{a.Line}\t{TsvCell.Clean(a.Detail)}\t{TsvCell.Clean(a.Provider)}\t{TsvCell.Clean(a.Operation)}";
+    internal static string AmplificationTsvRow(HazardFinding a, string? bindingHealth = null) =>
+        $"amplification\t{TsvCell.Clean(a.Type)}\t{TsvCell.Clean(a.Confidence)}\t{TsvCell.Clean(a.Reason)}\t{TsvCell.Clean(a.Context)}\t{TsvCell.Clean(a.Enclosing)}\t{TsvCell.Clean(a.FilePath)}\t{a.Line}\t{TsvCell.Clean(a.Detail)}\t{TsvCell.Clean(a.Provider)}\t{TsvCell.Clean(a.Operation)}"
+        + (bindingHealth is null ? "" : "\t" + bindingHealth);
 
     // Confidence tiers in disclosure order (high first), so a per-type breakdown reads worst-first.
     private static readonly string[] ConfidenceOrder = ["high", "medium", "low"];
@@ -785,7 +801,12 @@ internal static class DeriveCommand
     // rows (HazardTsvRow, one per finding/site) stay per-site for tooling. Types are ordered by total site
     // count desc (busiest hazard first), ties broken by type name. Pure render over a finding list — internal so
     // it can be exercised against a synthetic finding set without wiring a full DeriveCommand run.
-    internal static void WriteHazards(TextWriter output, IReadOnlyList<HazardFinding> findings, int limit)
+    internal static void WriteHazards(
+        TextWriter output,
+        IReadOnlyList<HazardFinding> findings,
+        int limit,
+        Func<string, bool>? compileError = null
+    )
     {
         if (findings.Count == 0)
         {
@@ -794,7 +815,7 @@ internal static class DeriveCommand
 
         output.WriteLine();
         output.WriteLine($"Hazards (pattern findings): {findings.Count}");
-        WriteFindingGroups(output, findings.GroupBy(f => f.Type, StringComparer.Ordinal), limit);
+        WriteFindingGroups(output, findings.GroupBy(f => f.Type, StringComparer.Ordinal), limit, compileError);
     }
 
     // The AMPLIFICATION section: the same per-group rendering as Hazards (so the two read consistently), grouped
@@ -805,7 +826,12 @@ internal static class DeriveCommand
     // Deliberately NOT called "hazards": looped_effect is a structural FACT (the effect is inside an iteration
     // context, soundly) and not a judgment that anything is wrong — the header says "inventory" so a reader
     // triages it as such. See HazardKinds for the tier rationale. Empty-safe.
-    internal static void WriteAmplification(TextWriter output, IReadOnlyList<HazardFinding> findings, int limit)
+    internal static void WriteAmplification(
+        TextWriter output,
+        IReadOnlyList<HazardFinding> findings,
+        int limit,
+        Func<string, bool>? compileError = null
+    )
     {
         if (findings.Count == 0)
         {
@@ -814,7 +840,7 @@ internal static class DeriveCommand
 
         output.WriteLine();
         output.WriteLine($"Amplification (looped effects — structural inventory): {findings.Count}");
-        WriteFindingGroups(output, findings.GroupBy(f => f.ProviderOperation, StringComparer.Ordinal), limit);
+        WriteFindingGroups(output, findings.GroupBy(f => f.ProviderOperation, StringComparer.Ordinal), limit, compileError);
     }
 
     // The shared per-group body of the Hazards + Amplification sections, factored so the two sections cannot
@@ -822,7 +848,12 @@ internal static class DeriveCommand
     // counts and the confidence-tier breakdown, then one sampled row per ENCLOSING METHOD (deduped, worst-first,
     // ×N when a method holds several sites), then the truncation note. The only thing that varies between the
     // sections is the GROUPING KEY the caller chose — hazard type vs the effect's provider:operation.
-    private static void WriteFindingGroups(TextWriter output, IEnumerable<IGrouping<string, HazardFinding>> groups, int limit)
+    private static void WriteFindingGroups(
+        TextWriter output,
+        IEnumerable<IGrouping<string, HazardFinding>> groups,
+        int limit,
+        Func<string, bool>? compileError
+    )
     {
         // perTypeSample caps the number of METHOD rows shown (not sites).
         var perTypeSample = limit / 8 + 1;
@@ -882,6 +913,7 @@ internal static class DeriveCommand
                 var siteTag = siteCountForMethod > 1 ? $" ×{siteCountForMethod}" : "";
                 output.WriteLine(
                     $"{Indent.L3}{ShortName(representative.Context)}  <- {ShortName(representative.Enclosing)}  {ShortenPath(representative.FilePath)}:{representative.Line}  [{representative.Reason}]{siteTag}"
+                        + (compileError?.Invoke(representative.FilePath) == true ? "  ~compile-error" : "")
                 );
             }
 

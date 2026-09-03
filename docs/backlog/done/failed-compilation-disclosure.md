@@ -1,6 +1,6 @@
 # Facts from a tree that does not compile are presented as sound — no query-time disclosure
 
-**Status:** todo — spec written, ready to dispatch:
+**Status:** done — shipped 2026-09-04:
 [docs/spikes/failed-compilation-disclosure-spec.md](../../spikes/failed-compilation-disclosure-spec.md) ·
 **Priority: HIGH** (silent wrong/incomplete answers at exactly the moment rig is most used — right after an
 edit; the failure is a confident "nothing calls this", not an error) · **Found:** 2026-08-20, raised by the
@@ -187,3 +187,18 @@ Everything else in the spec is ACCEPTED as designed, in particular:
 Two by-product bugs the spec found, to fix in the same slice: `SolutionSourceLoader.cs:247` writes every error
 diagnostic to raw stdout uncapped, and `:1502` (`diagnostics: out _`) discards generator diagnostics entirely.
 The latter also gives the ClientPage generator flake its first real diagnosis channel.
+
+## Resolution
+
+Compilation health is now a persisted part of index provenance: each `source_files` row carries located error
+count/codes/first message and each `runs` row carries the total plus location-less partial-project failures.
+Store-backed CLI queries disclose unhealthy facts before cache lookup, including full cache hits; human, TSV,
+LLM and web rows carry file-local binding health, while impact names base and head separately. `/api/meta` and
+the affected report DTOs expose the same roll-up and the SPA renders store- and row-level warnings.
+
+The implementation also records real generator-driver failures, preserves MSBuild additional/analyzer-config
+inputs in reconstructed Roslyn projects, and invalidates legacy DTB sidecars that lacked them. Real stress
+tests cover a deleted interface member whose caller fails elsewhere, a total project failure, CS0433 ambiguity,
+a throwing generator, no-cascade, and broken→fixed→broken clearing. Index schema moved 10→11 and the browser
+disclosure schema is v1. Full release gate passes: 1,446 main tests, 83 shared integration tests (+1 known
+skip), all 18 independent classes, and 33 live integration tests.

@@ -28,6 +28,7 @@ internal sealed record TreeRenderContext(
     internal IReadOnlyDictionary<string, List<string>>? EffectLeavesByMethod { get; init; }
     internal IReadOnlyDictionary<string, string>? HazardsByMethod { get; init; }
     internal bool Guards { get; init; }
+    internal IReadOnlySet<string> CompileErrorFiles { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     // Prune's elided-edge oracle. A "⋯elided" node carries no children of its own — the subtree is drawn
     // under the occurrence that WAS expanded — so the per-node SubtreeHasEffect walk cannot see what lies
@@ -353,6 +354,7 @@ internal static class TreeRenderer
         var effectLeavesByMethod = context.EffectLeavesByMethod;
         var hazardsByMethod = context.HazardsByMethod;
         var guards = context.Guards;
+        var compileErrorFiles = context.CompileErrorFiles;
 
         // This node's concrete instantiation (declaring-type args + own-method args), resolved from its
         // monomorphization bindings against the PARENT's resolved instantiation — path-contextual
@@ -453,6 +455,13 @@ internal static class TreeRenderer
             files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
                 : "";
+        var compileError =
+            locById is not null
+            && locById.TryGetValue(node.SymbolId, out var compileLoc)
+            && compileLoc.File is not null
+            && CompilationFilePath.Contains(compileErrorFiles, compileLoc.File)
+                ? "  ~compile-error"
+                : "";
         // This node's concrete instantiation (declaring-type args + own-method args), resolved from its
         // monomorphization bindings against the PARENT's resolved instantiation — path-contextual
         // monomorphization. Carried down to children as THEIR parent binding so a forwarding chain resolves.
@@ -489,7 +498,7 @@ internal static class TreeRenderer
         // SourceLocDedupWriter's trailing-loc regex still matches.
         var externalTag = node.IsExternal ? ExternalTag : "";
         var label =
-            $"{epPrefix}{name}{dispatch}{handoff}{loop}{guardTag}{calls}{elided}{externalTag}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
+            $"{epPrefix}{name}{dispatch}{handoff}{loop}{guardTag}{calls}{elided}{externalTag}{opaqueTag}{cutTag}{fx}{hazard}{compileError}{loc}{epSuffix}{callLoc}";
         output.WriteLine(isRoot ? label : $"{prefix}{Connector(isLast)}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or

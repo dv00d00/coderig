@@ -310,6 +310,7 @@ internal static class TreeCommand
         var renderRules = opts.Raw ? FactRenderRules.Empty : rules.Render;
 
         await using var source = await openSource();
+        StoreAnswerDisclosure.WriteCompilationHealth();
         var timer = new PhaseTimer(opts.Time, io.TextOutput.Error);
 
         // Query cache (best-effort, opt-out via --no-cache). A `rig tree` query recomputes the call-tree
@@ -564,7 +565,7 @@ internal static class TreeCommand
                 );
             foreach (var root in roots)
             {
-                EmitTsvNode(root, 0, tsvEffects, locations, io.TextOutput.Output, opts.Guards);
+                EmitTsvNode(root, 0, tsvEffects, locations, io.TextOutput.Output, opts.Guards, StoreAnswerDisclosure.CompileErrorFiles);
             }
 
             // --hazards: the per-hazard `hazard` rows (same column contract as `derive --format tsv`) after the
@@ -636,6 +637,17 @@ internal static class TreeCommand
         // Full; effects → EffectsFlat. llm-ids adds explicit surrogate-id linkage (8-column schema).
         if (llmFormat || llmIds)
         {
+            var compileErrorSymbols = locations
+                .Where(location => CompilationFilePath.Contains(StoreAnswerDisclosure.CompileErrorFiles, location.Value.File))
+                .Select(location => location.Key)
+                .ToHashSet(StringComparer.Ordinal);
+            var compileErrorEffectSymbols = effects
+                .Where(effect =>
+                    effect.EnclosingSymbolId is not null
+                    && CompilationFilePath.Contains(StoreAnswerDisclosure.CompileErrorFiles, effect.FilePath)
+                )
+                .Select(effect => effect.EnclosingSymbolId!)
+                .ToHashSet(StringComparer.Ordinal);
             // Raw provider:operation per occurrence, keyed by enclosing symbol — the LLM renderer
             // aggregates counts itself (no emoji, no resource names).
             var rawEffectsForLlm = effects
@@ -659,7 +671,9 @@ internal static class TreeCommand
                     output: io.TextOutput.Output,
                     suppress: suppressSet,
                     guards: opts.Guards,
-                    renderRules: renderRules
+                    renderRules: renderRules,
+                    compileErrorSymbols: compileErrorSymbols,
+                    compileErrorEffectSymbols: compileErrorEffectSymbols
                 );
             }
             else
@@ -671,7 +685,9 @@ internal static class TreeCommand
                     output: io.TextOutput.Output,
                     suppress: suppressSet,
                     guards: opts.Guards,
-                    renderRules: renderRules
+                    renderRules: renderRules,
+                    compileErrorSymbols: compileErrorSymbols,
+                    compileErrorEffectSymbols: compileErrorEffectSymbols
                 );
             }
 
@@ -749,8 +765,13 @@ internal static class TreeCommand
                 io.TextOutput.Output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
             }
 
-            DeriveCommand.WriteHazards(io.TextOutput.Output, hazardFindings, AllHazardSites);
-            DeriveCommand.WriteAmplification(io.TextOutput.Output, amplificationFindings, AllHazardSites);
+            DeriveCommand.WriteHazards(io.TextOutput.Output, hazardFindings, AllHazardSites, StoreAnswerDisclosure.HasCompileError);
+            DeriveCommand.WriteAmplification(
+                io.TextOutput.Output,
+                amplificationFindings,
+                AllHazardSites,
+                StoreAnswerDisclosure.HasCompileError
+            );
             timer.Total();
             return 0;
         }
@@ -773,8 +794,13 @@ internal static class TreeCommand
                 io.TextOutput.Output.WriteLine($"{Indent.L1}{ShortName(sym)}\n{Indent.L3}{string.Join("  ", effectsByMethod[sym])}");
             }
 
-            DeriveCommand.WriteHazards(io.TextOutput.Output, hazardFindings, AllHazardSites);
-            DeriveCommand.WriteAmplification(io.TextOutput.Output, amplificationFindings, AllHazardSites);
+            DeriveCommand.WriteHazards(io.TextOutput.Output, hazardFindings, AllHazardSites, StoreAnswerDisclosure.HasCompileError);
+            DeriveCommand.WriteAmplification(
+                io.TextOutput.Output,
+                amplificationFindings,
+                AllHazardSites,
+                StoreAnswerDisclosure.HasCompileError
+            );
             timer.Total();
             return 0;
         }
@@ -813,7 +839,7 @@ internal static class TreeCommand
         // they cache under the forest key always; the seam is now cached under a hazards+gate-namespaced key
         // (see RenderSidecarKey.Seam), so the augmented --hazards seam can never taint the plain-tree seam —
         // tainting is impossible across distinct slots — and the seam write is therefore UNCONDITIONAL.
-        var locById = opts.Files ? locations : null;
+        var locById = locations;
         if (graph is not null)
         {
             cache.Put(locKey, locations, LocationsCodec.Encode);
@@ -842,6 +868,7 @@ internal static class TreeCommand
             EffectLeavesByMethod = effectLeavesByMethod,
             HazardsByMethod = hazardsByMethod,
             Guards = opts.Guards,
+            CompileErrorFiles = StoreAnswerDisclosure.CompileErrorFiles,
         };
         var rendered = 0;
         foreach (var root in roots)
@@ -871,8 +898,13 @@ internal static class TreeCommand
         // --hazards: the summary section under the tree (reuses the `derive` Hazards renderer). Empty-safe —
         // a no-op without --hazards (hazardFindings stays []). AllHazardSites = show every site (this is the
         // bounded one-EP drill-in, not the whole-store triage list `derive` caps).
-        DeriveCommand.WriteHazards(io.TextOutput.Output, hazardFindings, AllHazardSites);
-        DeriveCommand.WriteAmplification(io.TextOutput.Output, amplificationFindings, AllHazardSites);
+        DeriveCommand.WriteHazards(io.TextOutput.Output, hazardFindings, AllHazardSites, StoreAnswerDisclosure.HasCompileError);
+        DeriveCommand.WriteAmplification(
+            io.TextOutput.Output,
+            amplificationFindings,
+            AllHazardSites,
+            StoreAnswerDisclosure.HasCompileError
+        );
 
         timer.Lap("seam effects + render");
         timer.Total();
@@ -939,7 +971,8 @@ internal static class TreeCommand
         IReadOnlyDictionary<string, string> effectsByMethod,
         IReadOnlyDictionary<string, (string? File, int Line)> locations,
         TextWriter output,
-        bool guards = false
+        bool guards = false,
+        IReadOnlySet<string>? compileErrorFiles = null
     )
     {
         var (file, line) = locations.TryGetValue(node.SymbolId, out var loc) ? loc : (null, 0);
@@ -948,12 +981,13 @@ internal static class TreeCommand
         // (empty for must-run). Same text as the human tree's ⎇ glyph (TreeRenderer.ShortGuards): the foreach
         // MoveNext guard is filtered and a short-circuit ||/&& renders as the whole source condition.
         var guardCol = guards ? "\t" + ShortGuards(encoded: node.EnclosingGuards, loopDetail: node.LoopDetail) : "";
+        var bindingHealth = CompilationFilePath.Contains(compileErrorFiles, file) ? "compile_error" : "ok";
         output.WriteLine(
-            $"{depth}\t{node.SymbolId}\t{node.EdgeKind}\t{node.HandoffVia}\t{node.Fanout}\t{effects}\t{file}\t{line}{guardCol}"
+            $"{depth}\t{node.SymbolId}\t{node.EdgeKind}\t{node.HandoffVia}\t{node.Fanout}\t{effects}\t{file}\t{line}{guardCol}\t{bindingHealth}"
         );
         foreach (var child in node.Children)
         {
-            EmitTsvNode(child, depth + 1, effectsByMethod, locations, output, guards);
+            EmitTsvNode(child, depth + 1, effectsByMethod, locations, output, guards, compileErrorFiles);
         }
     }
 }

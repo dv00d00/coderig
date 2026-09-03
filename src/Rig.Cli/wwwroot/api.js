@@ -140,7 +140,7 @@ function effectFilterSignature(only, exclude, intrinsic) {
 }
 
 export const api = {
-  meta: () => getJson("/api/meta"),
+  meta: (storeId = null) => getJson("/api/meta" + (storeId ? `?store=${encodeURIComponent(storeId)}` : "")),
   runs: () => getJson("/api/runs"), // LATEST pointer moves → never cached
   // `|fam` is a PAYLOAD-SHAPE token, not a new query: the response gained the family->providers grouping, and
   // an IndexedDB entry written before that (the derivation version only moves on a rules/schema change, which

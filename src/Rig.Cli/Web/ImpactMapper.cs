@@ -34,9 +34,13 @@ internal static class ImpactMapper
         // behind the warm cache's gate (measured ~1.0 s each on MedDBase, then a hit on every later request).
         var baseLocationsTask = LoadUniqueLocationsAsync(workingDirectory, baseStore);
         var headLocationsTask = LoadUniqueLocationsAsync(workingDirectory, headStore);
-        await Task.WhenAll(baseLocationsTask, headLocationsTask);
+        var baseCompilationTask = WebCompilationHealth.LoadAsync(workingDirectory, baseStore);
+        var headCompilationTask = WebCompilationHealth.LoadAsync(workingDirectory, headStore);
+        await Task.WhenAll(baseLocationsTask, headLocationsTask, baseCompilationTask, headCompilationTask);
         var baseLocations = await baseLocationsTask;
         var headLocations = await headLocationsTask;
+        var baseCompilation = await baseCompilationTask;
+        var headCompilation = await headCompilationTask;
         return new ImpactResponseDto(
             Base: Prov(art.BaseProvenance),
             Head: Prov(art.HeadProvenance),
@@ -46,6 +50,8 @@ internal static class ImpactMapper
             BehavioralEpCount: view.BehavioralEpCount,
             HiddenIntrinsic: view.HiddenIntrinsic,
             ExtractionCompatible: art.BaseProvenance.IsExtractionCompatibleWith(art.HeadProvenance),
+            BaseCompileErrors: WebCompilationHealth.ToDto(baseCompilation),
+            HeadCompileErrors: WebCompilationHealth.ToDto(headCompilation),
             PerEp: view.PerEp.Select(p => new ImpactEpDeltaDto(
                     Kind: p.Kind,
                     Route: p.Route,
@@ -59,8 +65,12 @@ internal static class ImpactMapper
                             Operation: e.Operation,
                             Resource: e.Resource,
                             Enclosing: e.Enclosing,
-                            File: headLocations.GetValueOrDefault(e.Enclosing)?.File,
-                            Line: headLocations.GetValueOrDefault(e.Enclosing)?.Line ?? 0
+                            File: headLocations.GetValueOrDefault(ImpactEngine.StripParams(e.Enclosing))?.File,
+                            Line: headLocations.GetValueOrDefault(ImpactEngine.StripParams(e.Enclosing))?.Line ?? 0,
+                            BindingHealth: WebCompilationHealth.BindingHealth(
+                                headCompilation,
+                                headLocations.GetValueOrDefault(ImpactEngine.StripParams(e.Enclosing))?.File
+                            )
                         ))
                         .ToList(),
                     Removed: p.Removed.Select(e => new ImpactEffectDto(
@@ -68,8 +78,12 @@ internal static class ImpactMapper
                             Operation: e.Operation,
                             Resource: e.Resource,
                             Enclosing: e.Enclosing,
-                            File: baseLocations.GetValueOrDefault(e.Enclosing)?.File,
-                            Line: baseLocations.GetValueOrDefault(e.Enclosing)?.Line ?? 0
+                            File: baseLocations.GetValueOrDefault(ImpactEngine.StripParams(e.Enclosing))?.File,
+                            Line: baseLocations.GetValueOrDefault(ImpactEngine.StripParams(e.Enclosing))?.Line ?? 0,
+                            BindingHealth: WebCompilationHealth.BindingHealth(
+                                baseCompilation,
+                                baseLocations.GetValueOrDefault(ImpactEngine.StripParams(e.Enclosing))?.File
+                            )
                         ))
                         .ToList(),
                     HazardsAdded: p.HazardsAddedOrEmpty.Select(hz => new ImpactHazardDto(
@@ -77,8 +91,12 @@ internal static class ImpactMapper
                             Cell: hz.Cell,
                             Enclosing: hz.Enclosing,
                             Confidence: hz.Confidence,
-                            File: headLocations.GetValueOrDefault(hz.Enclosing)?.File,
-                            Line: headLocations.GetValueOrDefault(hz.Enclosing)?.Line ?? 0
+                            File: headLocations.GetValueOrDefault(ImpactEngine.StripParams(hz.Enclosing))?.File,
+                            Line: headLocations.GetValueOrDefault(ImpactEngine.StripParams(hz.Enclosing))?.Line ?? 0,
+                            BindingHealth: WebCompilationHealth.BindingHealth(
+                                headCompilation,
+                                headLocations.GetValueOrDefault(ImpactEngine.StripParams(hz.Enclosing))?.File
+                            )
                         ))
                         .ToList(),
                     HazardsRemoved: p.HazardsRemovedOrEmpty.Select(hz => new ImpactHazardDto(
@@ -86,8 +104,12 @@ internal static class ImpactMapper
                             Cell: hz.Cell,
                             Enclosing: hz.Enclosing,
                             Confidence: hz.Confidence,
-                            File: baseLocations.GetValueOrDefault(hz.Enclosing)?.File,
-                            Line: baseLocations.GetValueOrDefault(hz.Enclosing)?.Line ?? 0
+                            File: baseLocations.GetValueOrDefault(ImpactEngine.StripParams(hz.Enclosing))?.File,
+                            Line: baseLocations.GetValueOrDefault(ImpactEngine.StripParams(hz.Enclosing))?.Line ?? 0,
+                            BindingHealth: WebCompilationHealth.BindingHealth(
+                                baseCompilation,
+                                baseLocations.GetValueOrDefault(ImpactEngine.StripParams(hz.Enclosing))?.File
+                            )
                         ))
                         .ToList(),
                     SharedMutationOnPath: p.SharedMutationOnPath,
@@ -103,7 +125,8 @@ internal static class ImpactMapper
                             Operation: a.Operation,
                             Sites: a.Sites
                         ))
-                        .ToList()
+                        .ToList(),
+                    BindingHealth: EpBindingHealth(p, baseLocations, headLocations, baseCompilation, headCompilation)
                 ))
                 .ToList()
         );
@@ -157,6 +180,41 @@ internal static class ImpactMapper
             ExtractionVersions: p.ExtractionVersionsOrEmpty,
             ProducingRigBuilds: p.ProducingRigBuildsOrEmpty
         );
+
+    private static string EpBindingHealth(
+        EpFootprintDelta delta,
+        IReadOnlyDictionary<string, SourceLocation> baseLocations,
+        IReadOnlyDictionary<string, SourceLocation> headLocations,
+        CompilationHealthNotice.StoreSnapshot baseCompilation,
+        CompilationHealthNotice.StoreSnapshot headCompilation
+    )
+    {
+        if (baseCompilation.HasCompileError(delta.FilePath) || headCompilation.HasCompileError(delta.FilePath))
+        {
+            return "compile_error";
+        }
+
+        var headEnclosings = delta
+            .Added.Select(effect => effect.Enclosing)
+            .Concat(delta.HazardsAddedOrEmpty.Select(hazard => hazard.Enclosing));
+        if (
+            headEnclosings.Any(enclosing =>
+                headCompilation.HasCompileError(headLocations.GetValueOrDefault(ImpactEngine.StripParams(enclosing))?.File)
+            )
+        )
+        {
+            return "compile_error";
+        }
+
+        var baseEnclosings = delta
+            .Removed.Select(effect => effect.Enclosing)
+            .Concat(delta.HazardsRemovedOrEmpty.Select(hazard => hazard.Enclosing));
+        return baseEnclosings.Any(enclosing =>
+            baseCompilation.HasCompileError(baseLocations.GetValueOrDefault(ImpactEngine.StripParams(enclosing))?.File)
+        )
+            ? "compile_error"
+            : "ok";
+    }
 
     private sealed record SourceLocation(string File, int Line);
 }

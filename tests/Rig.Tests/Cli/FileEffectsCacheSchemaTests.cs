@@ -13,6 +13,7 @@ public sealed class FileEffectsCacheSchemaTests
         QueryCacheKeys
             .FileEffectsCacheKey("store", "rules", "/repo/A.cs")
             .ShouldBe("0ABFD748F1AD8FBE6671CBD28134F1B7A8EA637A1B13899D3E456BF4ACBC675C");
-        QueryCacheKeys.DerivationSchemaToken().Split('.').Last().ShouldBe(QueryCacheKeys.FileEffectsSchema.ToString());
+        QueryCacheKeys.DerivationSchemaToken().Split('.')[^2].ShouldBe(QueryCacheKeys.FileEffectsSchema.ToString());
+        QueryCacheKeys.DerivationSchemaToken().Split('.').Last().ShouldBe(QueryCacheKeys.DisclosureSchema.ToString());
     }
 }

@@ -12,7 +12,7 @@ namespace Rig.Cli.Services;
 // The reusable REACHABLE-EFFECTS computation shared by the CLI, resident live queries, and web host.
 public static class ReachesQueryService
 {
-    public sealed record EffectSummary(string Provider, string Operation, string Glyph, int Sites);
+    public sealed record EffectSummary(string Provider, string Operation, string Glyph, int Sites, string BindingHealth = "ok");
 
     public sealed record ReachesQueryResult(
         string FromPattern,
@@ -37,7 +37,8 @@ public static class ReachesQueryService
         string fromPattern,
         string? storeRef = null,
         bool async = false,
-        bool intrinsic = false
+        bool intrinsic = false,
+        IReadOnlySet<string>? compileErrorFiles = null
     )
     {
         var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: [], loadedPaths: out _);
@@ -63,7 +64,8 @@ public static class ReachesQueryService
                 Provider: g.Key.Provider,
                 Operation: g.Key.Operation,
                 Glyph: EmojiLookup.For(rules.EffectEmoji, provider: g.Key.Provider, operation: g.Key.Operation),
-                Sites: g.Count()
+                Sites: g.Count(),
+                BindingHealth: g.Any(effect => CompilationFilePath.Contains(compileErrorFiles, effect.FilePath)) ? "compile_error" : "ok"
             ))
             .OrderByDescending(s => s.Sites)
             .ThenBy(s => s.Provider, StringComparer.Ordinal)

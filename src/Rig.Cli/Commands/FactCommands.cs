@@ -107,6 +107,13 @@ internal static class FactCommands
 
             output.WriteLine($"{detailIndent}extraction=v{run.ExtractionVersion} rig={run.ProducingRigBuild ?? "unknown"}");
             output.WriteLine($"{detailIndent}symbols={run.SymbolCount} references={run.ReferenceCount} di={run.DiRegistrationCount}");
+            if (run.CompileErrorFiles > 0 || run.CompileErrorTotal > 0 || !string.IsNullOrEmpty(run.PartialProjects))
+            {
+                output.WriteLine(
+                    $"{detailIndent}partial={run.CompileErrorFiles} file(s), {run.CompileErrorTotal} compile error(s)"
+                        + (string.IsNullOrEmpty(run.PartialProjects) ? "" : $", projects={run.PartialProjects}")
+                );
+            }
         }
     }
 
@@ -171,8 +178,13 @@ internal static class FactCommands
     internal static Command BuildFiles(TextWriter output, TextWriter error, string workingDirectory)
     {
         var skipped = new Option<bool>("--skipped") { Description = "List source files skipped during indexing." };
+        var compileErrors = new Option<bool>("--compile-errors") { Description = "List source files with persisted compile errors." };
+        var format = CommonOptions.Format(
+            description: "Output format: tsv. Machine formats contain no human headings or footers.",
+            allowedValues: ["tsv"]
+        );
         var storeRef = CommonOptions.Store();
-        var cmd = new Command(name: "files", description: "Inspect indexed source files.") { skipped, storeRef };
+        var cmd = new Command(name: "files", description: "Inspect indexed source files.") { skipped, compileErrors, format, storeRef };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
@@ -191,6 +203,22 @@ internal static class FactCommands
                         }
 
                         SourceFileRenderer.RenderSkipped(sourceFiles, output);
+                        return 0;
+                    }
+
+                    if (pr.GetValue(compileErrors))
+                    {
+                        var sourceFiles = await Reads.LoadCompileErrorFilesAsync(context);
+                        if (sourceFiles is null)
+                        {
+                            return CommandGuard.NoRunError(error);
+                        }
+
+                        SourceFileRenderer.RenderCompileErrors(
+                            sourceFiles,
+                            output,
+                            tsv: string.Equals(pr.GetValue(format), "tsv", StringComparison.OrdinalIgnoreCase)
+                        );
                         return 0;
                     }
 

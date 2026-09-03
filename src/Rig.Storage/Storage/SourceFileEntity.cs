@@ -20,6 +20,12 @@ public sealed class SourceFileEntity
 
     public string Evidence { get; set; } = "";
 
+    public int CompileErrorCount { get; set; }
+
+    public string CompileErrorCodes { get; set; } = "";
+
+    public string CompileErrorFirst { get; set; } = "";
+
     // This file differed from the source repository's HEAD when the run indexed it, so its facts are NOT
     // at the run's SourceCommit. Recorded per file because dirtiness is a per-file property: the run-level
     // RunEntity.SourceDirty says only that SOME file was uncommitted. Set by Writes.SaveAsync from the

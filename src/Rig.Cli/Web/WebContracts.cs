@@ -6,7 +6,7 @@ namespace Rig.Cli.Web;
 
 // One aggregated effect on a method: distinct provider:operation with the glyph and the number of static
 // call-SITES (matching `rig` semantics — sites in code, not runtime executions).
-internal sealed record EffectDto(string Provider, string Operation, string Glyph, int Sites);
+internal sealed record EffectDto(string Provider, string Operation, string Glyph, int Sites, string BindingHealth = "ok");
 
 internal sealed record TreeNodeDto(
     string Id, // SymbolId (DocID) — the stable identity for client-side collapse/re-root state.
@@ -36,7 +36,16 @@ internal sealed record TreeNodeDto(
     // The reaching edge's iteration context ("id in ids"), null when the call is not made from a loop. The
     // client FOLDS this down the tree: every effect beneath a loop edge renders amplified (computed at render
     // time, never materialized per child — see amplification-context-propagation).
-    string? Loop = null
+    string? Loop = null,
+    string BindingHealth = "ok"
 );
 
-internal sealed record TreeResponseDto(string From, bool Matched, IReadOnlyList<TreeNodeDto> Roots, bool IntrinsicHidden = false);
+internal sealed record TreeResponseDto(
+    string From,
+    bool Matched,
+    IReadOnlyList<TreeNodeDto> Roots,
+    bool IntrinsicHidden = false,
+    CompileErrorsDto? CompileErrors = null
+);
+
+internal sealed record HazardsResponseDto(IReadOnlyList<Services.HazardsService.HazardMark> Marks, CompileErrorsDto CompileErrors);

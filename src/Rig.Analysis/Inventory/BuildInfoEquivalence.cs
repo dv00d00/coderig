@@ -31,6 +31,8 @@ internal static class BuildInfoEquivalence
         CheckSet(diffs, label: "SourceFiles", fresh: fresh.SourceFiles, cached: cached.SourceFiles);
         CheckSet(diffs, label: "AnalyzerReferences", fresh: fresh.AnalyzerReferences, cached: cached.AnalyzerReferences);
         CheckSet(diffs, label: "PreprocessorSymbols", fresh: fresh.PreprocessorSymbols, cached: cached.PreprocessorSymbols);
+        CheckSet(diffs, label: "AdditionalFiles", fresh: fresh.AdditionalFiles ?? [], cached: cached.AdditionalFiles ?? []);
+        CheckSet(diffs, label: "AnalyzerConfigFiles", fresh: fresh.AnalyzerConfigFiles ?? [], cached: cached.AnalyzerConfigFiles ?? []);
         if (!PropertiesEqual(fresh: fresh.Properties, cached: cached.Properties))
         {
             diffs.Add("Properties");

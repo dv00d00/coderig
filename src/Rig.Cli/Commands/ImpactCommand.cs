@@ -216,6 +216,10 @@ internal static class ImpactCommand
             baseRef: opts.BaseRef,
             headRef: opts.HeadRef
         );
+        var baseStoreDirectory = StoreLayout.ResolveReadStoreDir(io.WorkspaceLocation with { StoreRef = opts.BaseRef });
+        var headStoreDirectory = StoreLayout.ResolveReadStoreDir(io.WorkspaceLocation with { StoreRef = opts.HeadRef });
+        StoreAnswerDisclosure.WriteCompilationHealth("base", baseStoreDirectory);
+        StoreAnswerDisclosure.WriteCompilationHealth("head", headStoreDirectory);
         var extractionCompatible = WriteExtractionVersionWarning(provenance.Base, provenance.Head, io.TextOutput.Error);
 
         // F4: load the DeploymentMap ONCE (render-only — the --structural chips). Not part of the diff, so it

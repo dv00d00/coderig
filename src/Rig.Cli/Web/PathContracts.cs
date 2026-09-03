@@ -19,7 +19,8 @@ internal sealed record PathNodeDto(
     int Line,
     // Effects-if-handy: the enclosing method's derived effects (same shape/derivation `/api/tree` reports),
     // empty when the method has none in this closure. Best-effort annotation, not part of the path itself.
-    IReadOnlyList<EffectDto> Effects
+    IReadOnlyList<EffectDto> Effects,
+    string BindingHealth = "ok"
 );
 
 internal sealed record PathResponseDto(
@@ -34,5 +35,6 @@ internal sealed record PathResponseDto(
     // multi-target pattern could have picked — the client can surface this the way `rig path` warns on stderr.
     IReadOnlyList<string> FromMatches,
     IReadOnlyList<string> ToMatches,
-    bool IntrinsicHidden
+    bool IntrinsicHidden,
+    CompileErrorsDto? CompileErrors = null
 );

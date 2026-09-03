@@ -59,6 +59,7 @@ public static class Writes
     )
     {
         var runId = Guid.NewGuid().ToString("n");
+        var compilationHealth = result.CompilationHealth ?? CompilationHealth.Empty;
         await context.Database.EnsureCreatedAsync(cancellationToken);
         // EnsureCreatedAsync above already opened the connection, so OpenConnectionAsync's first-open tuning
         // won't fire here — apply the bulk-write profile explicitly (the named home of what used to be an
@@ -85,6 +86,9 @@ public static class Writes
             SourceDirty = provenance?.Dirty ?? false,
             ExtractionVersion = SchemaVersion.Extraction,
             ProducingRigBuild = ProducingRigBuild(),
+            CompileErrorFiles = compilationHealth.Files.Count,
+            CompileErrorTotal = compilationHealth.TotalErrorCount,
+            PartialProjects = EncodePartialProjects(compilationHealth.PartialProjects),
         };
 
         // Header rows first (small) — flushed and detached before the fact batches start clearing
@@ -125,6 +129,15 @@ public static class Writes
             ? informationalVersion
             : assembly.GetName().Version?.ToString() ?? assembly.GetName().Name ?? "Rig.Storage";
     }
+
+    private static string EncodePartialProjects(IReadOnlyList<ProjectCompileFailure> projects) =>
+        string.Join(
+            ",",
+            projects
+                .OrderBy(project => project.ProjectName, StringComparer.Ordinal)
+                .ThenBy(project => project.Reason, StringComparer.Ordinal)
+                .Select(project => $"{project.ProjectName}:{project.Reason}")
+        );
 
     // Populates the assembly registry + solution membership (docs/multi-solution-storage.md). An
     // assembly is keyed by name and content-addressed by a digest over its emitted FACT identities
@@ -534,9 +547,13 @@ public static class Writes
 
     private static void AddSourceFiles(RigDbContext context, string runId, AnalysisResult result, IReadOnlySet<string>? dirtyFiles)
     {
+        var compileHealth = (result.CompilationHealth?.Files ?? [])
+            .GroupBy(file => CompilationFilePath.Key(file.FilePath), CompilationFilePath.Comparer)
+            .ToDictionary(group => group.Key, group => group.First(), CompilationFilePath.Comparer);
         for (var index = 0; index < result.SourceFiles.Count; index++)
         {
             var sourceFile = result.SourceFiles[index];
+            compileHealth.TryGetValue(CompilationFilePath.Key(sourceFile.FilePath), out var fileHealth);
             context.SourceFiles.Add(
                 new SourceFileEntity
                 {
@@ -549,6 +566,9 @@ public static class Writes
                     Basis = sourceFile.Basis,
                     Reason = sourceFile.Reason,
                     Evidence = sourceFile.Evidence,
+                    CompileErrorCount = fileHealth?.ErrorCount ?? sourceFile.CompileErrorCount,
+                    CompileErrorCodes = fileHealth?.ErrorCodes ?? sourceFile.CompileErrorCodes,
+                    CompileErrorFirst = fileHealth?.FirstMessage ?? sourceFile.CompileErrorFirst,
                     Dirty = dirtyFiles?.Contains(sourceFile.FilePath) == true,
                 }
             );

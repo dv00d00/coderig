@@ -35,4 +35,10 @@ public sealed class RunEntity
     public int ExtractionVersion { get; set; }
 
     public string ProducingRigBuild { get; set; } = "";
+
+    public int CompileErrorFiles { get; set; }
+
+    public int CompileErrorTotal { get; set; }
+
+    public string PartialProjects { get; set; } = "";
 }

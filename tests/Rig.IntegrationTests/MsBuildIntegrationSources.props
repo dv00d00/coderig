@@ -128,6 +128,12 @@
       TestClass="FailedCompilationDisclosureTests"
     />
     <IndependentIntegrationSource
+      Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FailedCompilationPersistenceStressTests.cs"
+      Link="Analysis\FailedCompilationPersistenceStressTests.cs"
+      Namespace="Rig.Tests.Analysis"
+      TestClass="FailedCompilationPersistenceStressTests"
+    />
+    <IndependentIntegrationSource
       Include="$(MSBuildThisFileDirectory)..\Rig.Tests\Analysis\FrameworkSelectionIndexingTests.cs"
       Link="Analysis\FrameworkSelectionIndexingTests.cs"
       Namespace="Rig.Tests.Analysis"

@@ -117,6 +117,7 @@ internal static class PathCommand
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
         await using var source = await openSource();
+        StoreAnswerDisclosure.WriteCompilationHealth();
 
         var graphWatch = Stopwatch.StartNew();
         var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
@@ -220,14 +221,14 @@ internal static class PathCommand
 
         var renderWatch = Stopwatch.StartNew();
         // --format tsv: one row per step (full DocIDs + paths for tooling), no deployment chrome. Columns:
-        // depth, symbolId, edgeKind, handoffVia, fanout, loopKind, loopDetail, dispatchBasis, file, line.
+        // depth, symbolId, edgeKind, handoffVia, fanout, loopKind, loopDetail, dispatchBasis, file, line, bindingHealth.
         if (tsv)
         {
             for (var i = 0; i < path.Count; i++)
             {
                 var s = path[i];
                 io.TextOutput.Output.WriteLine(
-                    $"{i}\t{s.SymbolId}\t{s.Kind}\t{s.HandoffVia}\t{s.Fanout}\t{s.LoopKind}\t{s.LoopDetail}\t{s.DispatchBasis}\t{s.FilePath}\t{s.Line}"
+                    $"{i}\t{s.SymbolId}\t{s.Kind}\t{s.HandoffVia}\t{s.Fanout}\t{s.LoopKind}\t{s.LoopDetail}\t{s.DispatchBasis}\t{s.FilePath}\t{s.Line}\t{StoreAnswerDisclosure.BindingHealth(s.FilePath)}"
                 );
             }
 
@@ -275,7 +276,8 @@ internal static class PathCommand
             // External-node admission: a path may now END at an admitted library/BCL leaf. Tag it with the
             // ONE shared marker so the terminal step is not read as first-party code.
             var external = externalPathNodes.Contains(step.SymbolId) ? ExternalTag : "";
-            io.TextOutput.Output.WriteLine($"{Indent.Of(i + 1)}{step.SymbolId}{external}{via}");
+            var compileError = StoreAnswerDisclosure.HasCompileError(step.FilePath) ? "  ~compile-error" : "";
+            io.TextOutput.Output.WriteLine($"{Indent.Of(i + 1)}{step.SymbolId}{external}{via}{compileError}");
         }
 
         renderWatch.Stop();

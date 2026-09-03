@@ -26,9 +26,9 @@ internal static class SolutionSourceLoader
     // --parallelism <n> (e.g. lower it if memory-bound on a very large workspace).
     private static readonly int DefaultParallelism = Math.Max(val1: 1, val2: Environment.ProcessorCount);
 
-    // How many times a 0-source design-time build is retried before the index aborts. 0-source builds are
+    // How many times a 0-source design-time build is retried before the project is recorded as unavailable. 0-source builds are
     // usually a transient race (obj flush, MSBuild server hiccup) that clears on a fresh build; a couple of
-    // retries catches that, and anything still degraded after is treated as a hard, deterministic failure.
+    // retries catches that; anything still degraded contributes no facts and is disclosed at run level.
     private const int DegradedBuildRetries = 2;
 
     // How many error diagnostics are PRINTED per project before the rest are replaced by one
@@ -124,7 +124,8 @@ internal static class SolutionSourceLoader
             buildCacheDir,
             verifyBuildCache,
             restore,
-            pendingCacheAdmissions
+            pendingCacheAdmissions,
+            health
         );
         // BuildWorkspace records the finer "design-time-builds" (wall-clock) + "workspace-assembly"
         // sub-phases itself; just reset the clock here for the next phase.
@@ -259,9 +260,8 @@ internal static class SolutionSourceLoader
         // A BOUNDED sample of error strings for the end-of-pass summary — at most
         // MaxPrintedErrorsPerProject per project. The predecessor bagged EVERY error string, which on
         // the unrestored MedDBase clone meant retaining 2.4M of them (528 MB) purely to print ten. The
-        // honest count lives in `totalCompilationErrors` / CompilationHealth instead.
+        // honest count lives in CompilationHealth instead.
         var compilationErrors = new ConcurrentBag<string>();
-        var totalCompilationErrors = 0;
         var projectResults = new ConcurrentBag<ProjectSourceLoadResult>();
         var analyzedProjects = 0;
         // Per-project compile/diagnostics/read seconds (only when timing). Σ far above wall/parallelism, or a
@@ -293,15 +293,20 @@ internal static class SolutionSourceLoader
         }
 
         var compilationErrorList = compilationErrors.OrderBy(e => e, StringComparer.Ordinal).ToArray();
-        var errorCount = Volatile.Read(ref totalCompilationErrors);
+        var compilationHealth = collector.Build();
+        var errorCount = compilationHealth.TotalErrorCount;
 
-        if (errorCount > 0)
+        if (!compilationHealth.IsClean)
         {
             // Report compilation errors as warnings and continue with partial analysis.
             // Design-time builds commonly miss code-generated types (proxy generators, T4 templates,
             // source generators).  The semantic model is still valid for code that doesn't reference
             // the missing types, so entry point and effect extraction can proceed.
-            ReportProgress(progress, $"Warning: {errorCount} compilation error(s) — analysis will be partial for affected files");
+            ReportProgress(
+                progress,
+                $"Warning: {errorCount} compilation error(s), {compilationHealth.PartialProjects.Count} partial project(s) "
+                    + "— analysis will be partial"
+            );
 
             foreach (var error in compilationErrorList.Take(MaxSummarisedErrors))
             {
@@ -320,10 +325,28 @@ internal static class SolutionSourceLoader
         // The OrdinalIgnoreCase FilePath sort is FACT-IDENTITY-BEARING, byte-for-byte: the *FactIndex
         // surrogate keys are list positions over this order, and FactGraphProjection/Reads dedupe methods
         // with an order-sensitive GroupBy(SymbolId).First(). Do not "simplify" the comparer or the key.
+        var healthByPath = compilationHealth.Files.ToDictionary(
+            file => CompilationFilePath.Key(file.FilePath),
+            CompilationFilePath.Comparer
+        );
+        var sourceFiles = projectResults
+            .SelectMany(result => result.SourceFiles)
+            .Select(file =>
+                healthByPath.TryGetValue(CompilationFilePath.Key(file.FilePath), out var fileHealth)
+                    ? file with
+                    {
+                        CompileErrorCount = fileHealth.ErrorCount,
+                        CompileErrorCodes = fileHealth.ErrorCodes,
+                        CompileErrorFirst = fileHealth.FirstMessage,
+                    }
+                    : file
+            )
+            .OrderBy(file => file.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         return new SolutionSourceSet(
-            projectResults.SelectMany(r => r.SourceFiles).OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
+            sourceFiles,
             projectResults.SelectMany(r => r.Extracted).OrderBy(e => e.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            collector.Build(),
+            compilationHealth,
             projectResults.Select(r => r.Surface).OrderBy(s => s.ProjectName, StringComparer.Ordinal).ToList()
         );
 
@@ -340,7 +363,6 @@ internal static class SolutionSourceLoader
                 // per-file channel is structurally blind to it. Record it on the project channel — zero
                 // facts otherwise read as "nothing declares or calls this".
                 compilationErrors.Add($"{project.Name}: compilation unavailable");
-                Interlocked.Increment(ref totalCompilationErrors);
                 collector.AddProjectFailure(project.Name, ProjectCompileFailure.NoCompilation);
                 var unavailableProjectFilePath = project.FilePath;
                 if (!string.IsNullOrWhiteSpace(unavailableProjectFilePath))
@@ -362,26 +384,14 @@ internal static class SolutionSourceLoader
                 }
 
                 projectErrors++;
-                collector.AddError(diagnostic);
+                collector.AddError(diagnostic, DiagnosticFilePath(project, diagnostic));
                 if (printed < MaxPrintedErrorsPerProject)
                 {
                     compilationErrors.Add($"{project.Name}: {diagnostic}");
-                    // STDERR, not stdout: the answer (and `rig index`'s parseable output) must stay
-                    // greppable. Console.Error is synchronized, so parallel projects cannot interleave
-                    // within a line.
-                    Console.Error.WriteLine($"{project.Name}: {diagnostic}");
                     printed++;
                 }
             }
 
-            if (projectErrors > printed)
-            {
-                Console.Error.WriteLine(
-                    $"{project.Name}: ... and {projectErrors - printed} further compilation error(s) not shown ({projectErrors} total in this project)"
-                );
-            }
-
-            Interlocked.Add(ref totalCompilationErrors, projectErrors);
             var projectFilePath = project.FilePath;
             if (!string.IsNullOrWhiteSpace(projectFilePath))
             {
@@ -417,6 +427,21 @@ internal static class SolutionSourceLoader
         }
     }
 
+    // Retained/live compilations can report against a replacement SyntaxTree whose path is still the
+    // workspace document path but whose object identity is no longer present in Project.GetDocument.
+    // Prefer the document path (the overlay replacement key); fall back to the tree's own explicit path.
+    // A genuinely location-less diagnostic returns null and CompilationHealthCollector records it on the
+    // unlocated channel.
+    internal static string? DiagnosticFilePath(Project project, Diagnostic diagnostic)
+    {
+        if (diagnostic.Location.SourceTree is not { } tree)
+        {
+            return null;
+        }
+
+        return project.GetDocument(tree)?.FilePath ?? (string.IsNullOrWhiteSpace(tree.FilePath) ? null : tree.FilePath);
+    }
+
     private static RigWorkspace BuildWorkspace(
         string solutionPath,
         RuleSet rules,
@@ -432,9 +457,13 @@ internal static class SolutionSourceLoader
         bool verifyBuildCache = false,
         // Run the MSBuild `Restore` target before each design-time build (rig index --restore).
         bool restore = false,
-        ConcurrentDictionary<string, PendingCacheAdmission>? pendingCacheAdmissions = null
+        ConcurrentDictionary<string, PendingCacheAdmission>? pendingCacheAdmissions = null,
+        CompilationHealthCollector? compilationHealth = null
     )
     {
+        // LoadAsync owns one collector across Buildalyzer, generator wiring, and Roslyn diagnostics.
+        // Continuing after a skipped project is allowed only with that run-level no_compilation channel.
+        ArgumentNullException.ThrowIfNull(compilationHealth);
         var logWriter = progress is null ? null : new ProgressLogWriter(progress);
         var options = new AnalyzerManagerOptions { LogWriter = logWriter };
 
@@ -525,14 +554,20 @@ internal static class SolutionSourceLoader
         }
 
         // The build EFFECT (impure): run the design-time build, convert, and retry a degraded (0-source-file)
-        // build a bounded number of times before failing the index — a degraded build would drop the project's
-        // types and corrupt dependents. Shared by the cache-miss and cache-off paths.
+        // build a bounded number of times. A persistently degraded project contributes no facts and is
+        // recorded in compilation health. Shared by the cache-miss and cache-off paths.
         CheckedBuild? BuildChecked(string projectFilePath, Func<IAnalyzerResult?> build)
         {
-            var built = build() ?? throw new BuildalyzerNoResultsException(projectFilePath);
+            var name = Path.GetFileNameWithoutExtension(projectFilePath);
+            var built = build();
+            if (built is null)
+            {
+                compilationHealth.AddProjectFailure(name, ProjectCompileFailure.NoCompilation);
+                ReportProgress(progress, $"WARN: '{name}' produced no design-time build result — the project will produce NO facts");
+                return null;
+            }
 
             var info = ProjectBuildInfo.FromAnalyzerResult(built);
-            var name = Path.GetFileNameWithoutExtension(projectFilePath);
 
             for (var attempt = 1; IsDegradedBuild(info) && attempt <= DegradedBuildRetries; attempt++)
             {
@@ -540,7 +575,13 @@ internal static class SolutionSourceLoader
                     progress,
                     $"WARN: '{name}' design-time build produced 0 source files — retrying ({attempt}/{DegradedBuildRetries})"
                 );
-                var retried = build() ?? throw new BuildalyzerNoResultsException(projectFilePath);
+                var retried = build();
+                if (retried is null)
+                {
+                    compilationHealth.AddProjectFailure(name, ProjectCompileFailure.NoCompilation);
+                    ReportProgress(progress, $"WARN: '{name}' retry produced no build result — the project will produce NO facts");
+                    return null;
+                }
 
                 built = retried;
                 info = ProjectBuildInfo.FromAnalyzerResult(retried);
@@ -548,12 +589,16 @@ internal static class SolutionSourceLoader
 
             if (IsDegradedBuild(info))
             {
-                throw new DegradedBuildException(
-                    $"'{name}' design-time build produced 0 source files after {DegradedBuildRetries + 1} attempt(s) — "
-                        + "its types would be absent and dependents would fail to bind, corrupting the index. "
-                        + $"Re-run `dotnet restore` / `dotnet build` for {name}, then re-index — "
-                        + "or pass `--restore` to let each design-time build run the Restore target itself."
+                // Persist the total-project failure rather than aborting before a store exists. The absent
+                // project contributes no source rows by construction; dependents' real Roslyn diagnostics
+                // carry the located contamination, while this run-level record keeps absence arguments honest.
+                compilationHealth.AddProjectFailure(name, ProjectCompileFailure.NoCompilation);
+                ReportProgress(
+                    progress,
+                    $"WARN: '{name}' design-time build produced 0 source files after {DegradedBuildRetries + 1} attempt(s) — "
+                        + "the project will produce NO facts"
                 );
+                return null;
             }
 
             return new CheckedBuild(Info: info, Succeeded: built.Succeeded);
@@ -637,7 +682,8 @@ internal static class SolutionSourceLoader
                 excludeTests,
                 timings,
                 restore,
-                BuildOrLoad
+                BuildOrLoad,
+                compilationHealth
             );
         }
 
@@ -714,7 +760,8 @@ internal static class SolutionSourceLoader
         bool excludeTests,
         PhaseTimings? timings,
         bool restore,
-        Func<string, Func<IAnalyzerResult?>, ProjectBuildInfo?> buildOrLoad
+        Func<string, Func<IAnalyzerResult?>, ProjectBuildInfo?> buildOrLoad,
+        CompilationHealthCollector compilationHealth
     )
     {
         var manager = CreateSolutionAnalyzerManager(solutionPath, options);
@@ -781,16 +828,17 @@ internal static class SolutionSourceLoader
                     try
                     {
                         var projectFilePath = Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString());
-                        var info =
-                            buildOrLoad(projectFilePath, () => BuildCompileOnly(projectAnalyzer, framework, restore))
-                            ?? throw new BuildalyzerNoResultsException(projectFilePath);
-                        resultsBag.Add(info);
+                        var info = buildOrLoad(projectFilePath, () => BuildCompileOnly(projectAnalyzer, framework, restore));
+                        if (info is not null)
+                        {
+                            resultsBag.Add(info);
+                        }
                     }
-                    catch (Exception ex)
-                        when (ex is not DegradedBuildException and not FrameworkSelectionException and not BuildalyzerNoResultsException)
+                    catch (Exception ex) when (ex is not FrameworkSelectionException)
                     {
-                        // An ordinary per-project build failure is non-fatal: skip it and carry on. Trust-critical
-                        // incomplete-result failures are filtered out here so they propagate and abort the index.
+                        // An ordinary per-project build failure is non-fatal: skip it and carry on. Explicit
+                        // no-result/zero-source paths record no_compilation before returning null above.
+                        compilationHealth.AddProjectFailure(projectName, ProjectCompileFailure.NoCompilation);
                         ReportProgress(progress, $"MSBuild: skipping {projectName} — build failed: {ex.Message.Split('\n')[0].Trim()}");
                     }
                     finally
@@ -805,24 +853,10 @@ internal static class SolutionSourceLoader
         }
         catch (AggregateException aggregate)
         {
-            // Parallel.ForEach wraps a thrown DegradedBuildException; surface it UNWRAPPED so the index
-            // aborts with the specific "0 source files" message instead of a generic AggregateException.
-            var fatal = aggregate.Flatten().InnerExceptions.OfType<DegradedBuildException>().FirstOrDefault();
-            if (fatal is not null)
-            {
-                throw fatal;
-            }
-
             var frameworkFailure = aggregate.Flatten().InnerExceptions.OfType<FrameworkSelectionException>().FirstOrDefault();
             if (frameworkFailure is not null)
             {
                 throw frameworkFailure;
-            }
-
-            var noResultsFailure = aggregate.Flatten().InnerExceptions.OfType<BuildalyzerNoResultsException>().FirstOrDefault();
-            if (noResultsFailure is not null)
-            {
-                throw noResultsFailure;
             }
 
             throw;
@@ -1156,6 +1190,7 @@ internal static class SolutionSourceLoader
             );
             var analyzerRefs = BuildAnalyzerReferences(result, Exists);
             var documents = BuildDocumentInfos(result, projectId, Exists);
+            var additionalDocuments = BuildAuxiliaryDocumentInfos(result.AdditionalFiles ?? [], projectId, Exists);
 
             var projectName = result.ProjectFilePath is not null ? Path.GetFileNameWithoutExtension(result.ProjectFilePath) : "Unknown";
             var assemblyName = result.Properties.GetValueOrDefault("AssemblyName", defaultValue: projectName);
@@ -1172,7 +1207,8 @@ internal static class SolutionSourceLoader
                 metadataReferences: metadataRefs,
                 projectReferences: projectRefs,
                 analyzerReferences: analyzerRefs,
-                documents: documents
+                documents: documents,
+                additionalDocuments: additionalDocuments
             );
         }
 
@@ -1190,6 +1226,13 @@ internal static class SolutionSourceLoader
         );
 
         var solution = workspace.AddSolution(SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create(), projects: infos));
+        var analyzerConfigDocuments = projects
+            .SelectMany((project, index) => BuildAuxiliaryDocumentInfos(project.AnalyzerConfigFiles ?? [], infos[index].Id, Exists))
+            .ToImmutableArray();
+        if (!analyzerConfigDocuments.IsEmpty)
+        {
+            solution = solution.AddAnalyzerConfigDocuments(analyzerConfigDocuments);
+        }
 
         workspace.TryApplyChanges(solution);
         return workspace;
@@ -1399,6 +1442,24 @@ internal static class SolutionSourceLoader
             )
             .ToArray();
     }
+
+    private static DocumentInfo[] BuildAuxiliaryDocumentInfos(
+        IReadOnlyList<string> paths,
+        ProjectId projectId,
+        Func<string, bool> exists
+    ) =>
+        paths
+            .Where(exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path =>
+                DocumentInfo.Create(
+                    DocumentId.CreateNewId(projectId),
+                    Path.GetFileName(path),
+                    filePath: path,
+                    loader: new FileTextLoader(path, null)
+                )
+            )
+            .ToArray();
 
     // Normalised full paths of a project's OutputItemType="Analyzer" ProjectReferences (source
     // generators / analyzers wired the way MedDBase.Pages references RequestResponseProxyGenerator).
@@ -1833,13 +1894,23 @@ internal static class SolutionSourceLoader
         try
         {
             var parseOptions = project.ParseOptions as CSharpParseOptions;
-            GeneratorDriver driver = CSharpGeneratorDriver.Create(generators, parseOptions: parseOptions);
-            driver.RunGeneratorsAndUpdateCompilation(
+            // The workspace carries MSBuild's generated editorconfig values (RazorLangVersion, RootNamespace,
+            // etc.) and additional files in AnalyzerOptions. Running a driver without them invents generator
+            // failures that the real compiler never had (notably Razor RZ3600 for an empty language version).
+            var analyzerOptions = project.AnalyzerOptions;
+            GeneratorDriver driver = CSharpGeneratorDriver.Create(
+                generators,
+                additionalTexts: analyzerOptions.AdditionalFiles,
+                parseOptions: parseOptions,
+                optionsProvider: analyzerOptions.AnalyzerConfigOptionsProvider
+            );
+            driver = driver.RunGeneratorsAndUpdateCompilation(
                 compilation: compilation,
                 outputCompilation: out var generatedCompilation,
-                diagnostics: out _,
+                diagnostics: out var generatorDiagnostics,
                 cancellationToken: cancellationToken
             );
+            var runResult = driver.GetRunResult();
 
             var originalTrees = new HashSet<SyntaxTree>(compilation.SyntaxTrees);
             var results = new List<SourceModel>();
@@ -1869,6 +1940,87 @@ internal static class SolutionSourceLoader
                     )
                 );
             }
+
+            var generatedPaths = results.ToDictionary(result => result.Tree, result => result.FilePath);
+            var seenDiagnostics = new HashSet<string>(StringComparer.Ordinal);
+            var generatorFailed = runResult.Results.Any(result => result.Exception is not null);
+
+            void Record(Diagnostic diagnostic)
+            {
+                generatorFailed |= string.Equals(diagnostic.Id, "CS8785", StringComparison.Ordinal);
+                if (diagnostic.Severity != DiagnosticSeverity.Error)
+                {
+                    return;
+                }
+
+                var tree = diagnostic.Location.SourceTree;
+                var path = tree is null ? null : project.GetDocument(tree)?.FilePath ?? generatedPaths.GetValueOrDefault(tree);
+                var span = diagnostic.Location.GetLineSpan();
+                var key = string.Join(
+                    "\u001f",
+                    diagnostic.Id,
+                    path ?? span.Path ?? "",
+                    span.StartLinePosition.Line.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    span.StartLinePosition.Character.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture)
+                );
+                if (!seenDiagnostics.Add(key))
+                {
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(path))
+                {
+                    health.AddError(diagnostic, path);
+                }
+                else
+                {
+                    health.AddUnlocatedError();
+                }
+
+                // CS8785 is Roslyn's "generator failed to generate source" diagnostic. A driver can
+                // report it without throwing from RunGeneratorsAndUpdateCompilation, so the project
+                // recall channel must be driven by the result/diagnostic truth, not only the catch below.
+            }
+
+            foreach (var diagnostic in generatorDiagnostics)
+            {
+                Record(diagnostic);
+            }
+
+            foreach (var diagnostic in runResult.Diagnostics)
+            {
+                Record(diagnostic);
+            }
+
+            foreach (var result in runResult.Results)
+            {
+                foreach (var diagnostic in result.Diagnostics)
+                {
+                    Record(diagnostic);
+                }
+            }
+
+            // The ordinary compilation pass has already recorded errors in original source trees.
+            // Inspect the updated compilation only for generated trees and generator-failure diagnostics,
+            // so generated-code bind errors are persisted without double-counting the base compilation.
+            foreach (var diagnostic in generatedCompilation.GetDiagnostics(cancellationToken))
+            {
+                if (
+                    diagnostic.Severity == DiagnosticSeverity.Error
+                    && (diagnostic.Location.SourceTree is { } tree && generatedPaths.ContainsKey(tree) || diagnostic.Id == "CS8785")
+                )
+                {
+                    Record(diagnostic);
+                }
+            }
+
+            if (generatorFailed)
+            {
+                health.AddProjectFailure(project.Name, ProjectCompileFailure.GeneratorRun);
+                ReportProgress(progress, $"WARN: source generator run failed for '{project.Name}' — generated output may be missing");
+            }
+
             return results;
         }
         catch (Exception ex)
@@ -1957,7 +2109,7 @@ internal static class SolutionSourceLoader
         // design-time-build phase 322.9s -> 57.4s and the whole cold index 8m40s -> 4m10s, with IDENTICAL
         // output (445,231 symbols / 2,437,344 refs both ways). rig only ever reads a build; the tree is
         // restored by whoever built it. An UNrestored project yields 0 source files, which is exactly what
-        // IsDegradedBuild catches — a loud abort naming --restore, not a silently wrong index.
+        // IsDegradedBuild catches — a loud persisted no_compilation disclosure, not a silently wrong index.
         options.Restore = restore;
         if (forExplicitFramework)
         {
@@ -1975,15 +2127,6 @@ internal static class SolutionSourceLoader
     // CoreCompile (transient failure or a racing obj flush), so the project compiles to nothing and its
     // dependents fail to bind. Such a result must never be cached (see BuildOrLoad).
     private static bool IsDegradedBuild(ProjectBuildInfo info) => info.SourceFiles.Count == 0;
-
-    // Thrown when a project's design-time build yields 0 source files even after DegradedBuildRetries — a
-    // deterministic failure that would corrupt the index. Derives from InvalidOperationException so the
-    // index command's existing load-failure handler catches it (clean exit, no raw stack trace), and is a
-    // distinct type so the per-project "skip on build failure" catch can let it through to abort the run.
-    private sealed class DegradedBuildException(string message) : InvalidOperationException(message);
-
-    private sealed class BuildalyzerNoResultsException(string projectFilePath)
-        : InvalidOperationException($"Buildalyzer produced no build results for '{projectFilePath}'.");
 
     private sealed class FrameworkSelectionException(string message) : InvalidOperationException(message);
 

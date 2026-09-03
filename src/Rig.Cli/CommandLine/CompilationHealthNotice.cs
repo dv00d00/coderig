@@ -1,4 +1,6 @@
 using Rig.Domain.Data;
+using Rig.Storage.Queries;
+using Rig.Storage.Storage;
 
 namespace Rig.Cli.CommandLine;
 
@@ -23,10 +25,28 @@ namespace Rig.Cli.CommandLine;
 //   - the FILE count is quantified, over exactly the population it names (indexed files). The FACT impact
 //     is NOT quantified — an invented number there would be the same defect as the intrinsic-effects
 //     count that had to be dropped for overstating by 8x.
-//   - no escape-hatch flag is named. `rig files --compile-errors` is specced but NOT implemented in this
-//     slice, and a note that teaches a flag which does not exist is worse than one that teaches none.
+//   - `rig files --compile-errors` is the drill-down for the persisted per-file evidence. The footer stays
+//     self-contained because it is also emitted by cached query paths where no source rows were loaded.
 internal static class CompilationHealthNotice
 {
+    internal sealed record StoreSnapshot(CompilationHealth Health, IReadOnlySet<string> IndexedFiles)
+    {
+        internal IReadOnlySet<string> CompileErrorFiles { get; } =
+            Health.Files.Select(file => CompilationFilePath.Key(file.FilePath)).ToHashSet(CompilationFilePath.Comparer);
+
+        internal bool HasCompileError(string? filePath) =>
+            !string.IsNullOrEmpty(filePath) && CompileErrorFiles.Contains(CompilationFilePath.Key(filePath));
+    }
+
+    internal static async Task<StoreSnapshot> LoadStoreAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var health = await Reads.LoadCompilationHealthAsync(context, cancellationToken);
+        var indexed = (await Reads.LoadIndexedSourceFilePathsAsync(context, cancellationToken))
+            .Select(CompilationFilePath.Key)
+            .ToHashSet(CompilationFilePath.Comparer);
+        return new StoreSnapshot(health, indexed);
+    }
+
     // The population the "N of M" ratio is taken over: the DISTINCT paths of files this analysis indexed.
     //
     // A SET, not a count, and that is not decoration. On the unrestored MedDBase clone the first cut
@@ -38,12 +58,12 @@ internal static class CompilationHealthNotice
     // set are disclosed separately rather than folded in or hidden.
     internal static IReadOnlySet<string> IndexedFileSet(IFactSnapshotView facts)
     {
-        var indexed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var indexed = new HashSet<string>(CompilationFilePath.Comparer);
         foreach (var file in facts.EnumerateSourceFiles())
         {
             if (string.Equals(file.Status, "indexed", StringComparison.Ordinal))
             {
-                indexed.Add(file.FilePath);
+                indexed.Add(CompilationFilePath.Key(file.FilePath));
             }
         }
 
@@ -167,7 +187,7 @@ internal static class CompilationHealthNotice
         var indexed = 0;
         foreach (var file in health.Files)
         {
-            if (indexedFiles.Contains(file.FilePath))
+            if (CompilationFilePath.Contains(indexedFiles, file.FilePath))
             {
                 indexed++;
             }

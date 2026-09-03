@@ -7,5 +7,8 @@ public sealed record SourceFileInfo(
     string Confidence,
     string Basis,
     string Reason,
-    string Evidence
+    string Evidence,
+    int CompileErrorCount = 0,
+    string CompileErrorCodes = "",
+    string CompileErrorFirst = ""
 );

@@ -163,12 +163,13 @@ public sealed class AllChangedFilesReviewTests
     }
 
     [Test]
-    public void Client_derivation_token_includes_review_schema_before_file_effects_schema()
+    public void Client_derivation_token_includes_review_file_effects_and_disclosure_schemas_in_order()
     {
         var components = QueryCacheKeys.DerivationSchemaToken().Split('.').Select(int.Parse).ToArray();
 
-        components[^2].ShouldBe(QueryCacheKeys.ReviewSchema);
-        components[^1].ShouldBe(QueryCacheKeys.FileEffectsSchema);
+        components[^3].ShouldBe(QueryCacheKeys.ReviewSchema);
+        components[^2].ShouldBe(QueryCacheKeys.FileEffectsSchema);
+        components[^1].ShouldBe(QueryCacheKeys.DisclosureSchema);
     }
 
     private static string PathOf(JsonElement file) => file.GetProperty("path").GetString().ShouldNotBeNull();

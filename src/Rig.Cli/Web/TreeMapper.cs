@@ -23,10 +23,19 @@ internal static class TreeMapper
         IReadOnlyList<DerivedEffect> effects,
         IReadOnlyDictionary<string, TreeQueryService.SymbolLocation> locations,
         IReadOnlyDictionary<string, string> emoji,
-        FactRenderRules renderRules
+        FactRenderRules renderRules,
+        IReadOnlySet<string>? compileErrorFiles = null
     )
     {
-        var effectsByMethod = BuildEffectIndex(effects, emoji);
+        var effectsByMethod = BuildEffectIndex(effects, emoji, compileErrorFiles);
+        var effectRowsByMethod = effects
+            .Where(e => e.EnclosingSymbolId is not null)
+            .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
+            .ToDictionary(
+                keySelector: g => g.Key,
+                elementSelector: g => (IReadOnlyList<DerivedEffect>)g.ToList(),
+                comparer: StringComparer.Ordinal
+            );
         // Raw "provider:operation" multiset per enclosing method — the substrate for a collapsed seam's
         // hidden-effect union (same keying the llm renderer uses).
         var rawByMethod = effects
@@ -38,17 +47,23 @@ internal static class TreeMapper
                 comparer: StringComparer.Ordinal
             );
 
-        var dtoRoots = roots.Select(r => MapNode(r, effectsByMethod, rawByMethod, locations, emoji, renderRules, isRoot: true)).ToList();
+        var dtoRoots = roots
+            .Select(r =>
+                MapNode(r, effectsByMethod, effectRowsByMethod, rawByMethod, locations, emoji, renderRules, compileErrorFiles, isRoot: true)
+            )
+            .ToList();
         return new TreeResponseDto(From: from, Matched: dtoRoots.Count > 0, Roots: dtoRoots);
     }
 
     private static TreeNodeDto MapNode(
         TraceNode node,
         IReadOnlyDictionary<string, IReadOnlyList<EffectDto>> effectsByMethod,
+        IReadOnlyDictionary<string, IReadOnlyList<DerivedEffect>> effectRowsByMethod,
         IReadOnlyDictionary<string, List<string>> rawByMethod,
         IReadOnlyDictionary<string, TreeQueryService.SymbolLocation> locations,
         IReadOnlyDictionary<string, string> emoji,
         FactRenderRules renderRules,
+        IReadOnlySet<string>? compileErrorFiles,
         bool isRoot
     )
     {
@@ -66,16 +81,9 @@ internal static class TreeMapper
             {
                 // Union of what the folded branch touches: this node's own raw effects + the subtree's, so the
                 // seam leaf reports its reach (e.g. one "llblgen:fetch ×N" chip) without shipping the subtree.
-                var (subtreeRaw, hiddenCount) = TreeFoldSupport.SummarizeHidden(node.Children, rawByMethod);
+                var (_, hiddenCount) = TreeFoldSupport.SummarizeHidden(node.Children, rawByMethod);
                 hidden = hiddenCount;
-                var union = new List<string>();
-                if (rawByMethod.TryGetValue(node.SymbolId, out var own))
-                {
-                    union.AddRange(own);
-                }
-
-                union.AddRange(subtreeRaw);
-                seamEffects = AggregateRaw(union, emoji);
+                seamEffects = AggregateEffects(CollectSubtreeEffects(node, effectRowsByMethod), emoji, compileErrorFiles);
             }
 
             return ToDto(
@@ -85,7 +93,8 @@ internal static class TreeMapper
                 children: [],
                 foldKind: isCollapse ? "collapse" : "opaque",
                 foldLabel: fold.Label,
-                foldHidden: hidden
+                foldHidden: hidden,
+                bindingHealth: CompilationFilePath.Contains(compileErrorFiles, loc?.File) ? "compile_error" : "ok"
             );
         }
 
@@ -93,11 +102,24 @@ internal static class TreeMapper
             node,
             loc,
             effects: ownEffects,
-            children: node.Children.Select(c => MapNode(c, effectsByMethod, rawByMethod, locations, emoji, renderRules, isRoot: false))
+            children: node.Children.Select(c =>
+                    MapNode(
+                        c,
+                        effectsByMethod,
+                        effectRowsByMethod,
+                        rawByMethod,
+                        locations,
+                        emoji,
+                        renderRules,
+                        compileErrorFiles,
+                        isRoot: false
+                    )
+                )
                 .ToList(),
             foldKind: null,
             foldLabel: null,
-            foldHidden: 0
+            foldHidden: 0,
+            bindingHealth: CompilationFilePath.Contains(compileErrorFiles, loc?.File) ? "compile_error" : "ok"
         );
     }
 
@@ -108,7 +130,8 @@ internal static class TreeMapper
         IReadOnlyList<TreeNodeDto> children,
         string? foldKind,
         string? foldLabel,
-        int foldHidden
+        int foldHidden,
+        string bindingHealth
     ) =>
         new(
             Id: node.SymbolId,
@@ -128,74 +151,74 @@ internal static class TreeMapper
             DispatchBasis: node.DispatchBasis,
             File: loc?.File,
             Line: loc?.Line ?? 0,
-            Effects: effects,
+            Effects: effects.ToArray(),
             Children: children,
             FoldKind: foldKind,
             FoldLabel: foldLabel,
             FoldHidden: foldHidden,
-            Loop: node.LoopKind is null ? null : (string.IsNullOrEmpty(node.LoopDetail) ? node.LoopKind : node.LoopDetail)
+            Loop: node.LoopKind is null ? null : (string.IsNullOrEmpty(node.LoopDetail) ? node.LoopKind : node.LoopDetail),
+            BindingHealth: bindingHealth
         );
 
-    // Aggregate a raw "provider:operation" multiset into distinct EffectDto with site counts + glyph — the same
-    // shape BuildEffectIndex produces for a method's own effects, so the SPA renders a seam's union identically.
-    private static IReadOnlyList<EffectDto> AggregateRaw(IReadOnlyList<string> rawProviderOps, IReadOnlyDictionary<string, string> emoji)
+    private static IReadOnlyList<DerivedEffect> CollectSubtreeEffects(
+        TraceNode node,
+        IReadOnlyDictionary<string, IReadOnlyList<DerivedEffect>> effectsByMethod
+    )
     {
-        var counts = new Dictionary<(string Provider, string Operation), int>();
-        var order = new List<(string Provider, string Operation)>();
-        foreach (var raw in rawProviderOps)
+        var result = new List<DerivedEffect>();
+
+        void Visit(TraceNode current)
         {
-            var colon = raw.IndexOf(':');
-            if (colon <= 0)
+            if (effectsByMethod.TryGetValue(current.SymbolId, out var own))
             {
-                continue;
+                result.AddRange(own);
             }
 
-            var key = (raw[..colon], raw[(colon + 1)..]);
-            if (counts.TryGetValue(key, out var n))
+            if (!current.Truncated)
             {
-                counts[key] = n + 1;
-            }
-            else
-            {
-                counts[key] = 1;
-                order.Add(key);
+                foreach (var child in current.Children)
+                {
+                    Visit(child);
+                }
             }
         }
 
-        return order
-            .OrderByDescending(k => counts[k])
-            .ThenBy(k => k.Provider, StringComparer.Ordinal)
-            .ThenBy(k => k.Operation, StringComparer.Ordinal)
-            .Select(k => new EffectDto(
-                Provider: k.Provider,
-                Operation: k.Operation,
-                Glyph: EmojiLookup.For(emoji, provider: k.Provider, operation: k.Operation),
-                Sites: counts[k]
-            ))
-            .ToList();
+        Visit(node);
+        return result;
     }
+
+    private static IReadOnlyList<EffectDto> AggregateEffects(
+        IEnumerable<DerivedEffect> effects,
+        IReadOnlyDictionary<string, string> emoji,
+        IReadOnlySet<string>? compileErrorFiles
+    ) =>
+        effects
+            .GroupBy(effect => (effect.Provider, effect.Operation))
+            .Select(group => new EffectDto(
+                Provider: group.Key.Provider,
+                Operation: group.Key.Operation,
+                Glyph: EmojiLookup.For(emoji, provider: group.Key.Provider, operation: group.Key.Operation),
+                Sites: group.Count(),
+                BindingHealth: group.Any(effect => CompilationFilePath.Contains(compileErrorFiles, effect.FilePath))
+                    ? "compile_error"
+                    : "ok"
+            ))
+            .OrderBy(effect => effect.Provider, StringComparer.Ordinal)
+            .ThenBy(effect => effect.Operation, StringComparer.Ordinal)
+            .ToList();
 
     // enclosing method DocID -> its distinct (provider, operation) effects with site counts + glyph.
     private static IReadOnlyDictionary<string, IReadOnlyList<EffectDto>> BuildEffectIndex(
         IReadOnlyList<DerivedEffect> effects,
-        IReadOnlyDictionary<string, string> emoji
+        IReadOnlyDictionary<string, string> emoji,
+        IReadOnlySet<string>? compileErrorFiles
     ) =>
         effects
             .Where(e => e.EnclosingSymbolId is not null)
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
             .ToDictionary(
                 keySelector: g => g.Key,
-                elementSelector: IReadOnlyList<EffectDto> (g) =>
-                    g.GroupBy(e => (e.Provider, e.Operation))
-                        .Select(pg => new EffectDto(
-                            Provider: pg.Key.Provider,
-                            Operation: pg.Key.Operation,
-                            Glyph: EmojiLookup.For(emoji, provider: pg.Key.Provider, operation: pg.Key.Operation),
-                            Sites: pg.Count()
-                        ))
-                        .OrderBy(e => e.Provider, StringComparer.Ordinal)
-                        .ThenBy(e => e.Operation, StringComparer.Ordinal)
-                        .ToList(),
+                elementSelector: IReadOnlyList<EffectDto> (g) => AggregateEffects(g, emoji, compileErrorFiles),
                 comparer: StringComparer.Ordinal
             );
 }

@@ -15,7 +15,11 @@ public sealed record ProjectBuildInfo(
     IReadOnlyList<string> SourceFiles,
     IReadOnlyList<string> AnalyzerReferences,
     IReadOnlyList<string> PreprocessorSymbols,
-    IReadOnlyDictionary<string, string> Properties
+    IReadOnlyDictionary<string, string> Properties,
+    // Compiler inputs source generators consume. Nullable only for pre-field cache sidecars; a fresh
+    // Buildalyzer result always writes arrays (possibly empty), and the cache rejects a legacy null.
+    IReadOnlyList<string>? AdditionalFiles = null,
+    IReadOnlyList<string>? AnalyzerConfigFiles = null
 )
 {
     // Projects the consumed fields out of Buildalyzer's IAnalyzerResult, normalising nullable
@@ -28,6 +32,42 @@ public sealed record ProjectBuildInfo(
             SourceFiles: result.SourceFiles?.ToArray() ?? [],
             AnalyzerReferences: result.AnalyzerReferences?.ToArray() ?? [],
             PreprocessorSymbols: result.PreprocessorSymbols?.ToArray() ?? [],
-            Properties: result.Properties ?? new Dictionary<string, string>(StringComparer.Ordinal)
+            Properties: result.Properties ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            AdditionalFiles: NormalizePaths(result.AdditionalFiles, result.ProjectFilePath),
+            AnalyzerConfigFiles: CompilerOptionPaths(result.CompilerArguments, "analyzerconfig", result.ProjectFilePath)
         );
+
+    private static string[] CompilerOptionPaths(IReadOnlyList<string>? arguments, string option, string? projectFilePath)
+    {
+        if (arguments is null)
+        {
+            return [];
+        }
+
+        var prefixes = new[] { $"/{option}:", $"-{option}:" };
+        var paths = arguments
+            .Select(argument => argument.Trim())
+            .Where(argument => prefixes.Any(prefix => argument.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            .Select(argument =>
+            {
+                var colon = argument.IndexOf(':');
+                return argument[(colon + 1)..].Trim().Trim('"');
+            })
+            .Where(path => path.Length > 0)
+            .ToArray();
+        return NormalizePaths(paths, projectFilePath);
+    }
+
+    private static string[] NormalizePaths(IEnumerable<string>? paths, string? projectFilePath)
+    {
+        var baseDirectory = string.IsNullOrEmpty(projectFilePath) ? null : Path.GetDirectoryName(Path.GetFullPath(projectFilePath));
+        return (paths ?? [])
+            .Select(path =>
+                Path.IsPathFullyQualified(path) ? Path.GetFullPath(path)
+                : baseDirectory is not null ? Path.GetFullPath(path, baseDirectory)
+                : path
+            )
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
 }

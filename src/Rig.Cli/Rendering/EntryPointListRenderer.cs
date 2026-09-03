@@ -25,13 +25,15 @@ internal static class EntryPointListRenderer
         string filePath,
         int line,
         IReadOnlyList<string>? requires = null,
-        string? fqn = null
+        string? fqn = null,
+        bool compileError = false
     )
     {
+        var health = compileError ? "  ~compile-error" : "";
         var fqnLine = !string.IsNullOrEmpty(fqn) && !string.Equals(fqn, route, StringComparison.Ordinal) ? $"{Indent.L5}↪ {fqn}" : null;
         if (deployments.IsEmpty)
         {
-            output.WriteLine($"{Indent.L3}{route}  {ShortenPath(filePath)}:{line}");
+            output.WriteLine($"{Indent.L3}{route}  {ShortenPath(filePath)}:{line}{health}");
             if (fqnLine is not null)
             {
                 output.WriteLine(fqnLine);
@@ -47,7 +49,7 @@ internal static class EntryPointListRenderer
             output.WriteLine(fqnLine);
         }
 
-        output.WriteLine($"{Indent.L5}{ShortenPath(filePath)}:{line}");
+        output.WriteLine($"{Indent.L5}{ShortenPath(filePath)}:{line}{health}");
     }
 
     // The per-kind listing is a SAMPLE (readability). Say so when truncated, so a grep over this output is

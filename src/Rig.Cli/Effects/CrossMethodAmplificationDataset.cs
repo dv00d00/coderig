@@ -184,46 +184,46 @@ internal static class CrossMethodAmplificationDataset
     }
 
     internal static IReadOnlyList<string> TsvRows(
-        IReadOnlyList<(CorrelationFinding Finding, FactIterationFanoutDeriver.IterationFanout Anchor)> pairs
+        IReadOnlyList<(CorrelationFinding Finding, FactIterationFanoutDeriver.IterationFanout Anchor)> pairs,
+        Func<string, string>? bindingHealth = null
     )
     {
         var rows = new List<string>(pairs.Count);
         foreach (var (f, anchor) in pairs)
         {
-            rows.Add(
-                string.Join(
-                    "\t",
-                    RowType,
-                    Clean(f.FilePath),
-                    f.Line,
-                    Clean(anchor.Caller),
-                    Clean(f.Method),
-                    Clean(anchor.IterationKind),
-                    Clean(anchor.IterationDetail),
-                    Clean(anchor.KeyToken),
-                    anchor.ArgumentIndex,
-                    Clean(anchor.IteratedSource),
-                    Clean(f.WitnessMethod),
-                    Clean(f.WitnessFilePath),
-                    f.WitnessLine,
-                    Clean(f.WitnessProvider),
-                    Clean(f.WitnessOperation),
-                    Clean(f.WitnessResourceKey),
-                    f.WitnessDepth,
-                    Clean(anchor.Event.EnclosingGuards),
-                    Clean(f.WitnessDispatchBasis),
-                    Clean(f.WitnessDispatchVia),
-                    f.WitnessDispatchDegree,
-                    anchor.Recursive ? "1" : "0",
-                    // The two discriminator columns: WHICH per-element value crosses the boundary (the member
-                    // path, not the bare loop variable), and WHAT is being iterated (the resolved element type).
-                    // Both exist so the self-keyed-vs-foreign-keyed question is measurable — the lexical test
-                    // reads the path, the semantic test reads the element type, and neither was expressible
-                    // from the bare token alone.
-                    Clean(anchor.KeyPath),
-                    Clean(anchor.ElementType)
-                )
+            var row = string.Join(
+                "\t",
+                RowType,
+                Clean(f.FilePath),
+                f.Line,
+                Clean(anchor.Caller),
+                Clean(f.Method),
+                Clean(anchor.IterationKind),
+                Clean(anchor.IterationDetail),
+                Clean(anchor.KeyToken),
+                anchor.ArgumentIndex,
+                Clean(anchor.IteratedSource),
+                Clean(f.WitnessMethod),
+                Clean(f.WitnessFilePath),
+                f.WitnessLine,
+                Clean(f.WitnessProvider),
+                Clean(f.WitnessOperation),
+                Clean(f.WitnessResourceKey),
+                f.WitnessDepth,
+                Clean(anchor.Event.EnclosingGuards),
+                Clean(f.WitnessDispatchBasis),
+                Clean(f.WitnessDispatchVia),
+                f.WitnessDispatchDegree,
+                anchor.Recursive ? "1" : "0",
+                // The two discriminator columns: WHICH per-element value crosses the boundary (the member
+                // path, not the bare loop variable), and WHAT is being iterated (the resolved element type).
+                // Both exist so the self-keyed-vs-foreign-keyed question is measurable — the lexical test
+                // reads the path, the semantic test reads the element type, and neither was expressible
+                // from the bare token alone.
+                Clean(anchor.KeyPath),
+                Clean(anchor.ElementType)
             );
+            rows.Add(bindingHealth is null ? row : row + "\t" + bindingHealth(f.FilePath));
         }
 
         return rows;

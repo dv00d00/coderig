@@ -141,6 +141,7 @@ internal static class ReachesCommand
         var shaped = opts.Raw ? rules with { Cut = [], Context = [] } : rules;
 
         await using var source = await openSource();
+        StoreAnswerDisclosure.WriteCompilationHealth();
 
         var computation = await ReachesQueryService.ComputeAsync(
             source,
@@ -221,7 +222,7 @@ internal static class ReachesCommand
             foreach (var h in hits.Take(max))
             {
                 io.TextOutput.Output.WriteLine(
-                    $"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}\t{h.Via}\t{(h.Via is null ? 0 : h.ViaDegree)}\t{h.HandoffVia}\t{h.Basis}"
+                    $"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}\t{h.Via}\t{(h.Via is null ? 0 : h.ViaDegree)}\t{h.HandoffVia}\t{h.Basis}\t{StoreAnswerDisclosure.BindingHealth(h.Effect.FilePath)}"
                 );
             }
 
@@ -279,8 +280,9 @@ internal static class ReachesCommand
         {
             var fan = h.Fanout > 0 ? $"  🔁x{h.Fanout} [loop: {ShortLoop(h.Loop)}]" : "";
             var heuristic = h.Basis == "heuristic" ? "  ~heuristic" : "";
+            var compileError = StoreAnswerDisclosure.HasCompileError(h.Effect.FilePath) ? "  ~compile-error" : "";
             io.TextOutput.Output.WriteLine(
-                $"{Indent.L1}d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}{SpanTag(h.Effect)}{heuristic}"
+                $"{Indent.L1}d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}{SpanTag(h.Effect)}{heuristic}{compileError}"
             );
         }
         // Default is unbounded; only a `--limit` smaller than the result truncates — say so, so a grep over
@@ -303,6 +305,7 @@ internal static class ReachesCommand
             {
                 io.TextOutput.Output.WriteLine(
                     $"{Indent.L1}⚡x{g.Count(), -4} {g.Key.Provider} {g.Key.Operation}  ⤳ via {ShortName(g.Key.Item1)} [cross_thread]"
+                        + (g.Any(hit => StoreAnswerDisclosure.HasCompileError(hit.Effect.FilePath)) ? "  ~compile-error" : "")
                 );
             }
         }
@@ -316,8 +319,9 @@ internal static class ReachesCommand
             {
                 var degree = g.Max(h => h.ViaDegree);
                 var heuristic = g.Any(h => h.Basis == "heuristic") ? "  ~heuristic" : "";
+                var compileError = g.Any(h => StoreAnswerDisclosure.HasCompileError(h.Effect.FilePath)) ? "  ~compile-error" : "";
                 io.TextOutput.Output.WriteLine(
-                    $"{Indent.L1}x{g.Count(), -5} {g.Key.Provider} {g.Key.Operation}  via {ShortName(g.Key.Item1)} dispatch [fan-out of {degree}]{heuristic}"
+                    $"{Indent.L1}x{g.Count(), -5} {g.Key.Provider} {g.Key.Operation}  via {ShortName(g.Key.Item1)} dispatch [fan-out of {degree}]{heuristic}{compileError}"
                 );
             }
         }
