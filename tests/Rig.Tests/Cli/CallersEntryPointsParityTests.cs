@@ -109,8 +109,12 @@ public sealed class CallersEntryPointsParityTests
         batch.GetProperty("asyncReachableEpCount").GetInt32().ShouldBe(0);
         var frontier = batch.GetProperty("frontier").EnumerateArray().ToList();
         frontier.Count.ShouldBe(1);
-        frontier[0].GetProperty("id").GetString()
-            .ShouldBe("M:EntryPointEffects.Api.Services.TeamWorkflow.ProcessBatchAsync(System.Collections.Generic.IReadOnlyList{System.Int32})");
+        frontier[0]
+            .GetProperty("id")
+            .GetString()
+            .ShouldBe(
+                "M:EntryPointEffects.Api.Services.TeamWorkflow.ProcessBatchAsync(System.Collections.Generic.IReadOnlyList{System.Int32})"
+            );
         frontier[0].GetProperty("name").GetString().ShouldBe("TeamWorkflow.ProcessBatchAsync");
         frontier[0].GetProperty("line").GetInt32().ShouldBe(50);
 
@@ -188,8 +192,7 @@ public sealed class CallersEntryPointsParityTests
         public async Task<(bool Matched, List<Row> Rows)> GetEntryPointsAsync(string target)
         {
             var root = await GetJsonAsync(target);
-            var rows = root
-                .GetProperty("entryPoints")
+            var rows = root.GetProperty("entryPoints")
                 .EnumerateArray()
                 .Select(e => new Row(
                     Kind: e.GetProperty("kind").GetString()!,

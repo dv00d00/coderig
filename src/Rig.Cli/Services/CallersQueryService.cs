@@ -505,7 +505,9 @@ public static class CallersQueryService
         var seedGroups = touching
             .Select(e => (IReadOnlyList<string>)(methodsBySite.TryGetValue((e.FilePath, e.Line), out var ids) ? ids : []))
             .ToList();
-        var flags = raw ? touching.Select(_ => true).ToArray() : FactPathFinder.SeedsReachTarget(graph, seedGroups, targetIds, maxDepth, mode);
+        var flags = raw
+            ? touching.Select(_ => true).ToArray()
+            : FactPathFinder.SeedsReachTarget(graph, seedGroups, targetIds, maxDepth, mode);
         verifyWatch.Stop();
 
         return withDisclosures with

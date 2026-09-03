@@ -70,9 +70,31 @@ Cumulative call sites: `>=6/8` **5.49%**, `>=5/8` **18.32%**, `>=4/8` 24.31%, `>
 **The denominator is wrong, and that is the headline.** Only six families occur at all — `db` 1890,
 `io` 1546, `cache` 1212, `echo` 841, `rpc` 543, `blob` 182 rows. `bus` and `search` appear in **zero** of
 1,567 sites, so `n/8` cannot exceed 6/8 in practice and a reader shown "6/8" is being told the site is at
-75% of a ceiling it can never reach. Decide whether breadth is reported out of 8 declared families or out of
-the families actually present in the store before choosing any mark. Cheap follow-up to confirm estate-wide
-rather than in-sample: `rig derive --only bus` / `--only search`.
+75% of a ceiling it can never reach.
+
+**Settled 2026-09-03 — the eight is not a fact about this store.** `bus` and `search` are declared by
+`builtin-rules.json`, which ships with the tool into every repo; `echo` is declared only by MedDBase's own
+`rig.rules.json`. Confirmed estate-wide rather than in-sample: MedDBase has **zero** references to mediatr,
+rabbitmq, elasticsearch, azure_search, Nest or MassTransit across all 2,444,657 refs, so those two families
+are structurally unreachable here. The proposed `rig derive --only bus` follow-up is unnecessary — the rule
+sets plus the ref counts answer it outright.
+
+**D2, 2026-09-03:** the family list is **config-defined and of arbitrary size** — no hardcoded eight
+anywhere, and anything outside the declared set renders in its own `other` lane rather than being promoted to
+a pseudo-family. That decision and its scope live on
+[family-list-comes-from-rules-not-a-client-hardcode](./family-list-comes-from-rules-not-a-client-hardcode.md),
+which also records that the web client currently hand-copies the list (`filelens.js:33-42`) even though
+`/api/providers` already serves it.
+
+**Still open, and this card is blocked on it.** Config-defined does not by itself fix the two-always-missing
+problem, because `bus` and `search` *are* config — `DeclaredFamilies` still returns 8 for MedDBase. The mark
+cannot ship until the denominator is one of:
+
+- **declared ∩ present-in-store** — self-correcting (`6/6` today, `7/7` the day someone adds RabbitMQ),
+  needs a store read the legend does not currently do;
+- **rules may opt out of builtin families** — explicit and cheap, but the opt-out list needs maintaining.
+
+Whichever is chosen, the mark must **disclose its N**, since N now varies per repo.
 
 **Threshold, from the data rather than a guess.** The floated 5+ would mark 18.3% of call sites — roughly one
 in five, which is not a severity signal. `6/8` is both the observed maximum and 5.49% of sites (~1 in 18),

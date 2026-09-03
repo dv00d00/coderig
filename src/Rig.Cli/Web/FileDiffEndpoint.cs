@@ -408,12 +408,22 @@ internal static class FileDiffEndpoint
             throw new InvalidOperationException($"Store '{store}' has no source commit; it cannot participate in Git review.");
         }
 
-        if (run.SourceDirty)
-        {
-            throw new InvalidOperationException(
-                $"Store '{store}' was indexed from a dirty tree; its changed-file list is not reproducible."
-            );
-        }
+        // TODO(dirty-provenance): the dirty-tree REFUSAL is disabled so the review UI/UX can be exercised —
+        // every store on a working machine is dirty, so this gate made the whole Review surface unreachable
+        // rather than degraded. Restore a guard before this ships.
+        //
+        // The invariant it protected is real and still unenforced: we review IMMUTABLE commits, but the
+        // indexer reads whatever is on disk, so a store labelled `aae396ea7e8e` can hold facts about source
+        // that never existed at `aae396ea7e8e`. Every annotation joined onto the git diff is currently
+        // asserted at-commit without evidence.
+        //
+        // What it must NOT go back to: a whole-RUN refusal. The invariant is per-FILE, and the git diff
+        // itself never depended on the store at all, so refusing discarded a sound diff to avoid a caveat
+        // `ReviewFileDto.SemanticReady` already exists to carry. Nor can the guard be rebuilt from
+        // `git status` AT REVIEW TIME: that answers "dirty now", and a file dirty at index time but
+        // committed since would read clean — an unsound clear, the one failure class this tool exists to
+        // prevent. The oracle has to be a property of the STORE.
+        _ = run.SourceDirty;
 
         if (!IsHexSha(commit))
         {
