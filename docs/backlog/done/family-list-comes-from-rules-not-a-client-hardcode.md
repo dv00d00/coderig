@@ -87,3 +87,30 @@ mark and cannot ship until this is answered.
 - A rule set declaring a family the client has never heard of renders it correctly, unprompted.
 - A provider outside every declared family lands in `other`, never as its own gutter family.
 - Any `n/N` breadth mark discloses N.
+
+## Shipped 2026-09-03
+
+`/api/providers` gained an additive `familyProviders` key (`ProviderCatalog.DeclaredFamilyProviders`, new,
+unrestricted so a ruleless family still appears; `EffectfulFamilies` untouched). `filelens.js` no longer
+holds a family list or mapping: `setFamilyCatalog` is set once at boot and render reads pure accessors.
+`FAMILY_HELP` stays as a non-authoritative gloss lookup, per the decision — a family with no gloss renders
+with none. 1387/1387 on the default lane; verified in a browser against the real store.
+
+**Two states, deliberately distinguished.** Catalog absent (the fetch failed) falls back to provider-as-label
+and says so in the legend — `family list unavailable — marks are labelled by provider`. Catalog present but
+the provider is in no declared family buckets to `other`, with `provider:operation` still in the tooltip.
+Conflating those would have made a network failure look like a vocabulary gap. `familyCatalogKnown()` is the
+separator.
+
+**Correction to item 3 of the scope above — it named the wrong surface.** Lens badges can never carry an
+undeclared provider: `FileEffectsQueryService.Selectors` builds from `EffectfulFamilies`, so a badge's family
+is always declared and an effect whose provider has no family produces no badge at all. The `familyOf`
+fallback fires only on **tier-2 amplification and tier-3 witness** providers. Measured on the store: of 4,009
+`cross_method_amplification` rows, **985 have a witness outside every declared family** (`lock` 459,
+`reflection` 400, `permission` 88, `parallel` 20, `audit` 10, `async_block` 7, `resilience` and
+`clientpage_nav` 1 each), while all 640 plain `amplification` rows are inside one. So `other` is reachable,
+but only via tier 3 — which is also why no `other` chip was added to the legend: it is not a declared family.
+
+**A separate defect found on the way, not fixed here:** `rig serve` publishes `.rig/serve.json`
+unconditionally, so a second local serve silently overwrites the first one's marker — the one the annotate
+resident transport discovers hosts through. Its own card is warranted.

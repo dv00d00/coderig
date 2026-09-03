@@ -108,6 +108,31 @@ one set at 6 captures outliers.
 **Not measured:** reachable-method count, the card's second approved metric. `annotate` does not emit it, so
 it needs its own surface; this measurement covers family breadth only.
 
+## The denominator question is wider than 8-vs-6 — measured 2026-09-03
+
+Served live from `/api/providers` after the family grouping shipped: **67 providers, 42 in a declared family,
+25 in none.**
+
+```
+alloc, app_state, async_block, async_lock, audit, bounded_retry, browser_render, clientpage_event,
+clientpage_io, clientpage_nav, config, crypto_pgp, git, inproc_timer, ironpdf, lock, parallel,
+permission, process, reflection, resilience, script_eval, session_state, shared_state, throw
+```
+
+So the family axis is structurally blind to 37% of the provider vocabulary — `lock`, `reflection`,
+`permission`, `shared_state` and `process` among them. That is not a rounding error for a severity signal:
+a call site reaching `lock:acquire` and `reflection:invoke` and nothing else scores **0/N on family breadth**,
+however alarming it is.
+
+This does not decide the open question above, it enlarges it. Three options now, not two:
+
+- **declared ∩ present-in-store** — as before, self-correcting, `6/6` on MedDBase today;
+- **rules opt out of builtin families** — as before, explicit, needs maintaining;
+- **breadth is the wrong metric for a third of the vocabulary** — the 25 unmapped providers may need their own
+  axis (an `other` count, or a hazard-tier signal) rather than being folded into a family denominator at all.
+
+Recorded, not resolved. The mark still cannot ship until one is chosen.
+
 ## Acceptance
 
 - The family-breadth (and reachable-method-count) distribution over the real store is reported before any
