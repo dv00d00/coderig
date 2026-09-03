@@ -8,6 +8,7 @@ using Rig.Analysis;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Git;
+using Rig.Cli.Services;
 using Rig.Cli.Telemetry;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -282,6 +283,14 @@ internal static class IndexCommands
         // a second capture at index END (below), because a file clean now and edited during the minutes this
         // index takes must still be recorded dirty.
         var dirtyFiles = GitProvenanceProbe.CaptureDirtyFiles(fromProject ?? target);
+        // FAIL FAST on a locked destination, for the same reason the store-id is resolved up here: everything
+        // that can be known before the long analysis should be. The publish is the LAST thing this command
+        // does (DeleteDbFiles + File.Move, below), so without this check a store held open by `rig serve`
+        // costs the entire index — minutes — and then throws. Worse than the lost time: DeleteDbFiles runs
+        // BEFORE the Move, so it can drop the published store's sidecars and then fail to replace rig.db,
+        // leaving the old store torn. Only reindexing a commit that already HAS a store can hit this; a new
+        // commit gets a fresh directory with nothing to lock.
+        EnsureStoreIsWritable(workingDirectory, storeId);
 
         var totalWatch = Stopwatch.StartNew();
         AnalysisResult result;
@@ -599,6 +608,54 @@ internal static class IndexCommands
             || name.EndsWith("UnitTests", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith("IntegrationTests", StringComparison.OrdinalIgnoreCase)
             || name.Contains(".Tests.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Refuse before the analysis if this commit's store already exists and something else holds it open.
+    // FileShare.None is the reliable Windows answer: the open succeeds iff no other handle exists, which is
+    // exactly the condition DeleteDbFiles + File.Move need at publish time. It proves nothing about the
+    // future — a serve started mid-index still breaks the publish — but it converts a GUARANTEED loss of the
+    // whole index into a rare race, which is the trade worth making.
+    //
+    // Not gated on atomicPublish: append/`--merge` writes the published rig.db directly, so a lock breaks
+    // that path too, and equally late.
+    private static void EnsureStoreIsWritable(string workingDirectory, string storeId)
+    {
+        var dbPath = Path.Combine(StoreLayout.RigDir(workingDirectory), storeId, StoreLayout.DbFileName);
+        if (!File.Exists(dbPath))
+        {
+            return; // a commit with no store yet — nothing to lock
+        }
+
+        try
+        {
+            using var probe = File.Open(dbPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(
+                $"Store '{storeId}' is open in another process, so this index could not publish it{DescribeStoreHolder(workingDirectory)}. "
+                    + "Stop that process and re-run. Indexing a different commit is unaffected — it writes its own store.",
+                ex
+            );
+        }
+    }
+
+    // Best-effort attribution for the message above. `.rig/serve.json` records the resident serve's pid and
+    // url; it can be stale, so a missing or unreadable marker just yields no detail rather than a claim. The
+    // LOCK is the authority either way — this only turns an opaque IOException into something actionable.
+    private static string DescribeStoreHolder(string workingDirectory)
+    {
+        try
+        {
+            var marker = AnnotateResidentTransport.ReadMarker(
+                Path.Combine(StoreLayout.RigDir(workingDirectory), AnnotateResidentTransport.MarkerFileName)
+            );
+            return marker is null ? "" : $" (likely `rig serve` on {marker.Url}, PID {marker.Pid})";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return "";
+        }
     }
 
     // Delete a SQLite DB file and its WAL/SHM/rollback-journal sidecars, ignoring missing files.
