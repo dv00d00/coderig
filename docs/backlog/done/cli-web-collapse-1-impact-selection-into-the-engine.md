@@ -113,3 +113,72 @@ shape changes.
   unsettled there.
 - [Web Impact has no effect filter](./impact-web-effect-filters-client-side.md) — the same omission from the
   web side. Option A above is that card as written; option B replaces it.
+
+## Shipped 2026-09-03
+
+`ImpactEngine.Select(diff, only, exclude, includeIntrinsic) → ImpactView` landed; `RenderImpact`, both CI
+gates and `ImpactMapper` consume only the view. `/api/impact` accepts `?only=&exclude=&intrinsic=`,
+`ImpactResponseDto` gained `BehavioralEpCount` (it had none — the card's verification section assumed one),
+and `api.js`'s client key gained the filter signature mirroring `QueryCacheKeys.EffectFilterSignature`.
+`QueryCacheKeys.cs` untouched and `ImpactSchema` still 8, as designed: the cached artifact stays unfiltered.
+
+**The slice found a silent total false negative, and that is the bigger result.** `PrepareFilterTokens` ran
+AFTER `FilterPerEpEffects`, so its family expansion arrived too late and every FAMILY token selected nothing:
+
+```
+rig impact --only db    before:  behavioral_eps=0  effect_added=0  effect_removed=0
+                        after:   behavioral_eps=38 effect_added=88 effect_removed=719
+```
+
+719 effect removals reported as "no behavioural change" — precisely the failure `ImpactCommand.cs:257-260`
+says the filter exists to prevent. The guard against silent false negatives was itself silently
+false-negative for every family token. Fixed by preparing tokens before `Select`, on both surfaces.
+
+**D4 verified on real data, under `--only`** (stores `a1d65d423431` → `a0b279cf7e85`), which is how it was
+exercised without new stores — the default and `--intrinsic` runs cannot show it (see below):
+
+| | before | after |
+| --- | --- | --- |
+| `ep_delta` rows | 19 | 34 (+15, all `+0 -0 ~0`, **0 lost**) |
+| `ep_hazard_removed` | 84 | 101 |
+| `ep_amplification_removed` | 19 | 30 |
+| `ep_effect_added` / `_removed` | 19 / 135 | 19 / 135 (identical) |
+| `behavioral_eps` | 19 | 19 |
+
+**The card's claim that `behavioral_eps` "will differ under `--intrinsic`" does not hold on this pair.**
+Measured before dispatch: default and `--intrinsic` both report 38, and the UNFILTERED `PerEp` is also 38 —
+every EP in this diff has an effect delta, so D4's retention rule adds none of them. Both TSV and human
+outputs are byte-identical before/after under default AND `--intrinsic`. The fixture tests carry the
+verification burden for D4, not the real store.
+
+**D5, 2026-09-03 — the guard-retention arm is deliberately ABSENT (option O2).** `HasGuardDeltaOnSharedMutation`
+reads `GuardEffectDelta`, which reads only `Added`/`Removed` filtered to `lock`/`async_lock`. So a guard delta
+IS an effect entry, and an explicit arm could only be harmful or dead: on the FILTERED lists it is strictly
+subsumed by the effect arm (dead code implying a rule that never fires); on the UNFILTERED delta it retains an
+EP under an `--only` that strips `lock`, but both renderers evaluate the predicate on the filtered delta, so
+the row prints `ep_delta … +0 -0 ~0` with no `ep_guard_delta` and no ⚠ line — an information-free husk.
+`lock` is not intrinsic, so under the default filter a guard delta always survives and its EP is kept by the
+effect arm; the arm only ever mattered when the reader had explicitly filtered locks out. Verified inert:
+removing it left both the default and the `--only llblgen:write` output byte-identical.
+
+**Deviation from the brief, accepted.** The endpoint's unknown-token warning derives its vocabulary from the
+RULE SET (via the shared `PrepareFilterTokens`) rather than from the vocabulary present in the diff, as the
+brief said. Diff-derived would warn on a valid provider that merely has no delta — different semantics from
+the CLI in a parity slice — and could not expand family tokens, which is the very bug above.
+
+**Also shipped, user-visible:** the web Impact view now hides intrinsics by DEFAULT (14,059 → 2,314 effect
+entries on the MedDBase pair), matching the CLI and the five endpoints that already share the flag.
+`?intrinsic=true` reproduces the previous payload.
+
+Verified independently of the agent's report: `0 Warning(s) / 0 Error(s)`, full default lane **1409/1409**,
+byte identity re-checked against a baseline captured BEFORE dispatch, and the D4 row-level check re-run
+(15 retained / 0 lost / effect rows identical).
+
+**Not done, each now its own card:**
+
+- [The impact location memo trades a cold fast path for the warm hit](./impact-location-memo-cold-cost.md)
+- [Two web surfaces still call `perEp.length` "behavioral"](./web-impact-mislabels-per-ep-count-as-behavioral.md)
+
+The four selection statics (`FilterPerEpEffects`, `EffectChangedEpCount`, `ClassifyStructuralCause`,
+`FilterGuardConditions`) remain `internal` rather than private: four existing test classes call them
+directly. Every PRODUCTION caller now goes through `Select`.

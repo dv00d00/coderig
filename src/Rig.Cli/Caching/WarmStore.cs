@@ -26,8 +26,8 @@ namespace Rig.Cli.Caching;
 // Deliberately NOT keyed on anything per-compile (no MVID, no build stamp) — same discipline as
 // QueryCacheKeys, and for the same reason.
 //
-// BOUNDED: heavyweight graph/invocation entries use `Capacity`; solution file-effect indexes use their own
-// two-entry LRU. FactGraphData on the MedDBase store costs ~1.5 GB of
+// BOUNDED: heavyweight graph/invocation entries use `Capacity`; solution file-effect indexes and the per-store
+// impact location maps use their own two-entry LRUs. FactGraphData on the MedDBase store costs ~1.5 GB of
 // disk reads to build, so retained footprint is the real constraint and a resident process must not hold
 // an unbounded number. `impact` wants two graphs at once (base + head) and would thrash at capacity 1 —
 // its call sites are deliberately NOT routed through here yet; raise the cap first and measure.
@@ -58,6 +58,13 @@ internal static class WarmStore
     // retaining an unbounded set of 442k-symbol indexes.
     private const int ResidentFileEffectCapacity = 2;
     private static readonly List<(string Key, object Value)> ResidentFileEffectEntries = [];
+
+    // An impact location map covers ONE store, and a diff needs BOTH of its stores resident at once — so 2 is
+    // the floor, not a budget for several diffs. Its own gate for the same reason the file-effect entry has
+    // one: the factory opens a store context, and sharing Gate would serialize it behind a graph load.
+    private const int ImpactLocationCapacity = 2;
+    private static readonly List<(string Key, object Value)> ImpactLocationEntries = [];
+    private static readonly SemaphoreSlim ImpactLocationGate = new(initialCount: 1, maxCount: 1);
 
     // The shaped whole-store graph. Pattern-INDEPENDENT (unlike the bounded per-traversal loads in
     // TraversalGraphLoader), which is exactly why it is cacheable by (store, rules) alone.
@@ -92,9 +99,28 @@ internal static class WarmStore
     // FileEffectsSchema remains the derivation/payload hedge even though this is a process-only cache.
     internal static Task<T> ResidentFileEffectsAsync<T>(string storeDir, string rulesHash, Func<Task<T>> load)
         where T : class =>
-        GetOrLoadResidentFileEffectAsync(
+        GetOrLoadBoundedAsync(
+            entries: ResidentFileEffectEntries,
+            gate: ResidentFileEffectGate,
+            capacity: ResidentFileEffectCapacity,
             key: $"filefx-solution|v{QueryCacheKeys.FileEffectsSchema}|{StoreIdentity(storeDir)}|{rulesHash}",
             label: "file effects (solution)",
+            load: load
+        );
+
+    // The per-store IMPACT LOCATION map (param-free method stem -> its unique declaration site). It is a pure
+    // function of store identity and CANNOT depend on the effect filter, so /api/impact applying the filter
+    // server-side must not rescan every method symbol per toggle — that scan is the entire per-request cost of
+    // filtering post-cache. Rules-INDEPENDENT (a raw symbol projection), so the fingerprint is absent from the
+    // key, exactly as InvocationsAsync leaves it out.
+    internal static Task<T> ImpactLocationsAsync<T>(string storeDir, Func<Task<T>> load)
+        where T : class =>
+        GetOrLoadBoundedAsync(
+            entries: ImpactLocationEntries,
+            gate: ImpactLocationGate,
+            capacity: ImpactLocationCapacity,
+            key: $"impact-locations|{StoreIdentity(storeDir)}",
+            label: "impact locations",
             load: load
         );
 
@@ -183,7 +209,18 @@ internal static class WarmStore
         }
     }
 
-    private static async Task<T> GetOrLoadResidentFileEffectAsync<T>(string key, string label, Func<Task<T>> load)
+    // The separately-bounded kinds (solution file effects, impact locations) share this: each owns its list,
+    // its gate and its capacity, so one kind's cold load never queues behind another's. Warm hits take the
+    // fast path outside the gate; two COLD loads of the same kind are serialized, which is the point (they
+    // are multi-second and memory-heavy).
+    private static async Task<T> GetOrLoadBoundedAsync<T>(
+        List<(string Key, object Value)> entries,
+        SemaphoreSlim gate,
+        int capacity,
+        string key,
+        string label,
+        Func<Task<T>> load
+    )
         where T : class
     {
         if (Capacity <= 0)
@@ -191,7 +228,7 @@ internal static class WarmStore
             return await load();
         }
 
-        if (TryGet(ResidentFileEffectEntries, key) is T warm)
+        if (TryGet(entries, key) is T warm)
         {
             if (Log)
             {
@@ -201,10 +238,10 @@ internal static class WarmStore
             return warm;
         }
 
-        await ResidentFileEffectGate.WaitAsync();
+        await gate.WaitAsync();
         try
         {
-            if (TryGet(ResidentFileEffectEntries, key) is T raced)
+            if (TryGet(entries, key) is T raced)
             {
                 if (Log)
                 {
@@ -216,7 +253,7 @@ internal static class WarmStore
 
             var started = Environment.TickCount64;
             var loaded = await load();
-            Insert(ResidentFileEffectEntries, ResidentFileEffectCapacity, key, loaded);
+            Insert(entries, capacity, key, loaded);
             if (Log)
             {
                 Console.Error.WriteLine($"[warm] MISS {label} — loaded in {Environment.TickCount64 - started} ms");
@@ -226,7 +263,7 @@ internal static class WarmStore
         }
         finally
         {
-            ResidentFileEffectGate.Release();
+            gate.Release();
         }
     }
 

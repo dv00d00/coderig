@@ -93,7 +93,7 @@ file-effects cache-key axis; this one owns the Impact slice only.
 
 ## Related
 
-- **ABSORBED BY** [Impact selection moves into the engine as one view](./cli-web-collapse-1-impact-selection-into-the-engine.md)
+- **ABSORBED BY** [Impact selection moves into the engine as one view](../done/cli-web-collapse-1-impact-selection-into-the-engine.md)
   — the same omission seen from the web side. This card is that slice's option A (client-side, D1 as written);
   its option B applies the shared view server-side post-cache via `?only=&exclude=&intrinsic=` and is
   recommended there on the ground that A is a third implementation of the selection in JS. Option B reverses

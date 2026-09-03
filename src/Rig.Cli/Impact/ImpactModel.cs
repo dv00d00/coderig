@@ -47,6 +47,38 @@ internal sealed record ImpactDiff(
     public IReadOnlyList<GuardConditionDelta> GuardConditionsOrEmpty => GuardConditions ?? [];
 }
 
+// The SELECTED view of one ImpactDiff — the single answer `rig impact` (render + both CI gates) and the web
+// /api/impact both read, produced by ImpactEngine.Select and never assembled by a renderer. Selection used to
+// live on the render side of ImpactCommand, so the web endpoint had no filter at all and the human header and
+// the tsv summary could print two different "behavioral EP" numbers.
+//
+// Diff is the SELECTED diff: the same artifact with PerEp and GuardConditions replaced by their filtered
+// forms, so the signals selection does not touch (the entry-point set diff, the structural AffectedEps
+// roster, GuardCoverage) ride along and a renderer needs nothing else. The cached artifact itself stays
+// unfiltered and filter-independent — selection runs post-cache, which is why no ImpactSchema bump applies.
+//
+// PerEp retains every EP with ANY surviving delta — effect, hazard, amplification tier, or a guard delta on a
+// shared-mutation path — while BehavioralEpCount stays the EFFECT-ONLY count over that same filtered set. Two
+// numbers with two definitions, deliberately: a hazard-only EP is visible per-EP (which is what PerEp always
+// claimed to contain) without being counted as a changed behaviour.
+internal sealed record ImpactView(
+    ImpactDiff Diff,
+    int HiddenIntrinsic,
+    int BehavioralEpCount,
+    IReadOnlyList<StructuralOnlyEp> StructuralOnly
+)
+{
+    public IReadOnlyList<EpFootprintDelta> PerEp => Diff.PerEp;
+
+    public IReadOnlyList<GuardConditionDelta> GuardConditions => Diff.GuardConditionsOrEmpty;
+
+    public int AffectedEpCount => Diff.AffectedEps.Count;
+}
+
+// One affected entry point whose reachable TREE changed while the SELECTED per-EP deltas do not carry it —
+// the structural-only partition — paired with the cause bucket the breadcrumb and the tsv cause tag read.
+internal sealed record StructuralOnlyEp(EpReachDelta Ep, StructuralCause Cause);
+
 // How many GUARDED lambda edges each store carries — a version fingerprint, not a result.
 //
 // Guards on lambda/method-group edges did not exist before 2026-07-27

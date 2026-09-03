@@ -1002,8 +1002,23 @@ export function ImpactView(s, actions) {
         {},
         `${d.affectedEpCount.toLocaleString()} affected (structural)`,
       ),
-      h("span", {}, `${d.perEp.length.toLocaleString()} behavioral`),
+      // behavioralEpCount is the EFFECT-set change count the server derived — NOT perEp.length, which also
+      // carries the EPs kept for a hazard or amplification-tier delta alone. See the collapse-1 card.
+      h("span", {}, `${(d.behavioralEpCount ?? d.perEp.length).toLocaleString()} behavioral`),
+      d.perEp.length !== (d.behavioralEpCount ?? d.perEp.length)
+        ? h("span", {}, `${d.perEp.length.toLocaleString()} with any delta`)
+        : null,
     ),
+    // MANDATORY DISCLOSURE: the effect selection is applied server-side now, so the default response has
+    // already withheld alloc/throw. Same wording as the tree/reaches/hotspots notes, and it names the count
+    // because a view that quietly dropped 83% of its rows would read as "barely any change".
+    d.hiddenIntrinsic > 0
+      ? h(
+          "div",
+          { class: "impact-mode-note" },
+          `${d.hiddenIntrinsic.toLocaleString()} alloc/throw effect entries hidden — enable intrinsic above to include them.`,
+        )
+      : null,
     // Disclose the sync-mode limitation in the web too (the CLI header does the same): async/scheduled
     // handoffs are cut, so effects reachable only that way are excluded until you toggle async.
     s.impactAsync

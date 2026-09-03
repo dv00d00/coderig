@@ -65,3 +65,27 @@ Either way, one selection helper computes the count and both the header and the 
   recorded as a recommendation: `Select` keeps EPs with any hazard, amplification or guard delta in `PerEp` and
   reports `BehavioralEpCount` separately, which is O2 above. The decision stays on this card. Family rationale
   on [the CLI/web collapse map](./cli-web-collapse-map.md).
+
+## Resolved 2026-09-03 — O2, implemented and verified
+
+Shipped as part of [cli-web-collapse-1](../done/cli-web-collapse-1-impact-selection-into-the-engine.md).
+`ImpactEngine.Select` returns one `ImpactView`; `ImpactView.BehavioralEpCount` (effect-delta only, over the
+FILTERED set) is what the human header (`ImpactCommand.cs:774`) AND `impact_summary behavioral_eps`
+(`:973`, previously `diff.PerEp.Count`) now both read. `PerEp` retains every EP with any effect, hazard or
+amplification-tier delta, so hazard-only EPs stop being silently dropped and the engine's stated intent
+(`ImpactEngine.cs:523-529`) holds. That is **O2** from the table above.
+
+A guard delta needs no retention arm of its own — it IS a `lock`/`async_lock` effect entry, so the effect arm
+covers it whenever the reader has not explicitly filtered locks away. Recorded as D5 on the shipped card.
+
+**The accepted cost did not materialise on real data.** This card and the collapse card both warned that
+`impact_summary behavioral_eps` would CHANGE under `--intrinsic` for anything parsing `--format tsv`. On
+`a1d65d423431` → `a0b279cf7e85` it does not: 38 before, 38 after, under both filters, because the unfiltered
+`PerEp` on that pair is also 38 (every EP has an effect delta). The divergence is real in principle and is
+pinned by fixtures in `tests/Rig.Tests/Cli/ImpactSelectViewTests.cs`, not by the store. Anyone parsing that
+column should still treat the change as breaking — the number moves the first time a diff contains a
+hazard-only EP.
+
+Testing expectations from this card, all met: a hazard-only fixture where the summary and header agree with
+and without `--intrinsic`; the chosen definition pinned by test rather than comment; `--expect-no-effect-change`
+reads the same count the report prints (both now come from the view).

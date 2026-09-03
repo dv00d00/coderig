@@ -72,11 +72,11 @@ make this class of bug testable.
 
 ## Related
 
-- [`rig impact` reports two different behavioral-EP counts](./impact-reports-two-different-behavioral-ep-counts.md)
+- [`rig impact` reports two different behavioral-EP counts](../done/impact-reports-two-different-behavioral-ep-counts.md)
   — the CLI disagrees with ITSELF on the same vocabulary: `impact_summary behavioral_eps` prints
   `diff.PerEp.Count` while the human header prints `EffectChangedEpCount`. Choosing one definition there
   settles what the web label should say here.
-- **ABSORBED BY** [Impact selection moves into the engine as one view](./cli-web-collapse-1-impact-selection-into-the-engine.md)
+- **ABSORBED BY** [Impact selection moves into the engine as one view](../done/cli-web-collapse-1-impact-selection-into-the-engine.md)
   — this card's root cause IS that card's optional-statics problem, and the fix lands there as one
   `ImpactEngine.Select` consumed by every surface. Family rationale on
   [the CLI/web collapse map](./cli-web-collapse-map.md). What stays here: the attribution of the extra

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Rig.Analysis.Rules;
 using Rig.Cli.Caching;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Effects;
 using Rig.Cli.Rendering;
 using Rig.Cli.Services;
 
@@ -127,9 +128,13 @@ internal static class RigApiEndpoints
         // Store-vs-store impact diff (same as `rig impact --base --head`): per-EP behavioral effect/hazard
         // deltas + entry-point add/remove. Both refs required. Expensive (loads + derives BOTH stores) —
         // minutes on a big store; the client shows a busy state.
+        // `only`/`exclude`/`intrinsic` are the SHARED effect selection, applied SERVER-side through
+        // ImpactEngine.Select — unlike /api/tree below, whose ordinary filters stay client-side. Impact's
+        // selection decides the counts and the CI gates, so a second implementation of it in JS would be a
+        // third answer; the cached diff artifact is filter-independent, so a toggle is a warm request.
         app.MapGet(
             "/api/impact",
-            async (string? @base, string? head, bool? async) =>
+            async (string? @base, string? head, bool? async, string? only, string? exclude, bool? intrinsic) =>
             {
                 if (string.IsNullOrWhiteSpace(@base) || string.IsNullOrWhiteSpace(head))
                 {
@@ -138,8 +143,19 @@ internal static class RigApiEndpoints
 
                 try
                 {
+                    var selection = EffectSelection(workingDirectory, only: only, exclude: exclude, intrinsic: intrinsic);
                     var art = await ImpactQueryService.DiffAsync(workingDirectory, baseRef: @base, headRef: head, async: async ?? false);
-                    return Results.Json(await ImpactMapper.ToResponseAsync(workingDirectory, @base, head, art));
+                    return Results.Json(
+                        await ImpactMapper.ToResponseAsync(
+                            workingDirectory,
+                            @base,
+                            head,
+                            art,
+                            only: selection.Only,
+                            exclude: selection.Exclude,
+                            includeIntrinsic: selection.Intrinsic
+                        )
+                    );
                 }
                 catch (Exception ex)
                 {
@@ -338,6 +354,36 @@ internal static class RigApiEndpoints
 
     // A blank query-string value (?store=) arrives as "" not null; normalize so services see null (LATEST).
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+    // `?only=a,b&exclude=c` — the SAME token grammar `--only/--exclude` take (case-insensitive; a bare
+    // `provider`, a precise `provider:operation`, or a declared family), prepared through the shared
+    // EffectDerivation.PrepareFilterTokens so families expand into their providers and a token that matches no
+    // known effect WARNS instead of silently emptying the answer — the whole point of validating: a typo'd
+    // token would otherwise read as "no behavioural change". The warning goes to the SERVER console (stderr),
+    // the one channel a `rig serve` operator sees; the grammar is not restated here.
+    private static (HashSet<string> Only, HashSet<string> Exclude, bool Intrinsic) EffectSelection(
+        string workingDirectory,
+        string? only,
+        string? exclude,
+        bool? intrinsic
+    )
+    {
+        var onlyTokens = Tokens(only);
+        var excludeTokens = Tokens(exclude);
+        if (onlyTokens.Count > 0 || excludeTokens.Count > 0)
+        {
+            var rules = RuleSetLoader.Load(workingDirectory, extraRules: [], loadedPaths: out _);
+            EffectDerivation.PrepareFilterTokens(only: onlyTokens, exclude: excludeTokens, rules: rules, errorWriter: Console.Error);
+        }
+
+        return (onlyTokens, excludeTokens, intrinsic ?? false);
+
+        static HashSet<string> Tokens(string? raw) =>
+            new(
+                (raw ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                StringComparer.OrdinalIgnoreCase
+            );
+    }
 
     // The cache-invalidation version for DERIVED output. A store's facts are immutable, but tree/effects/
     // hazards/impact also depend on (a) the STORE ITSELF (a reindex of the same commit moves rig.db size/mtime

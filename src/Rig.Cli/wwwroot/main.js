@@ -608,7 +608,13 @@ function loadImpact() {
   es.addEventListener("done", () =>
     finish(async () => {
       try {
-        const impactData = await api.impact(impactBase, impactHead, impactAsync);
+        // The effect selection is applied SERVER-side (see /api/impact), so it reads the SAME shared
+        // `intrinsic` state the tree/reaches/path views already send — hiding alloc/throw by default while
+        // leaving the existing toggle able to restore them. Hardcoding false here would hide ~83% of the
+        // effect entries with no way to get them back, which is worse than not filtering at all.
+        // --only/--exclude stay empty: the token chips are a client-side filter for the other views, and
+        // routing them into the server-side impact selection is a product decision, not wiring.
+        const impactData = await api.impact(impactBase, impactHead, impactAsync, [], [], get().intrinsic);
         set({ impactData });
         api
           .reviewFiles(impactBase, impactHead)
@@ -984,6 +990,7 @@ const actions = {
     if (key === "rawTree" && get().treeFrom) openTree(get().treeFrom); // raw/folded changes the fetched tree
     if (key === "intrinsic") {
       if (get().treeFrom) openTree(get().treeFrom); // intrinsic changes server effect selection
+      if (get().impactBase && get().impactHead) loadImpact(); // ...and now the impact selection too
       const c = get().callers;
       if (c?.mode === "reaches") actions.openReaches({ id: c.target }, { recordHistory: false });
       if (c?.mode === "path") actions.openPath(c.from, c.target, { recordHistory: false });

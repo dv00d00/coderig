@@ -235,28 +235,11 @@ internal static class ImpactCommand
             amplification: opts.Amplification
         );
 
-        // --only / --exclude / the default intrinsic hiding, applied to the per-EP behavioral deltas. Done on
-        // the RENDER side (the cached diff artifact stays complete and filter-independent, so no ImpactSchema
-        // bump and no cache fragmentation across filter combos — same contract as reaches/tree/derive).
-        var (filteredPerEp, hiddenIntrinsic) = ImpactEngine.FilterPerEpEffects(
-            art.Diff.PerEp,
-            only: opts.Only,
-            exclude: opts.Exclude,
-            includeIntrinsic: opts.Intrinsic
-        );
-        var diff = art.Diff with
-        {
-            PerEp = filteredPerEp,
-            // Same filter grammar as the effect rows — see FilterGuardConditions. Also render-side, so the
-            // cached artifact stays filter-independent.
-            GuardConditions = ImpactEngine.FilterGuardConditions(art.Diff.GuardConditionsOrEmpty, only: opts.Only, exclude: opts.Exclude),
-        };
-        WriteIntrinsicNote(hiddenIntrinsic, io.TextOutput.Error);
-        WriteGuardSkewWarning(diff, io.TextOutput.Error);
-
         // Validate the filter tokens against the effective rule set. Worth the extra rules load (json parse,
         // trivial next to a two-store diff): a typo'd `--only llbgen:write` would otherwise filter everything
         // out and read as "no behavioural change" — the exact silent-false-negative this filter exists to fix.
+        // BEFORE the selection, because PrepareFilterTokens also EXPANDS family tokens into their providers —
+        // run after it, a `--only <family>` selects nothing (and /api/impact prepares them before Select too).
         if (opts.Only.Count > 0 || opts.Exclude.Count > 0)
         {
             var ruleSet = RuleSetLoader.Load(
@@ -267,9 +250,17 @@ internal static class ImpactCommand
             PrepareFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: ruleSet, errorWriter: io.TextOutput.Error);
         }
 
+        // --only / --exclude / the default intrinsic hiding, plus the counts and the structural partition that
+        // follow from them: ONE selection, in the engine, shared with /api/impact so the two cannot diverge.
+        // Applied POST-CACHE — the cached diff artifact stays complete and filter-independent, so no
+        // ImpactSchema bump and no cache fragmentation across filter combos (same contract as reaches/tree/derive).
+        var view = ImpactEngine.Select(art.Diff, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
+        WriteIntrinsicNote(view.HiddenIntrinsic, io.TextOutput.Error);
+        WriteGuardSkewWarning(view.Diff, io.TextOutput.Error);
+
         RenderImpact(
             output: io.TextOutput.Output,
-            impactDiff: diff,
+            view: view,
             baseProv: art.BaseProvenance,
             headProv: art.HeadProvenance,
             mode: mode,
@@ -277,16 +268,15 @@ internal static class ImpactCommand
             fqnSites: art.FqnSites,
             tsv: tsv,
             structural: opts.Structural,
-            max: max,
-            hiddenIntrinsic: hiddenIntrinsic
+            max: max
         );
-        // The gates count the FILTERED sets so output and CI verdict can never disagree; impact_summary's
+        // The gates read the SELECTED view so output and CI verdict can never disagree; impact_summary's
         // intrinsic_hidden column is what keeps that from being a silent loosening. Both gates are evaluated
         // (so a run opting into both sees both verdicts) and the exit code is the OR — either failing fails CI.
-        var effectExit = ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, ImpactEngine.EffectChangedEpCount(diff), io.TextOutput.Error);
+        var effectExit = ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, view.BehavioralEpCount, io.TextOutput.Error);
         var guardExit = ExpectNoGuardNarrowingExit(
             opts.ExpectNoGuardNarrowing,
-            ImpactEngine.NarrowedGuardCount(diff.GuardConditionsOrEmpty),
+            ImpactEngine.NarrowedGuardCount(view.GuardConditions),
             io.TextOutput.Error
         );
         return effectExit != 0 ? effectExit : guardExit;
@@ -381,7 +371,7 @@ internal static class ImpactCommand
     // only ever looks up the diff's own sites, so the warm path's site SUBSET serves it exactly as the full map.
     private static void RenderImpact(
         TextWriter output,
-        ImpactDiff impactDiff,
+        ImpactView view,
         StoreProvenance baseProv,
         StoreProvenance headProv,
         FactPathFinder.TraversalMode mode,
@@ -389,34 +379,33 @@ internal static class ImpactCommand
         Dictionary<(string, int), string> fqnSites,
         bool tsv,
         bool structural,
-        int max,
-        int hiddenIntrinsic = 0
+        int max
     )
     {
         if (tsv)
         {
-            EmitTsv(output, impactDiff, fqnSites, max, structural, hiddenIntrinsic);
+            EmitTsv(output, view, fqnSites, max, structural);
             return;
         }
 
-        WriteHeader(output, baseProv, headProv, mode, impactDiff);
-        WriteEpDiffHuman(output, baseProv, impactDiff.Ep, max);
+        WriteHeader(output, baseProv, headProv, mode, view);
+        WriteEpDiffHuman(output, baseProv, view.Diff.Ep, max);
         // Before the per-EP cards: a predicate-only change produces NO per-EP effect delta, so if this section
         // came after the effect section a reviewer scanning top-down would read "no behavioural change" and stop.
-        WriteGuardConditionsHuman(output, impactDiff.GuardConditionsOrEmpty, max);
+        WriteGuardConditionsHuman(output, view.GuardConditions, max);
         // PRIMARY signal: the entry points whose reachable EFFECT set changed (the behavioral handful). Always
         // shown — this is the "what actually does something different" answer.
-        WritePerEpHuman(output, baseProv, impactDiff.PerEp, fqnSites, max);
+        WritePerEpHuman(output, baseProv, view.PerEp, fqnSites, max);
         // The structural reachable-tree diff is mostly data-shape ripple (a record field add lights up every
         // reaching EP). By default we DEMOTE it to a one-line, cause-classified breadcrumb so a no-net-new-effect
         // migration still can't hide; --structural expands it to the full per-EP list.
         if (structural)
         {
-            WriteAffected(output, baseProv, impactDiff, deployments, fqnSites, max);
+            WriteAffected(output, baseProv, view.Diff, deployments, fqnSites, max);
         }
         else
         {
-            WriteStructuralBreadcrumb(output, baseProv, impactDiff, impactDiff.PerEp);
+            WriteStructuralBreadcrumb(output, baseProv, view);
         }
     }
 
@@ -729,7 +718,7 @@ internal static class ImpactCommand
         StoreProvenance baseProv,
         StoreProvenance headProv,
         FactPathFinder.TraversalMode mode,
-        ImpactDiff diff
+        ImpactView view
     )
     {
         var asyncNote = mode switch
@@ -739,7 +728,7 @@ internal static class ImpactCommand
             _ => "",
         };
 
-        output.WriteLine(DiffSummary(baseProv, diff));
+        output.WriteLine(DiffSummary(baseProv, view));
         output.WriteLine();
         output.WriteLine($"Impact: {baseProv.Label}  ->  {headProv.Label}{asyncNote}");
         if (SyncModeDisclosure(mode) is { } note)
@@ -767,23 +756,24 @@ internal static class ImpactCommand
 
     // The one-line takeaway: the PROVEN change vs the base store — entry points added/removed, entry points
     // whose behavior (reachable-effect set) changed, and entry points whose reachable tree changed.
-    private static string DiffSummary(StoreProvenance baseProv, ImpactDiff diff)
+    private static string DiffSummary(StoreProvenance baseProv, ImpactView view)
     {
         // The "changed behavior" headline counts EFFECT-set changes only; hazard-only EPs are reported by
-        // hazardNote below (PerEp includes them, but they aren't an effect-set change — no double-count).
-        var behavioralEps = ImpactEngine.EffectChangedEpCount(diff);
-        var added = diff.Ep?.Added.Count ?? 0;
-        var removed = diff.Ep?.Removed.Count ?? 0;
+        // hazardNote below (PerEp includes them, but they aren't an effect-set change — no double-count). This
+        // is the view's ONE behavioral count, the same one impact_summary's behavioral_eps prints.
+        var behavioralEps = view.BehavioralEpCount;
+        var added = view.Diff.Ep?.Added.Count ?? 0;
+        var removed = view.Diff.Ep?.Removed.Count ?? 0;
         // FR-1e: count the EPs whose guard (lock/atomic) around a still-reachable shared mutation changed.
         // Only appended when non-zero so the common (no-guard-change) summary line stays unchanged.
-        var guardEps = diff.PerEp.Count(ImpactEngine.HasGuardDeltaOnSharedMutation);
+        var guardEps = view.PerEp.Count(ImpactEngine.HasGuardDeltaOnSharedMutation);
         var guardNote = guardEps > 0 ? $" ⚠ {guardEps} with a guard delta on a shared-mutation path." : "";
         // Hazard delta: count the EPs that GAINED or LOST a hazard finding (race_window / n+1 / …). Appended
         // only when non-zero so the common (no-hazard-change) summary line stays unchanged.
-        var hazardEps = diff.PerEp.Count(d => d.HazardsAddedOrEmpty.Count > 0 || d.HazardsRemovedOrEmpty.Count > 0);
+        var hazardEps = view.PerEp.Count(d => d.HazardsAddedOrEmpty.Count > 0 || d.HazardsRemovedOrEmpty.Count > 0);
         var hazardNote = hazardEps > 0 ? $" ⚠ {hazardEps} with a hazard delta." : "";
         return $"Diff vs '{baseProv.ShortLabel}': {PlusMinus(added: added, removed: removed)} entry point(s)"
-            + $"; {behavioralEps} entry point(s) with a changed behavior, {diff.AffectedEps.Count} with a changed reachable tree.{guardNote}{hazardNote}";
+            + $"; {behavioralEps} entry point(s) with a changed behavior, {view.AffectedEpCount} with a changed reachable tree.{guardNote}{hazardNote}";
     }
 
     private static string PlusMinus(int added, int removed) => $"+{added}/-{removed}";
@@ -793,23 +783,17 @@ internal static class ImpactCommand
     // no-net-new-effect migration still surfaces as a non-zero `other` count that can't hide. `--structural`
     // expands this to the full per-EP list (WriteAffected). EPs whose effect set DID change are already shown by
     // WritePerEpHuman, so they're excluded here (the two sections partition the affected set, no double-count).
-    private static void WriteStructuralBreadcrumb(
-        TextWriter output,
-        StoreProvenance baseProv,
-        ImpactDiff diff,
-        IReadOnlyList<EpFootprintDelta> behavioralDeltas
-    )
+    private static void WriteStructuralBreadcrumb(TextWriter output, StoreProvenance baseProv, ImpactView view)
     {
         output.WriteLine();
-        var behavioralKeys = behavioralDeltas.Select(d => (d.Kind, d.Route)).ToHashSet();
-        var structuralOnly = diff.AffectedEps.Where(d => !behavioralKeys.Contains((d.Kind, d.Route))).ToList();
+        var structuralOnly = view.StructuralOnly;
         if (structuralOnly.Count == 0)
         {
             output.WriteLine($"Structural-only reachable-tree changes vs '{baseProv.ShortLabel}': none.");
             return;
         }
 
-        var byCause = structuralOnly.GroupBy(ImpactEngine.ClassifyStructuralCause).ToDictionary(g => g.Key, g => g.Count());
+        var byCause = structuralOnly.GroupBy(s => s.Cause).ToDictionary(g => g.Key, g => g.Count());
         int N(StructuralCause c) => byCause.GetValueOrDefault(c);
         var parts = new List<string>();
         if (N(StructuralCause.RecordShape) > 0)
@@ -914,23 +898,17 @@ internal static class ImpactCommand
         }
     }
 
-    private static void EmitTsv(
-        TextWriter output,
-        ImpactDiff diff,
-        Dictionary<(string, int), string> fqnSites,
-        int max,
-        bool structural,
-        int hiddenIntrinsic = 0
-    )
+    private static void EmitTsv(TextWriter output, ImpactView view, Dictionary<(string, int), string> fqnSites, int max, bool structural)
     {
+        var diff = view.Diff;
         // One stream of typed rows for CI/tooling. First column is the row kind. Every row here is the
         // STORE-vs-STORE derived-facts diff: the EP set diff + the per-EP footprint/reach diff between the two
         // indexed commits. There is NO git working-tree diff and NO speculative reverse-reach blast radius — the
         // old `changed` / `effect_added` / `effect_removed` / `obs_*` rows and the `entrypoint` / `effect`
         // (reverse-reach) rows are gone; read the per-EP rows (ep_delta / ep_effect_*) for the same effects,
         // attributed and correct.
-        //  affected_ep  <kind>  <route>  <fqn>  <cause>  <file>  <line>  <+addedStems>  <-removedStems>  <~changedStems>  <inplace>   (proven; <route> is the path-style diff key, <fqn> the dotted name `rig tree` matches — equals <route> when unresolved; <cause> is behavioral|record-shape|ctor-sig|in-place|other — behavioral = effect set changed, the rest are structural-only; counts are DISTINCT param-free stems; inplace = reachable bodies changed)
-        //  structural_summary  <total>  <behavioral>  <record-shape>  <ctor-sig>  <in-place>  <other>   (one row: the cause breakdown of the affected-EP set — behavioral counts the EPs whose effect set changed, the rest are structural-only)
+        //  affected_ep  <kind>  <route>  <fqn>  <cause>  <file>  <line>  <+addedStems>  <-removedStems>  <~changedStems>  <inplace>   (proven; <route> is the path-style diff key, <fqn> the dotted name `rig tree` matches — equals <route> when unresolved; <cause> is behavioral|record-shape|ctor-sig|in-place|other — behavioral = the EP is carried by the per-EP deltas (an effect, hazard, amplification-tier or guard change), the rest are structural-only; counts are DISTINCT param-free stems; inplace = reachable bodies changed)
+        //  structural_summary  <total>  <behavioral>  <record-shape>  <ctor-sig>  <in-place>  <other>   (one row: the cause breakdown of the affected-EP set — behavioral counts the EPs the per-EP deltas carry, the rest are structural-only)
         //  ep_reach_+   <kind>  <route>  <symbolId>                            (newly in the EP's reach — raw method DocID, or an `R:`-prefixed field/property-access target, Phase 3)
         //  ep_reach_-   <kind>  <route>  <symbolId>                            (dropped from the EP's reach — raw method DocID, or an `R:`-prefixed field/property-access target, Phase 3)
         //  ep_reach_~   <kind>  <route>  <stem>                                (a reachable method whose SIGNATURE changed — param-free stem)
@@ -960,7 +938,10 @@ internal static class ImpactCommand
         //     SYNTACTIC conjunct containment, an over-approximation: it recognises "AND another clause onto the
         //     existing guard" and falls back to `changed` otherwise.)
         //  impact_summary  eps=<n>  behavioral_eps=<n>  effect_added=<n>  effect_removed=<n>  effect_amplified=<n>  guard_delta=<n>  guard_narrowed=<n>  guard_widened=<n>  guard_changed=<n>  intrinsic_hidden=<n>
-        //     (ALWAYS FIRST, and never capped by --limit. A reviewer or agent that truncates the stream still
+        //     (behavioral_eps counts the EPs whose reachable EFFECT set changed — the SAME number the human
+        //     header prints, NOT the ep_delta row count: an EP retained for a hazard / amplification-tier /
+        //     guard delta alone has an ep_delta row and is deliberately not counted here.
+        //     ALWAYS FIRST, and never capped by --limit. A reviewer or agent that truncates the stream still
         //     reads the true totals: the original failure this fixes was a `Select-Object -First 300` capture
         //     whose 300 lines were all ep_reach_+ rows for ONE entry point, so the diff read as "no behavioural
         //     change" while 190 EPs newly wrote a table. intrinsic_hidden discloses what the default alloc/throw
@@ -970,7 +951,7 @@ internal static class ImpactCommand
         output.WriteLine(
             "impact_summary\t"
                 + $"eps={diff.AffectedEps.Count}\t"
-                + $"behavioral_eps={diff.PerEp.Count}\t"
+                + $"behavioral_eps={view.BehavioralEpCount}\t"
                 + $"effect_added={diff.PerEp.Sum(d => d.Added.Count)}\t"
                 + $"effect_removed={diff.PerEp.Sum(d => d.Removed.Count)}\t"
                 + $"effect_amplified={diff.PerEp.Sum(d => d.Amplified.Count)}\t"
@@ -978,7 +959,7 @@ internal static class ImpactCommand
                 + $"guard_narrowed={guardConditions.Count(g => g.Verdict == GuardVerdict.Narrowed)}\t"
                 + $"guard_widened={guardConditions.Count(g => g.Verdict == GuardVerdict.Widened)}\t"
                 + $"guard_changed={guardConditions.Count(g => g.Verdict == GuardVerdict.Changed)}\t"
-                + $"intrinsic_hidden={hiddenIntrinsic}"
+                + $"intrinsic_hidden={view.HiddenIntrinsic}"
         );
 
         // GUARD-CONDITION DELTA: one row per call edge whose gating predicate moved. Emitted right after the
@@ -993,12 +974,18 @@ internal static class ImpactCommand
             );
         }
 
-        // Cause per EP: behavioral when its effect set changed (it's in PerEp), else the structural sub-cause.
-        var behavioralKeys = diff.PerEp.Select(d => (d.Kind, d.Route)).ToHashSet();
+        // Cause per EP: behavioral when the selected per-EP deltas carry it (it's in PerEp), else the structural
+        // sub-cause — read off the view's structural-only partition, which classified it once.
+        var causeByEp = new Dictionary<(string Kind, string Route), StructuralCause>();
+        foreach (var s in view.StructuralOnly)
+        {
+            causeByEp[(s.Ep.Kind, s.Ep.Route)] = s.Cause; // indexer, not ToDictionary: a decoded cache blob must never throw here
+        }
+
         string CauseTag(EpReachDelta e) =>
-            behavioralKeys.Contains((e.Kind, e.Route))
+            !causeByEp.TryGetValue((e.Kind, e.Route), out var cause)
                 ? "behavioral"
-                : ImpactEngine.ClassifyStructuralCause(e) switch
+                : cause switch
                 {
                     StructuralCause.RecordShape => "record-shape",
                     StructuralCause.CtorSig => "ctor-sig",

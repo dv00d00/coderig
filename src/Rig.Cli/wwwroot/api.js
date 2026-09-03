@@ -121,6 +121,24 @@ function qs(params) {
   return s ? "?" + s : "";
 }
 
+// An effect-filter token list for a query string: comma-joined, or "" so qs() drops the parameter entirely.
+function tokenList(tokens) {
+  return (tokens || []).join(",");
+}
+
+// The client mirror of QueryCacheKeys.EffectFilterSignature — sorted + lowercased so token order and casing
+// don't fragment the key, and `intrinsic` included because it changes the payload for the same reason
+// only/exclude do. Kept byte-identical in shape to the server's so the two cannot disagree about which filter
+// a cached payload belongs to. (Default sort is code-unit order, which matches the server's Ordinal.)
+function effectFilterSignature(only, exclude, intrinsic) {
+  const norm = (tokens) =>
+    (tokens || [])
+      .map((t) => String(t).toLowerCase())
+      .sort()
+      .join(",");
+  return `only=${norm(only)};exclude=${norm(exclude)};intrinsic=${intrinsic ? "1" : "0"}`;
+}
+
 export const api = {
   meta: () => getJson("/api/meta"),
   runs: () => getJson("/api/runs"), // LATEST pointer moves → never cached
@@ -173,13 +191,24 @@ export const api = {
       `haz|${storeId}|${from}`,
       "/api/hazards" + qs({ from, store: explicitStore }),
     ),
-  // impact is keyed by (base, head, mode) — both stores are immutable, so safe to cache under the derivation
-  // version; the sync/async traversal mode changes the diff, so it MUST be in the key (else an async request
-  // would be served a cached sync result, or vice versa).
-  impact: (base, head, asyncWalk) =>
+  // impact is keyed by (base, head, mode, effect filter) — both stores are immutable, so safe to cache under
+  // the derivation version; the sync/async traversal mode changes the diff, so it MUST be in the key (else an
+  // async request would be served a cached sync result, or vice versa). The effect SELECTION is applied
+  // server-side (unlike the tree's client-side filters), so it changes the payload too and must be in the key
+  // as well — the signature mirrors QueryCacheKeys.EffectFilterSignature exactly (sorted, lowercased) so the
+  // two layers can never disagree about which filter a cached payload belongs to.
+  impact: (base, head, asyncWalk, only, exclude, intrinsic) =>
     cached(
-      `impact|${base}|${head}|${!!asyncWalk}`,
-      "/api/impact" + qs({ base, head, async: !!asyncWalk }),
+      `impact|${base}|${head}|${!!asyncWalk}|${effectFilterSignature(only, exclude, intrinsic)}`,
+      "/api/impact" +
+        qs({
+          base,
+          head,
+          async: !!asyncWalk,
+          only: tokenList(only),
+          exclude: tokenList(exclude),
+          intrinsic: intrinsic ? true : undefined,
+        }),
     ),
   // per-EP structural reach delta (added/removed reachable methods) for the tree diff overlay — same mode key.
   impactReach: (base, head, kind, route, asyncWalk) =>

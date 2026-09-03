@@ -52,5 +52,14 @@ internal sealed record ImpactResponseDto(
     IReadOnlyList<ImpactKindRouteDto> AddedEps,
     IReadOnlyList<ImpactKindRouteDto> RemovedEps,
     int AffectedEpCount, // structural: EPs whose reachable tree changed (behavioral subset is PerEp)
-    IReadOnlyList<ImpactEpDeltaDto> PerEp
+    // The EPs whose reachable EFFECT set changed, over the SELECTED set — the same number `rig impact` prints
+    // in its header and in impact_summary's behavioral_eps. NOT PerEp.Count: PerEp also carries the EPs kept
+    // for a hazard / amplification-tier / guard delta alone, which are shown but are not an effect change.
+    int BehavioralEpCount,
+    IReadOnlyList<ImpactEpDeltaDto> PerEp,
+    // MANDATORY DISCLOSURE, same contract as TreeResponseDto.IntrinsicHidden: selection now runs SERVER-side,
+    // so the default response withholds alloc/throw and the client cannot know that from the payload alone.
+    // The count is the withheld effect ENTRIES across every EP (11,745 of 14,059 on the MedDBase pair) — a
+    // view that hid 83% of its rows without saying so would read as "barely any change".
+    int HiddenIntrinsic = 0
 );

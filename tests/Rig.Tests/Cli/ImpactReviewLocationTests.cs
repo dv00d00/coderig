@@ -47,7 +47,15 @@ public sealed class ImpactReviewLocationTests
                 []
             );
 
-            var response = await ImpactMapper.ToResponseAsync(workingDirectory, "base", "head", artifact);
+            var response = await ImpactMapper.ToResponseAsync(
+                workingDirectory,
+                "base",
+                "head",
+                artifact,
+                only: [],
+                exclude: [],
+                includeIntrinsic: false
+            );
             var mapped = response.PerEp.Single();
 
             mapped.Added.Single(effect => effect.Resource == "Added").File.ShouldBe("/repo/Head.cs");

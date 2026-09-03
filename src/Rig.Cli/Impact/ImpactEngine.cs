@@ -521,12 +521,49 @@ internal static class ImpactEngine
         );
     }
 
+    // THE selection: one filtered, counted view of a diff artifact. `rig impact` (render + both CI gates) and
+    // the web /api/impact (via ImpactMapper) consume this and nothing else, so the CLI, CI and the browser can
+    // never disagree about what the filter kept or about what "behavioral" counts. Before this, selection was
+    // applied by ImpactCommand's renderer: /api/impact had no filter at all, and the human header
+    // (EffectChangedEpCount) and impact_summary's behavioral_eps (PerEp.Count) were two different numbers that
+    // agreed only because filtering happened to drop the EPs where they differ.
+    //
+    // Runs POST-CACHE on the unfiltered artifact: ImpactCacheKey deliberately never sees a filter, so a toggle
+    // is a cache hit plus this pass, and neither the derivation nor the cached payload shape changes here.
+    internal static ImpactView Select(ImpactDiff diff, HashSet<string> only, HashSet<string> exclude, bool includeIntrinsic)
+    {
+        var (perEp, hiddenIntrinsic) = FilterPerEpEffects(diff.PerEp, only: only, exclude: exclude, includeIntrinsic: includeIntrinsic);
+        var selected = diff with
+        {
+            PerEp = perEp,
+            // Same filter grammar as the effect rows — see FilterGuardConditions.
+            GuardConditions = FilterGuardConditions(diff.GuardConditionsOrEmpty, only: only, exclude: exclude),
+        };
+        // The structural section PARTITIONS the affected set against the selected PerEp (the two sections must
+        // not double-count an EP), so which EPs read as structural-only follows the filter exactly as the
+        // per-EP cards do — and each carries its cause bucket, computed once here instead of at three renderers.
+        var behavioralKeys = perEp.Select(d => (d.Kind, d.Route)).ToHashSet();
+        var structuralOnly = diff
+            .AffectedEps.Where(d => !behavioralKeys.Contains((d.Kind, d.Route)))
+            .Select(d => new StructuralOnlyEp(Ep: d, Cause: ClassifyStructuralCause(d)))
+            .ToList();
+        return new ImpactView(
+            Diff: selected,
+            HiddenIntrinsic: hiddenIntrinsic,
+            BehavioralEpCount: EffectChangedEpCount(selected),
+            StructuralOnly: structuralOnly
+        );
+    }
+
     // The count of EPs whose reachable EFFECT SET changed (added / removed / amplified) — the FR-4
     // behavioral count, and the headline "changed behavior" number. PerEp ALSO contains EPs whose only
     // delta is a HAZARD gain/loss (race_window / n+1 / …) so they surface in the per-EP section; those must
     // NOT count here. --expect-no-effect-change is a deterministic effect-set gate — gating CI on a
     // (often heuristic) hazard belongs to a separate opt-in (e.g. a future --expect-no-hazard-gain), not
     // this flag. So a behavior-preserving refactor that merely trips a hazard heuristic stays green here.
+    //
+    // Engine-internal: every surface reads it as ImpactView.BehavioralEpCount (taken over the FILTERED set),
+    // so the human header, impact_summary's behavioral_eps and /api/impact report one number.
     internal static int EffectChangedEpCount(ImpactDiff diff) =>
         diff.PerEp.Count(d => d.Added.Count > 0 || d.Removed.Count > 0 || d.Amplified.Count > 0);
 
@@ -535,13 +572,16 @@ internal static class ImpactEngine
     // withheld unless --intrinsic is set or --only names one. See IntrinsicProviders — on a
     // real 33-file MR, alloc:* alone was ~80% of impact's 68k rows and never changed a review verdict.
     //
-    // An EP whose Added/Removed/Amplified lists ALL become empty is dropped entirely, so the output has no
+    // An EP with NO surviving delta of any kind (see RetainsAnyDelta) is dropped entirely, so the output has no
     // `ep_delta … +0 -0 ~0` rows left behind by filtering. HiddenIntrinsic is the total number of withheld
     // effect entries across every EP, for the mandatory disclosure.
     //
     // The gate (--expect-no-effect-change) counts the FILTERED set, so what you READ and what CI DECIDES can
     // never disagree — the deliberate consequence is that with the default filter an alloc-only MR no longer
     // trips the gate, which is why `impact_summary` always reports intrinsic_hidden.
+    //
+    // Engine-internal: production callers reach this through Select, which is what keeps the filter from being
+    // optional (it was applied by the CLI renderer and not at all by /api/impact).
     internal static (IReadOnlyList<EpFootprintDelta> PerEp, int HiddenIntrinsic) FilterPerEpEffects(
         IReadOnlyList<EpFootprintDelta> perEp,
         HashSet<string> only,
@@ -563,9 +603,9 @@ internal static class ImpactEngine
             var removed = d.Removed.Where(x => Keep(x.Provider, x.Operation)).ToList();
             var amplified = d.Amplified.Where(x => Keep(x.Provider, x.Operation)).ToList();
 
-            if (added.Count == 0 && removed.Count == 0 && amplified.Count == 0)
+            if (!RetainsAnyDelta(d, added: added, removed: removed, amplified: amplified))
             {
-                continue; // nothing behavioral survives the filter for this EP
+                continue; // nothing this EP carries survives the filter
             }
 
             kept.Add(d with { Added = added, Removed = removed, Amplified = amplified });
@@ -592,6 +632,47 @@ internal static class ImpactEngine
         static bool InSet(string provider, string operation, HashSet<string> set) =>
             set.Contains(provider) || set.Contains($"{provider}:{operation}");
     }
+
+    // What PerEp RETAINS after filtering, in ONE place: an EP survives when ANY delta it carries survives —
+    // the effect delta (added/removed/amplified), a HAZARD gain/loss, or an AMPLIFICATION-TIER gain/loss.
+    // Before this, only the effect delta counted, so a hazard-only EP
+    // was silently dropped even though DiffFootprints puts it in PerEp precisely so it surfaces per-EP; the
+    // effect-only number lives on separately as ImpactView.BehavioralEpCount, which is why the two can now
+    // differ and why the header and impact_summary read the same one.
+    //
+    // The amplification-TIER lists (AmplificationsAdded/Removed — the looped_effect finding: this
+    // provider:operation is now reached inside an iteration context) are a DIFFERENT signal from the
+    // `Amplified` effect list (same effect key produced more often); both retain, and conflating them is how
+    // the tier's EPs get dropped.
+    //
+    // NO GUARD ARM, deliberately — D4's "or a guard delta" clause is satisfied here without one, and an
+    // explicit arm could only ever be harmful or dead (decided 2026-09-03):
+    //
+    //   HasGuardDeltaOnSharedMutation reads GuardEffectDelta, which reads ONLY d.Added/d.Removed filtered to
+    //   the lock/async_lock providers. So a guard delta IS lock/async_lock entries in the effect lists.
+    //   - Evaluated on the FILTERED lists, the arm is strictly subsumed by `added/removed.Count > 0` — dead
+    //     code implying a retention rule that never fires.
+    //   - Evaluated on the UNFILTERED delta, it retains an EP whose only delta is a guard change even under an
+    //     --only that strips lock — but BOTH renderers evaluate the predicate on the filtered delta, so that
+    //     EP prints `ep_delta … +0 -0 ~0` with no ep_guard_delta row and no ⚠ line. An information-free husk.
+    //
+    // Retention is therefore correct by construction: `lock` is not intrinsic, so under the DEFAULT filter a
+    // guard delta always survives in Added/Removed and its EP is kept by the effect arm. The arm only ever
+    // mattered when the reader had EXPLICITLY filtered locks out — i.e. asked not to be shown this — and
+    // dropping the EP is the right answer there.
+    private static bool RetainsAnyDelta(
+        EpFootprintDelta d,
+        IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> added,
+        IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> removed,
+        IReadOnlyList<EpEffectAmplified> amplified
+    ) =>
+        added.Count > 0
+        || removed.Count > 0
+        || amplified.Count > 0
+        || d.HazardsAddedOrEmpty.Count > 0
+        || d.HazardsRemovedOrEmpty.Count > 0
+        || d.AmplificationsAddedOrEmpty.Count > 0
+        || d.AmplificationsRemovedOrEmpty.Count > 0;
 
     // Effect-filter the guard-condition deltas with the SAME --only/--exclude grammar as the effect rows, so
     // `--only audit` narrows this signal to "guard changes that gate an audit" instead of leaving it as an

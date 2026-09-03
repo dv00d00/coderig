@@ -116,7 +116,7 @@ taking `RigDbContext` rather than `IQueryFactSource` is acceptable for a two-sto
 
 ## Children, in dependency order
 
-1. [Impact selection into the engine](./cli-web-collapse-1-impact-selection-into-the-engine.md) — one
+1. [Impact selection into the engine](../done/cli-web-collapse-1-impact-selection-into-the-engine.md) — one
    `ImpactEngine.Select` consumed by the CLI, the CI gates and `ImpactMapper`. Carries the open D1 mechanism
    decision.
 2. [Callers engine](./cli-web-collapse-2-callers-engine.md) — divergence sites 1 and 2, plus the depth lens,
@@ -164,7 +164,7 @@ added in both directions:
   [2](./question-vs-plan-2-path-disclosures-computed-off-the-loaded-subgraph.md),
   [3](./question-vs-plan-3-redirect-rules-applied-asymmetrically-across-graph-paths.md) — child 3 makes
   question-vs-plan-2's symbol-universe fix a one-site change; it does not make it.
-- [`rig impact` reports two different behavioral-EP counts](./impact-reports-two-different-behavioral-ep-counts.md)
+- [`rig impact` reports two different behavioral-EP counts](../done/impact-reports-two-different-behavioral-ep-counts.md)
   — the third count child 1 has to settle.
 
 ## Confidence

@@ -25,6 +25,6 @@ children 1 to 5 it would fail by design.
 
 ## Sequencing
 
-**Blocked by:** [child 1](./cli-web-collapse-1-impact-selection-into-the-engine.md),
+**Blocked by:** [child 1](../done/cli-web-collapse-1-impact-selection-into-the-engine.md),
 [child 2](./cli-web-collapse-2-callers-engine.md), [child 3](./cli-web-collapse-3-path-engine.md),
 [child 4](./cli-web-collapse-4-tree-cache-routing.md), [child 5](./cli-web-collapse-5-reaches-buckets.md).
