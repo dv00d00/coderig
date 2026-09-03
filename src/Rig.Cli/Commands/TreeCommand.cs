@@ -1,6 +1,7 @@
 ﻿using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Graph;
 using Rig.Cli.Live;
 using Rig.Cli.Rendering;
 using Rig.Cli.Services;
@@ -407,6 +408,9 @@ internal static class TreeCommand
             // single source of truth `/api/tree` also uses — so `rig tree` and the web view cannot diverge. It
             // reuses this command's already-open context + already-shaped rules; graph + EP data flow back for
             // the downstream render stages (locations, seam, EP-site chips, --full library calls) and caching.
+            // F3: the compute row's sub-phases are measured inside the graph load, behind the fact-source
+            // seam — this scope is what lets them be reported under it. Null (nothing allocated) unless --time.
+            using var loadTiming = TraversalLoadTiming.Begin(opts.Time);
             var computation = await TreeQueryService.ComputeAsync(
                 source: source,
                 rules: rules,
@@ -423,7 +427,7 @@ internal static class TreeCommand
             reachInputsEpData = computation.EpData; // F2: carry through for the EP-site derivation below.
             roots = computation.Roots;
             effects = computation.Effects;
-            timer.Lap("compute (graph + BuildTree + effects)");
+            timer.Lap("compute (graph + BuildTree + effects)", remainderPhase: "walk + effects", subPhases: loadTiming?.Laps);
             // Cache the UNFILTERED forest+effects (--only/--exclude are applied below so they don't fragment
             // the key). Only when the pattern matched — an empty forest isn't worth a cache slot.
             if (roots.Count > 0)

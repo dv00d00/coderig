@@ -64,8 +64,14 @@ public sealed class FileDiffWebContractTests
         json.RootElement.GetProperty("patch").GetString().ShouldBe("");
     }
 
+    // A dirty store no longer REFUSES the diff. The whole-run refusal was disabled deliberately — see
+    // TODO(dirty-provenance) in FileDiffEndpoint and
+    // docs/backlog/todo/dirty-store-provenance-per-file-not-per-run.md: the invariant it protected is
+    // per-FILE, and the git diff between two commits never depended on the store at all, so refusing threw
+    // away a sound diff. This test pins the current behaviour so restoring a guard is a deliberate act that
+    // has to come back through here.
     [Test]
-    public async Task Endpoint_refuses_dirty_semantic_coordinates()
+    public async Task A_dirty_store_does_not_block_the_diff()
     {
         using var fixture = await EndpointFixture.CreateAsync(headDirty: true);
 
@@ -73,8 +79,8 @@ public sealed class FileDiffWebContractTests
             "/api/file-diff?base=" + fixture.BaseStore + "&head=" + fixture.HeadStore + "&file=" + Uri.EscapeDataString(fixture.FilePath)
         );
 
-        status.ShouldBe(HttpStatusCode.BadRequest);
-        body.ShouldContain("indexed from a dirty tree");
+        status.ShouldBe(HttpStatusCode.OK, body);
+        body.ShouldNotContain("indexed from a dirty tree");
     }
 
     private sealed class EndpointFixture : IDisposable

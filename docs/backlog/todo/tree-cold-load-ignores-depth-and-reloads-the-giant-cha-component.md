@@ -48,7 +48,7 @@ Four bisection arms on one seed, all zero-code-change, all confirming it:
 
 | arm | time | reads as |
 | --- | --- | --- |
-| `reaches` (graph + walk, **no** effects) | 16,390 ms | effect derivation is ~free — it is bounded to the same already-loaded closure |
+| `reaches` (graph + walk, **no** effects) | 16,390 ms | effects add ~nothing ON TOP OF a walk — see the correction under F3 below; this arm does NOT show the walk itself is free |
 | `tree` (graph + walk + effects) | 16,134 ms | — |
 | `tree --raw` (bypass `ShapeGraph`) | 17,285 ms | shaping is not the cost; it runs after the load |
 | `tree --max-generic-work 1000` | 16,065 ms | monomorphization is not the cost; it is inside `ShapeGraph` |
@@ -135,3 +135,72 @@ has its own arm in the table above.
 RCA 2026-09-03 on store `aae396ea7e8e-dirty` (446k symbols, 2.44M refs, 306,160 graph nodes). Seeds picked
 by `call_edges` out-degree between 25 and 55 so none had been queried before; closure counts by recursive CTE
 directly against `call_edges` / `dispatch_edges`.
+
+## F3 landed — measured split
+
+`--time`'s `compute` row now nests the three sub-phases (`graph load`, disclosing which branch ran; `shape`;
+`walk + effects` as the remainder). Cold, fresh seed
+`M:MedDBase.ServiceLayer.TableFlow.Worker.Clinician.SaveClinicians.ColumnAccessors(...)` on
+`aae396ea7e8e-dirty`, closure verified at 46,040 over `call_edges ∪ dispatch_edges`:
+
+```
+[time] cache lookup (forest=False, render=False): 16 ms
+[time] compute (graph + BuildTree + effects): 18454 ms
+[time]   graph load (sql-bounded): 14466 ms
+[time]   shape: 1112 ms
+[time]   walk + effects: 2875 ms
+[time] total: 19118 ms
+```
+
+The load owns 14.5 s of the 18.5 s compute (78%) with shaping at 1.1 s, so the closure load is confirmed as
+the cold cost; `walk + effects` at 2.9 s is not nothing, and a seed OUTSIDE the giant component inverts the
+shape entirely (`ReferralEndpointHtmlService.get_Address`: graph load 581 ms, shape 989 ms, walk + effects
+1,793 ms of a 3.4 s compute) — the split now tells those two cases apart, which is what F2 needs to be
+argued on numbers.
+
+**Correction to the bisection table above.** The `reaches` arm was read as "effect derivation is ~free". The
+split shows `walk + effects` at 2,875 ms — **15.6% of compute**, not noise. The arm is still valid, but what
+it actually shows is that effects cost ~nothing *on top of a walk `reaches` already performs*; it never
+isolated the walk. The load still dominates at 78%, so the fix ordering is unchanged.
+
+## The CLI has no warm path — verified 2026-09-03, and it is the bigger finding
+
+Same seed twice, one-shot `rig tree`, verified on the shipped tool (`0.1.1-ci.20260903105107`):
+
+```
+run 1  [time] cache lookup (forest=False, render=False): 18 ms
+       [time] compute (graph + BuildTree + effects): 22231 ms
+       [time]   graph load (sql-bounded): 17727 ms
+       [time]   shape: 1370 ms
+       [time]   walk + effects: 3133 ms
+       [time] total: 22943 ms
+
+run 2  [time] cache lookup (forest=True, render=False): 591 ms      <- CACHE HIT
+       [time] graph load + event marking (cache hit): 17373 ms
+       [time] total: 18040 ms
+```
+
+**A forest cache HIT still costs 18.0 s**, because the hit path re-loads the graph for event marking. Cold to
+warm is 22.9 s → 18.0 s — a 21% saving, against the **40-60x** the web endpoint gets on the same store
+(`/api/tree` warm: 259-431 ms, measured earlier in this card). So the answer cache, which is the whole warm
+story for the web, buys an agent almost nothing.
+
+Two consequences:
+
+1. **This is a CLI/web divergence, not just a perf gap.** The web's warm `/api/tree` does not pay this load;
+   the CLI's warm path does. That puts it in the same family as
+   [the CLI/web collapse map](./cli-web-collapse-map.md) — the same question answered twice, with the CLI
+   arm carrying work the web arm dropped.
+2. **It strengthens the disk-artifact option over F2.** Even a warm, already-answered seed pays the load in a
+   one-shot process, so a resident cache cannot help the agent-facing surface at all — while a disk artifact
+   fixes the cold AND the warm CLI path with one entry.
+
+The `graph load + event marking (cache hit)` row is **not** yet split into load vs marking; F3 scoped nesting
+to the `compute` row only. The laps are already recorded in `LoadShapedTraversalGraphAsync` and reported
+nowhere, so making this row attributable is a two-line addition in `TreeCommand` using the same mechanism.
+Worth doing before anyone sizes the fix, since "load" and "event marking" have completely different remedies.
+
+**Anomaly worth one look, not yet explained:** run 1 above missed the forest cache on a seed that had been
+queried minutes earlier in the same store with the same rules. A cache that misses when it should hit is its
+own defect; `QueryCache.Open()` purges rows whose `store_key` differs, and nothing should have shifted
+`StoreKey` (rig.db size + mtime) in between.

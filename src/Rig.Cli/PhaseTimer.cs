@@ -34,6 +34,35 @@ internal sealed class PhaseTimer
         _phase.Restart();
     }
 
+    // A phase whose SUB-steps were measured elsewhere — TraversalLoadTiming records them from inside the
+    // graph load, which sits behind the fact-source seam this command cannot pass a timer through. Prints
+    // the phase's own row exactly as Lap(phase) does, then one INDENTED row per sub-phase plus the
+    // unattributed remainder, so the hierarchy reads. With no sub-phases (a source that records none, e.g.
+    // the resident live host) it prints exactly the plain row.
+    public void Lap(string phase, string remainderPhase, IReadOnlyList<(string Phase, TimeSpan Elapsed)>? subPhases)
+    {
+        if (_writer is null)
+        {
+            return;
+        }
+
+        var elapsed = _phase!.Elapsed;
+        Lap(phase);
+        if (subPhases is null || subPhases.Count == 0)
+        {
+            return;
+        }
+
+        var attributed = TimeSpan.Zero;
+        foreach (var sub in subPhases)
+        {
+            _writer.WriteLine($"[time]   {sub.Phase}: {(long)sub.Elapsed.TotalMilliseconds} ms");
+            attributed += sub.Elapsed;
+        }
+
+        _writer.WriteLine($"[time]   {remainderPhase}: {(long)Math.Max((elapsed - attributed).TotalMilliseconds, 0)} ms");
+    }
+
     public void Total()
     {
         _writer?.WriteLine($"[time] total: {_total!.ElapsedMilliseconds} ms");

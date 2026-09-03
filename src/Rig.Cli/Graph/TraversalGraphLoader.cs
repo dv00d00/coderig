@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Domain.Data;
@@ -91,21 +92,29 @@ internal static class TraversalGraphLoader
         ExternalNodeAdmission? externalNodes = null
     )
     {
+        // F3: one stopwatch over whichever branch runs, recorded under a name that DISCLOSES the branch
+        // (only when a TraversalLoadTiming scope is open — otherwise nothing is allocated).
+        var watch = TraversalLoadTiming.IsActive ? Stopwatch.StartNew() : null;
+
         // SQL path: call_edges already carry the persisted handoff classification (from `rig graph`),
         // so the bounded graph is classified by construction. EF fallback: classify the loaded graph
         // with the rules so the in-memory traversal sees the same handoff edges.
         if (SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context))
         {
-            return await SqlReachability.LoadBoundedGraphAsync(
+            var bounded = await SqlReachability.LoadBoundedGraphAsync(
                 context,
                 pattern,
                 direction,
                 externalNodes: externalNodes,
                 redirectRules: redirectRules
             );
+            TraversalLoadTiming.Lap("graph load (sql-bounded)", watch);
+            return bounded;
         }
 
-        return await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules, externalNodes: externalNodes);
+        var full = await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules, externalNodes: externalNodes);
+        TraversalLoadTiming.Lap("graph load (ef-full)", watch);
+        return full;
     }
 
     // The SHAPED traversal graph: LoadTraversalGraphAsync + the single FactPathFinder.ShapeGraph pass
@@ -131,8 +140,13 @@ internal static class TraversalGraphLoader
             rules.Redirect,
             ExternalNodeAdmission.FromRules(rules)
         );
+        // F3: the shaping half, timed apart from the load above (which records its own sub-phase) so
+        // `--time` can attribute the wall to one or the other. Same reused-stopwatch idiom, same gate.
+        var watch = TraversalLoadTiming.IsActive ? Stopwatch.StartNew() : null;
         var monoSigs = await Reads.LoadMonomorphizationSignaturesAsync(context);
-        return FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context, monomorphizeSignatures: monoSigs);
+        var shapedGraph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context, monomorphizeSignatures: monoSigs);
+        TraversalLoadTiming.Lap("shape", watch);
+        return shapedGraph;
     }
 
     // Like LoadTraversalGraphAsync, but also returns the effect-derivation inputs (invocations / ctor
@@ -146,16 +160,22 @@ internal static class TraversalGraphLoader
         RuleSet rules
     )
     {
-        var inputs =
-            SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context)
-                ? await SqlReachability.LoadReachInputsAsync(
-                    context,
-                    pattern,
-                    direction,
-                    externalNodes: ExternalNodeAdmission.FromRules(rules),
-                    redirectRules: rules.Redirect
-                )
-                : await LoadReachInputsFromRowsAsync(context, rules.Handoff, rules.Redirect, ExternalNodeAdmission.FromRules(rules));
+        // F3: one reused stopwatch split across the two sub-steps (only when a TraversalLoadTiming scope
+        // is open) — the bounded load / EF fallback, then the shaping pass. The branch gate is hoisted into
+        // `sql` so the recorded phase name discloses WHICH branch produced the number; the calls, their
+        // arguments and their order are unchanged.
+        var watch = TraversalLoadTiming.IsActive ? Stopwatch.StartNew() : null;
+        var sql = SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context);
+        var inputs = sql
+            ? await SqlReachability.LoadReachInputsAsync(
+                context,
+                pattern,
+                direction,
+                externalNodes: ExternalNodeAdmission.FromRules(rules),
+                redirectRules: rules.Redirect
+            )
+            : await LoadReachInputsFromRowsAsync(context, rules.Handoff, rules.Redirect, ExternalNodeAdmission.FromRules(rules));
+        TraversalLoadTiming.Lap(sql ? "graph load (sql-bounded)" : "graph load (ef-full)", watch);
 
         // The single shaping pass (monomorphize generic factories + carry cut/context rules on the graph)
         // so reaches/tree walk the same shaped graph as path/callers. Edges with no concrete construct
@@ -165,6 +185,7 @@ internal static class TraversalGraphLoader
         {
             Graph = FactPathFinder.ShapeGraph(inputs.Graph, rules.Factory, rules.Cut, rules.Context, monomorphizeSignatures: monoSigs),
         };
+        TraversalLoadTiming.Lap("shape", watch);
         return inputs;
     }
 

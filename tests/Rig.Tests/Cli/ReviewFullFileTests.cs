@@ -76,7 +76,7 @@ public sealed class ReviewFullFileTests
     }
 
     [Test]
-    public async Task Source_rejects_nonmembers_invalid_side_and_dirty_index_provenance()
+    public async Task Source_rejects_nonmembers_and_invalid_side_but_serves_a_dirty_store()
     {
         using var fixture = await Fixture.CreateAsync();
         foreach (var path in new[] { "Unchanged.cs", "../outside", fixture.Path("Unchanged.cs") })
@@ -88,10 +88,14 @@ public sealed class ReviewFullFileTests
         (await fixture.GetAsync(fixture.Url("/api/review-source", "Modified.cs") + "&side=worktree")).Status.ShouldBe(
             HttpStatusCode.BadRequest
         );
+        // Dirtiness is no longer grounds to refuse. The whole-run refusal was disabled deliberately — see
+        // TODO(dirty-provenance) in FileDiffEndpoint and
+        // docs/backlog/todo/dirty-store-provenance-per-file-not-per-run.md. The invariant it protected is
+        // per-FILE and belongs on ReviewFileDto.SemanticReady, not on a gate that discards the whole view.
         await fixture.AddDirtyStoreAsync();
         var dirty = await fixture.GetAsync("/api/review-source?base=" + fixture.BaseStore + "&head=dirty&file=Modified.cs&side=head");
-        dirty.Status.ShouldBe(HttpStatusCode.BadRequest);
-        dirty.Body.ShouldContain("dirty tree");
+        dirty.Status.ShouldBe(HttpStatusCode.OK, dirty.Body);
+        dirty.Body.ShouldNotContain("dirty tree");
     }
 
     private sealed class Fixture : IDisposable
