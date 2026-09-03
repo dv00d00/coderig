@@ -377,6 +377,12 @@ internal static class TreeCommand
         {
             // Forest hit but missing render data (a pre-cache entry, or first run under this filter): load the
             // shaped graph to render — locations/seam are written below so the NEXT query is a full hit.
+            //
+            // This branch is why a CACHE HIT is not cheap in a one-shot CLI: measured 18.0 s on the MedDBase
+            // store against 259-431 ms for a warm `/api/tree` on the same store. Scoped for sub-phase
+            // attribution for the same reason the cold path is — "graph load" and "event marking" have
+            // completely different remedies, so one lumped row cannot be acted on. Null unless --time.
+            using var hitTiming = TraversalLoadTiming.Begin(opts.Time);
             roots = cached.Forest;
             effects = cached.Effects;
             DemandForwardGraphResult? demandGraph = null;
@@ -400,7 +406,7 @@ internal static class TreeCommand
                 graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await source.EventSubscriptionSitesAsync());
             }
 
-            timer.Lap("graph load + event marking (cache hit)");
+            timer.Lap("graph load + event marking (cache hit)", "event marking", hitTiming?.Laps);
         }
         else
         {

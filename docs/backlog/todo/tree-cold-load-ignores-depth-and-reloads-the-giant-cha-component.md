@@ -195,10 +195,22 @@ Two consequences:
    one-shot process, so a resident cache cannot help the agent-facing surface at all — while a disk artifact
    fixes the cold AND the warm CLI path with one entry.
 
-The `graph load + event marking (cache hit)` row is **not** yet split into load vs marking; F3 scoped nesting
-to the `compute` row only. The laps are already recorded in `LoadShapedTraversalGraphAsync` and reported
-nowhere, so making this row attributable is a two-line addition in `TreeCommand` using the same mechanism.
-Worth doing before anyone sizes the fix, since "load" and "event marking" have completely different remedies.
+**The cache-hit row is now split too, and it settles the design question.** Measured on the shipped tool
+`0.1.1-ci.20260903105937`:
+
+```
+[time] cache lookup (forest=True, render=False): 603 ms
+[time] graph load + event marking (cache hit): 17270 ms
+[time]   graph load (sql-bounded): 13549 ms
+[time]   shape: 1301 ms
+[time]   event marking: 2418 ms
+[time] total: 17945 ms
+```
+
+`graph load` is **78% of the cache-hit cost** and event marking only 14%. That was the open question — if
+marking had dominated, a cached graph would not have helped the warm CLI path and a different fix would have
+been needed. It does not. **One shaped-graph artifact fixes the cold path (78% of 22.2 s) and the warm CLI
+path (78% of 17.3 s) with the same entry.**
 
 **Anomaly worth one look, not yet explained:** run 1 above missed the forest cache on a seed that had been
 queried minutes earlier in the same store with the same rules. A cache that misses when it should hit is its
