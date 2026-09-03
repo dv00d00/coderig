@@ -1,6 +1,6 @@
 # `mini-ci.ps1` calls Windows-only `Get-CimInstance` before every non-Windows build
 
-**Status:** todo · **Found:** 2026-09-03 while running the full gate for the first orchestrated bug batch
+**Status:** done 2026-09-03 · **Found:** 2026-09-03 while running the full gate for the first orchestrated bug batch
 **Triage:** ready-for-agent
 **Family:** developer workflow / release gate
 
@@ -37,3 +37,9 @@ The term 'Get-CimInstance' is not recognized ...
 2. A locally-built `dotnet ... Rig.Cli.dll serve` process is still reported with its PID before the build.
 3. Windows retains the current `Win32_Process` behavior.
 4. The process-probe logic is unit-testable without starting or killing an unrelated user process.
+
+## Verification
+
+- Synthetic Windows and Unix process rows select only `dotnet … Rig.Cli.dll` hosts.
+- On macOS, `pwsh scripts/mini-ci.ps1 -SkipTests -SkipToolInstall` completed format, Release build, and pack.
+- Release build completed with 0 warnings and 0 errors; no process was killed.

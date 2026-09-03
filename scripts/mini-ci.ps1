@@ -8,6 +8,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "mini-ci-process-probe.ps1")
+
 # FAIL FAST on either lock a running rig holds. Two DIFFERENT processes, two different failures, and the
 # second one is the trap: checking only the first is what cost a full build on 2026-09-03.
 #
@@ -23,10 +25,7 @@ $ErrorActionPreference = "Stop"
 #      this: the build still runs. CLAUDE.md recommends exactly this host as the way to see wwwroot edits
 #      without repacking, so it is the likelier of the two in practice — and the name check above cannot see
 #      it, because the process is `dotnet`.
-$binHolders = @(
-    Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*Rig.Cli.dll*" }
-)
+$binHolders = @(Select-RigCliBinHolder -ProcessRows @(Get-RigProcessRows))
 if ($binHolders.Count -gt 0) {
     throw ("A locally-built rig is running (PID " + (($binHolders | ForEach-Object { $_.ProcessId }) -join ", ") +
         ") and holds src/Rig.Cli/bin/$Configuration/**/*.dll, so the build below would fail with MSB3026. " +
