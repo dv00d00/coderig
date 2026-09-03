@@ -64,12 +64,10 @@ public sealed class FileDiffWebContractTests
         json.RootElement.GetProperty("patch").GetString().ShouldBe("");
     }
 
-    // A dirty store no longer REFUSES the diff. The whole-run refusal was disabled deliberately — see
-    // TODO(dirty-provenance) in FileDiffEndpoint and
-    // docs/backlog/todo/dirty-store-provenance-per-file-not-per-run.md: the invariant it protected is
-    // per-FILE, and the git diff between two commits never depended on the store at all, so refusing threw
-    // away a sound diff. This test pins the current behaviour so restoring a guard is a deliberate act that
-    // has to come back through here.
+    // A dirty store does not REFUSE the diff — the diff is `git diff <base> <head>` between two immutable
+    // commits, which dirt cannot touch. What dirt costs is the per-FILE semantic claim, carried on
+    // ReviewFileDto.SemanticReady (docs/backlog/todo/dirty-store-provenance-per-file-not-per-run.md). The
+    // head store here records the indexed file as dirty, the way `rig index` marks it from `git status`.
     [Test]
     public async Task A_dirty_store_does_not_block_the_diff()
     {
@@ -80,7 +78,16 @@ public sealed class FileDiffWebContractTests
         );
 
         status.ShouldBe(HttpStatusCode.OK, body);
-        body.ShouldNotContain("indexed from a dirty tree");
+        using var json = JsonDocument.Parse(body);
+        json.RootElement.GetProperty("patch").GetString().ShouldNotBeNull().ShouldContain("+        return 2;");
+
+        var (listStatus, listBody) = await fixture.GetAsync("/api/review-files?base=" + fixture.BaseStore + "&head=" + fixture.HeadStore);
+        listStatus.ShouldBe(HttpStatusCode.OK, listBody);
+        using var list = JsonDocument.Parse(listBody);
+        var file = list.RootElement.GetProperty("files").EnumerateArray().Single();
+        file.GetProperty("reviewable").GetBoolean().ShouldBeTrue();
+        file.GetProperty("semanticReady").GetBoolean().ShouldBeFalse(listBody);
+        file.GetProperty("reason").GetString().ShouldNotBeNull().ShouldContain("uncommitted source");
     }
 
     private sealed class EndpointFixture : IDisposable
@@ -150,7 +157,9 @@ public sealed class FileDiffWebContractTests
             );
             var storeDir = StoreLayout.NewStoreDir(workingDirectory, storeId);
             await using var context = new RigDbContext(Path.Combine(storeDir, StoreLayout.DbFileName), pooling: false);
-            await Writes.SaveAsync(context, result, provenance: new GitProvenance(commit, "main", dirty));
+            // A dirty run is recorded per FILE: the one file this store indexes is the one git reported.
+            HashSet<string> dirtyFiles = dirty ? new HashSet<string>([filePath], StringComparer.OrdinalIgnoreCase) : [];
+            await Writes.SaveAsync(context, result, provenance: new GitProvenance(commit, "main", dirty), dirtyFiles: dirtyFiles);
         }
 
         private static int FreePort()

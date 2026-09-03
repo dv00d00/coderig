@@ -278,6 +278,10 @@ internal static class IndexCommands
         // store-id (docs/design-impact-behavioral-diff.md §4.4-4.5).
         var provenance = GitProvenanceProbe.Capture(fromProject ?? target);
         var storeId = StoreLayout.NewStoreId(provenance);
+        // Which FILES are off-commit, not just whether any is. Captured here at index START and unioned with
+        // a second capture at index END (below), because a file clean now and edited during the minutes this
+        // index takes must still be recorded dirty.
+        var dirtyFiles = GitProvenanceProbe.CaptureDirtyFiles(fromProject ?? target);
 
         var totalWatch = Stopwatch.StartNew();
         AnalysisResult result;
@@ -417,6 +421,10 @@ internal static class IndexCommands
 
         output.WriteLine($"Progress: Saving run {(atomicPublish ? ", atomic-publish" : ", in-place")})");
 
+        // Index END: union the second git-status set into the start-of-index one, so an edit made while the
+        // analysis ran cannot leave a file recorded as clean.
+        dirtyFiles.UnionWith(GitProvenanceProbe.CaptureDirtyFiles(fromProject ?? target));
+
         var saveWatch = Stopwatch.StartNew();
         string runId;
         await using (var context = new RigDbContext(dbPath, pooling: !atomicPublish))
@@ -426,7 +434,8 @@ internal static class IndexCommands
                 context,
                 result,
                 progress: message => output.WriteLine($"Progress: {message}"),
-                provenance: provenance
+                provenance: provenance,
+                dirtyFiles: dirtyFiles
             );
         }
 

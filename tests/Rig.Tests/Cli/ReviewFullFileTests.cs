@@ -88,14 +88,23 @@ public sealed class ReviewFullFileTests
         (await fixture.GetAsync(fixture.Url("/api/review-source", "Modified.cs") + "&side=worktree")).Status.ShouldBe(
             HttpStatusCode.BadRequest
         );
-        // Dirtiness is no longer grounds to refuse. The whole-run refusal was disabled deliberately — see
-        // TODO(dirty-provenance) in FileDiffEndpoint and
-        // docs/backlog/todo/dirty-store-provenance-per-file-not-per-run.md. The invariant it protected is
-        // per-FILE and belongs on ReviewFileDto.SemanticReady, not on a gate that discards the whole view.
+        // Dirtiness is not grounds to refuse: exact Git source for a commit is read from the object store and
+        // never from the store's facts, so it is unaffected. The caveat is per-FILE and rides
+        // ReviewFileDto.SemanticReady instead (docs/backlog/todo/dirty-store-provenance-per-file-not-per-run.md).
         await fixture.AddDirtyStoreAsync();
         var dirty = await fixture.GetAsync("/api/review-source?base=" + fixture.BaseStore + "&head=dirty&file=Modified.cs&side=head");
         dirty.Status.ShouldBe(HttpStatusCode.OK, dirty.Body);
         dirty.Body.ShouldNotContain("dirty tree");
+
+        var listed = await fixture.GetAsync("/api/review-files?base=" + fixture.BaseStore + "&head=dirty");
+        listed.Status.ShouldBe(HttpStatusCode.OK, listed.Body);
+        using var files = JsonDocument.Parse(listed.Body);
+        var modified = files
+            .RootElement.GetProperty("files")
+            .EnumerateArray()
+            .Single(file => file.GetProperty("path").GetString() == "Modified.cs");
+        modified.GetProperty("semanticReady").GetBoolean().ShouldBeFalse(listed.Body);
+        modified.GetProperty("reason").GetString().ShouldNotBeNull().ShouldContain("uncommitted source");
     }
 
     private sealed class Fixture : IDisposable
@@ -191,7 +200,9 @@ public sealed class ReviewFullFileTests
             );
             var storeDir = StoreLayout.NewStoreDir(_root, storeId);
             await using var context = new RigDbContext(System.IO.Path.Combine(storeDir, StoreLayout.DbFileName), pooling: false);
-            await Writes.SaveAsync(context, result, provenance: new GitProvenance(commit, "main", dirty));
+            // A dirty run marks the FILES git reported, not the run alone — here the single indexed file.
+            HashSet<string> dirtyFiles = dirty ? new HashSet<string>([Path("Modified.cs")], StringComparer.OrdinalIgnoreCase) : [];
+            await Writes.SaveAsync(context, result, provenance: new GitProvenance(commit, "main", dirty), dirtyFiles: dirtyFiles);
         }
 
         private static int FreePort()

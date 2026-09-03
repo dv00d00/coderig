@@ -44,12 +44,17 @@ public static class Writes
         }
     }
 
+    // dirtyFiles: absolute paths the source repository reported as differing from HEAD while this run was
+    // indexing (captured by the CLI git probe at index start AND end, unioned). Marked onto source_files
+    // row by row, so only paths this run actually indexed can be marked — build output or any other path
+    // that leaked into the status output cannot reach the store.
     public static async Task<string> SaveAsync(
         RigDbContext context,
         AnalysisResult result,
         CancellationToken cancellationToken = default,
         Action<string>? progress = null,
-        GitProvenance? provenance = null
+        GitProvenance? provenance = null,
+        IReadOnlySet<string>? dirtyFiles = null
     )
     {
         var runId = Guid.NewGuid().ToString("n");
@@ -82,7 +87,7 @@ public static class Writes
         // Header rows first (small) — flushed and detached before the fact batches start clearing
         // the tracker, so they aren't dropped by a later ChangeTracker.Clear().
         context.Runs.Add(run);
-        AddSourceFiles(context, runId, result);
+        AddSourceFiles(context, runId, result, dirtyFiles);
         AddDiRegistrations(context, runId, result);
         await context.SaveChangesAsync(cancellationToken);
         context.ChangeTracker.Clear();
@@ -513,7 +518,7 @@ public static class Writes
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static void AddSourceFiles(RigDbContext context, string runId, AnalysisResult result)
+    private static void AddSourceFiles(RigDbContext context, string runId, AnalysisResult result, IReadOnlySet<string>? dirtyFiles)
     {
         for (var index = 0; index < result.SourceFiles.Count; index++)
         {
@@ -530,6 +535,7 @@ public static class Writes
                     Basis = sourceFile.Basis,
                     Reason = sourceFile.Reason,
                     Evidence = sourceFile.Evidence,
+                    Dirty = dirtyFiles?.Contains(sourceFile.FilePath) == true,
                 }
             );
         }

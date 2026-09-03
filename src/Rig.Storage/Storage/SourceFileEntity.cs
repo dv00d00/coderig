@@ -19,4 +19,10 @@ public sealed class SourceFileEntity
     public string Reason { get; set; } = "";
 
     public string Evidence { get; set; } = "";
+
+    // This file differed from the source repository's HEAD when the run indexed it, so its facts are NOT
+    // at the run's SourceCommit. Recorded per file because dirtiness is a per-file property: the run-level
+    // RunEntity.SourceDirty says only that SOME file was uncommitted. Set by Writes.SaveAsync from the
+    // git-status set the CLI captures at index start and end.
+    public bool Dirty { get; set; }
 }

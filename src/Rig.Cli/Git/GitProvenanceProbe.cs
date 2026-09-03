@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Threading;
 using Rig.Domain.Data;
 
@@ -32,6 +33,53 @@ internal static class GitProvenanceProbe
             Dirty: !string.IsNullOrEmpty(status)
         );
     }
+
+    // Absolute paths of every file the work tree reports as differing from HEAD — the per-FILE half of
+    // provenance, which the run-level Dirty flag above cannot express. `-z` NUL-separates paths so git never
+    // quotes or escapes them; `-uall` lists untracked files individually, because a file that was indexed
+    // but never committed has no blob at HEAD at all and so is the worst case, not an exempt one.
+    // Best-effort like Capture: absent git, or a non-git source, yields an empty set.
+    // Call it at index START and again at index END and union the two sets — a cold index runs for minutes,
+    // and a file clean at the start but edited mid-run would otherwise be recorded clean, which is the
+    // unsound-clear direction. See docs/backlog/todo/dirty-store-provenance-per-file-not-per-run.md.
+    internal static HashSet<string> CaptureDirtyFiles(string pathInsideRepo)
+    {
+        var paths = new HashSet<string>(PathComparer);
+        var root = ResolveRepositoryRoot(pathInsideRepo);
+        if (root is null)
+        {
+            return paths;
+        }
+
+        var status = RunRaw(root, ["status", "--porcelain", "-z", "-uall"]);
+        if (status is null)
+        {
+            return paths;
+        }
+
+        // A record is "XY <repo-relative path>", NUL-separated. A rename or copy is followed by ONE further
+        // record holding the ORIGINAL path; both sides are marked, since either may be the path a run
+        // indexed. Anything not in source_files is dropped by the write path, so over-marking is harmless.
+        var records = status.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        for (var index = 0; index < records.Length; index++)
+        {
+            var record = records[index];
+            if (record.Length < 4 || record[2] != ' ')
+            {
+                continue;
+            }
+
+            paths.Add(Path.GetFullPath(Path.Combine(root, record[3..])));
+            if ((record[0] is 'R' or 'C' || record[1] is 'R' or 'C') && index + 1 < records.Length)
+            {
+                paths.Add(Path.GetFullPath(Path.Combine(root, records[++index])));
+            }
+        }
+
+        return paths;
+    }
+
+    private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     // Freshness checks differ from index-time provenance capture in one deliberate way: rig's own output
     // directory is excluded from dirty-state detection. Keep Capture above unchanged so indexing still
@@ -137,7 +185,11 @@ internal static class GitProvenanceProbe
         return relative.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
     }
 
-    private static string? Run(string workingDir, params string[] args)
+    private static string? Run(string workingDir, params string[] args) => RunRaw(workingDir, args)?.Trim();
+
+    // Stdout exactly as git wrote it. The porcelain `-z` parse needs that: a record's first status field is
+    // a space for an unmodified index (" M <path>"), which trimming would eat along with the record.
+    private static string? RunRaw(string workingDir, string[] args)
     {
         try
         {
@@ -148,6 +200,9 @@ internal static class GitProvenanceProbe
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // git emits UTF-8; without this the console code page decodes a non-ASCII path into
+                // something that matches no indexed file, which would silently under-report dirtiness.
+                StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             };
             foreach (var a in args)
             {
@@ -163,7 +218,7 @@ internal static class GitProvenanceProbe
             var stdout = proc.StandardOutput.ReadToEnd();
             proc.StandardError.ReadToEnd();
             proc.WaitForExit();
-            return proc.ExitCode == 0 ? stdout.Trim() : null;
+            return proc.ExitCode == 0 ? stdout : null;
         }
         catch
         {

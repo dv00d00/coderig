@@ -24,7 +24,10 @@ public static class SchemaVersion
     // v7->v8: persist reference_facts.Column (1-based start column of the reference, the same convention as
     //         Line) — the coordinate that separates two call sites sharing ONE source line, which Line alone
     //         collapses into indistinguishable facts.
-    public const int Index = 8;
+    // v8->v9: persist source_files.Dirty — the per-FILE record of whether this run indexed that file from
+    //         uncommitted source (git status at index start and end, unioned). The run-level SourceDirty
+    //         flag cannot say WHICH file is off-commit, so a review could not scope the caveat.
+    public const int Index = 9;
 
     // Bump when the GRAPH shape changes (call_edges / dispatch_edges / nodes / the symbol_fts /
     // ref_target_fts virtual tables — all built by GraphMaterializer).

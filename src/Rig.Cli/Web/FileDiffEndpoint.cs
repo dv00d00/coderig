@@ -340,6 +340,9 @@ internal static class FileDiffEndpoint
         var repo = await FindRepoAsync(representative);
         var baseFiles = RelativeFileMap(repo, baseInventory.Files);
         var headFiles = RelativeFileMap(repo, headInventory.Files);
+        // The dirty sets are subsets of the indexed files, so the same repo-relative conversion serves both.
+        var baseDirty = RelativeFileMap(repo, baseInventory.DirtyFiles);
+        var headDirty = RelativeFileMap(repo, headInventory.DirtyFiles);
         // Changed-line counts need the SAME rename/copy detection and the same commit pair, or the two scans
         // disagree about which rows exist and the join lands counts on the wrong file. Run them together: the
         // --find-copies-harder scan is the expensive part and this pair is loaded once per review session.
@@ -371,7 +374,7 @@ internal static class FileDiffEndpoint
         var nameStatus = await nameStatusTask;
         var counts = ParseNumstat(await numstatTask);
         var files = ParseNameStatus(nameStatus)
-            .Select(change => ToReviewFile(change, baseFiles, headFiles, counts))
+            .Select(change => ToReviewFile(change, baseFiles, headFiles, baseDirty, headDirty, counts))
             .OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         return new ReviewInventory(repo, baseInventory, headInventory, files);
@@ -408,35 +411,25 @@ internal static class FileDiffEndpoint
             throw new InvalidOperationException($"Store '{store}' has no source commit; it cannot participate in Git review.");
         }
 
-        // TODO(dirty-provenance): the dirty-tree REFUSAL is disabled so the review UI/UX can be exercised —
-        // every store on a working machine is dirty, so this gate made the whole Review surface unreachable
-        // rather than degraded. Restore a guard before this ships.
-        //
-        // The invariant it protected is real and still unenforced: we review IMMUTABLE commits, but the
-        // indexer reads whatever is on disk, so a store labelled `aae396ea7e8e` can hold facts about source
-        // that never existed at `aae396ea7e8e`. Every annotation joined onto the git diff is currently
-        // asserted at-commit without evidence.
-        //
-        // What it must NOT go back to: a whole-RUN refusal. The invariant is per-FILE, and the git diff
-        // itself never depended on the store at all, so refusing discarded a sound diff to avoid a caveat
-        // `ReviewFileDto.SemanticReady` already exists to carry. Nor can the guard be rebuilt from
-        // `git status` AT REVIEW TIME: that answers "dirty now", and a file dirty at index time but
-        // committed since would read clean — an unsound clear, the one failure class this tool exists to
-        // prevent. The oracle has to be a property of the STORE.
-        _ = run.SourceDirty;
-
         if (!IsHexSha(commit))
         {
             throw new InvalidOperationException($"Store '{store}' has an invalid source commit.");
         }
 
-        var files = await context
+        // Dirtiness is read per FILE, from the bit the indexer recorded — never from `git status` here, which
+        // answers "dirty now" and would clear a file that was dirty at index time but has been committed
+        // since. The run-level SourceDirty flag is deliberately not consulted: it cannot say WHICH file is
+        // off-commit, and the git diff itself never depended on the store, so it is no grounds to refuse.
+        var rows = await context
             .SourceFiles.AsNoTracking()
             .Where(file => file.Status != "skipped")
-            .Select(file => file.FilePath)
+            .Select(file => new { file.FilePath, file.Dirty })
             .Distinct()
             .ToArrayAsync();
-        return new StoreInventory(commit, run.SolutionPath, files);
+        var files = rows.Select(row => row.FilePath).Distinct().ToArray();
+        // One run indexing a path from uncommitted source taints it; another run's clean row cannot clear it.
+        var dirtyFiles = rows.Where(row => row.Dirty).Select(row => row.FilePath).Distinct().ToArray();
+        return new StoreInventory(commit, run.SolutionPath, files, dirtyFiles);
     }
 
     private static Dictionary<string, string> RelativeFileMap(string repo, IReadOnlyList<string> files)
@@ -542,13 +535,24 @@ internal static class FileDiffEndpoint
         NameStatusChange change,
         IReadOnlyDictionary<string, string> baseFiles,
         IReadOnlyDictionary<string, string> headFiles,
+        IReadOnlyDictionary<string, string> baseDirty,
+        IReadOnlyDictionary<string, string> headDirty,
         IReadOnlyDictionary<string, NumstatCounts> counts
     )
     {
         var oldFile = change.OldPath is not null && baseFiles.TryGetValue(change.OldPath, out var indexedOld) ? indexedOld : null;
         var newFile = change.NewPath is not null && headFiles.TryGetValue(change.NewPath, out var indexedNew) ? indexedNew : null;
-        var semanticReady = oldFile is not null && newFile is not null;
-        var reason = semanticReady ? null : "Semantic annotations are unavailable for one or both revisions.";
+        var indexedBothSides = oldFile is not null && newFile is not null;
+        // Either side indexed from uncommitted source makes the annotations facts about something other than
+        // the revision under review, so the caveat rides the file it belongs to and no other.
+        var dirty =
+            (change.OldPath is not null && baseDirty.ContainsKey(change.OldPath))
+            || (change.NewPath is not null && headDirty.ContainsKey(change.NewPath));
+        var semanticReady = indexedBothSides && !dirty;
+        var reason =
+            !indexedBothSides ? "Semantic annotations are unavailable for one or both revisions."
+            : dirty ? "Indexed from uncommitted source, so annotations are not at this revision."
+            : null;
         var path = change.NewPath ?? change.OldPath ?? "";
         var counted = counts.TryGetValue(path, out var found) ? found : null;
         return new ReviewFileDto(
@@ -650,7 +654,12 @@ internal static class FileDiffEndpoint
         }
     }
 
-    private sealed record StoreInventory(string Commit, string? SolutionPath, IReadOnlyList<string> Files);
+    private sealed record StoreInventory(
+        string Commit,
+        string? SolutionPath,
+        IReadOnlyList<string> Files,
+        IReadOnlyList<string> DirtyFiles
+    );
 
     private sealed record ReviewInventory(string Repo, StoreInventory Base, StoreInventory Head, IReadOnlyList<ReviewFileDto> Files);
 
