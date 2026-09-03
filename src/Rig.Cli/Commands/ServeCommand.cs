@@ -48,8 +48,13 @@ internal static class ServeCommand
         try
         {
             marker = ServeMarkerLease.Publish(workingDirectory, port, url);
+            if (!marker.OwnsMarker)
+            {
+                var existing = marker.BlockingMarker!;
+                error.WriteLine($"(did not publish .rig/serve.json: live rig serve PID {existing.Pid} already owns {existing.Url})");
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
             error.WriteLine($"(could not publish .rig/serve.json: {ex.Message})");
         }

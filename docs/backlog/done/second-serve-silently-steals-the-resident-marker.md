@@ -1,6 +1,6 @@
 # A second `rig serve` silently overwrites the first one's resident marker
 
-**Status:** todo · **Found:** 2026-09-03, while verifying the family-list slice in a browser ·
+**Status:** done 2026-09-03 · **Found:** 2026-09-03, while verifying the family-list slice in a browser ·
 **Triage:** ready-for-agent
 **Family:** serve / resident transport
 
@@ -47,3 +47,9 @@ fail-fast-instead-of-late shape as the two guards added on 2026-09-03 (`mini-ci`
   case does the first host's marker vanish while that host is alive.
 - A stale marker (PID dead) is still reclaimable — the current `IsAlive` + delete path must keep working.
 - `rig annotate` resolves to a host that is actually running, with both serves up.
+
+## Verification
+
+- `ServeMarkerLeaseTests`: 5/5 passed, including an eight-publisher concurrency race with exactly one owner.
+- Full Release build: 0 warnings, 0 errors.
+- Main suite: 1,416/1,416 passed; full integration matrix passed apart from its one documented skip.

@@ -13,14 +13,19 @@ internal sealed class ServeMarkerLease : IDisposable
 {
     private static readonly JsonSerializerOptions MarkerJson = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly string _path;
-    private readonly ServeMarker _marker;
+    private readonly string? _publishedContents;
     private bool _disposed;
 
-    private ServeMarkerLease(string path, ServeMarker marker)
+    private ServeMarkerLease(string path, string? publishedContents, ServeMarker? blockingMarker)
     {
         _path = path;
-        _marker = marker;
+        _publishedContents = publishedContents;
+        BlockingMarker = blockingMarker;
     }
+
+    internal bool OwnsMarker => _publishedContents is not null;
+
+    internal ServeMarker? BlockingMarker { get; }
 
     internal static ServeMarkerLease Publish(string workingDirectory, int port, string url)
     {
@@ -34,18 +39,35 @@ internal sealed class ServeMarkerLease : IDisposable
             AnnotateResidentTransport.CanonicalPath(workingDirectory),
             DateTimeOffset.UtcNow
         );
+        var contents = JsonSerializer.Serialize(marker, MarkerJson);
         var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(marker, MarkerJson));
+            File.WriteAllText(temporaryPath, contents);
+            using var gate = AnnotateResidentTransport.AcquireMarkerGate(path);
+            var existing = AnnotateResidentTransport.ReadMarkerSnapshot(path);
+            if (existing is not null)
+            {
+                if (AnnotateResidentTransport.IsAlive(existing.Marker.Pid))
+                {
+                    return new ServeMarkerLease(path, publishedContents: null, blockingMarker: existing.Marker);
+                }
+
+                if (!AnnotateResidentTransport.DeleteIfUnchangedWhileGateHeld(path, existing.Contents))
+                {
+                    throw new IOException("The rig serve marker changed while its stale owner was being reclaimed.");
+                }
+            }
+
+            // The complete temp file is installed only while every cooperating publisher is excluded by
+            // the sibling gate. overwrite:true avoids relying on platform-specific no-replace rename semantics.
             File.Move(temporaryPath, path, overwrite: true);
+            return new ServeMarkerLease(path, contents, blockingMarker: null);
         }
         finally
         {
             TryDelete(temporaryPath);
         }
-
-        return new ServeMarkerLease(path, marker);
     }
 
     public void Dispose()
@@ -56,16 +78,18 @@ internal sealed class ServeMarkerLease : IDisposable
         }
 
         _disposed = true;
+        if (_publishedContents is null)
+        {
+            return;
+        }
+
         try
         {
-            if (AnnotateResidentTransport.ReadMarker(_path) == _marker)
-            {
-                File.Delete(_path);
-            }
+            using var gate = AnnotateResidentTransport.AcquireMarkerGate(_path);
+            AnnotateResidentTransport.DeleteIfUnchangedWhileGateHeld(_path, _publishedContents);
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
-        catch (JsonException) { }
     }
 
     private static void TryDelete(string path)
@@ -81,6 +105,8 @@ internal sealed class ServeMarkerLease : IDisposable
 
 internal static class AnnotateResidentTransport
 {
+    private const int MarkerGateAttempts = 100;
+    private const int MarkerGateRetryMilliseconds = 10;
     internal const string MarkerFileName = "serve.json";
     private static readonly HttpClient Client = new(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false })
     {
@@ -109,12 +135,13 @@ internal static class AnnotateResidentTransport
         var markerPath = Path.Combine(StoreLayout.RigDir(location.WorkingDirectory), MarkerFileName);
         try
         {
-            var marker = ReadMarker(markerPath);
-            if (marker is not null)
+            var snapshot = ReadMarkerSnapshot(markerPath);
+            if (snapshot is not null)
             {
+                var marker = snapshot.Marker;
                 if (!IsAlive(marker.Pid))
                 {
-                    DeleteIfUnchanged(markerPath, marker);
+                    DeleteIfUnchanged(markerPath, snapshot.Contents);
                     failure = "the discovered rig serve process is no longer running";
                 }
                 else if (!candidates.Contains(marker.Url, StringComparer.OrdinalIgnoreCase))
@@ -144,14 +171,28 @@ internal static class AnnotateResidentTransport
 
     internal static ServeMarker? ReadMarker(string path)
     {
-        if (!File.Exists(path))
+        return ReadMarkerSnapshot(path)?.Marker;
+    }
+
+    internal sealed record MarkerSnapshot(ServeMarker Marker, string Contents);
+
+    internal static MarkerSnapshot? ReadMarkerSnapshot(string path)
+    {
+        string contents;
+        try
+        {
+            contents = File.ReadAllText(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
         {
             return null;
         }
 
-        var marker =
-            JsonSerializer.Deserialize<ServeMarker>(File.ReadAllText(path), Json)
-            ?? throw new JsonException("The rig serve marker is empty.");
+        var marker = JsonSerializer.Deserialize<ServeMarker>(contents, Json) ?? throw new JsonException("The rig serve marker is empty.");
         if (
             marker.Port is < 1 or > 65535
             || marker.Pid < 1
@@ -163,7 +204,7 @@ internal static class AnnotateResidentTransport
             throw new JsonException("The rig serve marker is incomplete.");
         }
 
-        return marker;
+        return new MarkerSnapshot(marker, contents);
     }
 
     internal static string CanonicalPath(string path)
@@ -171,6 +212,31 @@ internal static class AnnotateResidentTransport
         var full = Path.GetFullPath(path);
         var root = Path.GetPathRoot(full);
         return string.Equals(full, root, PathComparison) ? full : Path.TrimEndingDirectorySeparator(full);
+    }
+
+    internal static string MarkerGatePath(string markerPath) => markerPath + ".lock";
+
+    internal static FileStream AcquireMarkerGate(string markerPath)
+    {
+        var gatePath = MarkerGatePath(markerPath);
+        IOException? lastFailure = null;
+        for (var attempt = 0; attempt < MarkerGateAttempts; attempt++)
+        {
+            try
+            {
+                return new FileStream(gatePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException ex)
+            {
+                lastFailure = ex;
+                if (attempt + 1 < MarkerGateAttempts)
+                {
+                    Thread.Sleep(MarkerGateRetryMilliseconds);
+                }
+            }
+        }
+
+        throw new IOException("Timed out waiting for the rig serve marker lock.", lastFailure);
     }
 
     internal static FileEffectsQueryService.Artifact ToArtifact(FileEffectsResponseDto response)
@@ -355,8 +421,15 @@ internal static class AnnotateResidentTransport
 
     private static bool SamePath(string left, string right) => string.Equals(CanonicalPath(left), CanonicalPath(right), PathComparison);
 
-    private static bool IsAlive(int pid)
+    internal static bool IsAlive(int pid)
     {
+        // A marker published by another thread in this process is necessarily live; avoid an unnecessary
+        // OS process-table lookup for that exact case.
+        if (pid == Environment.ProcessId)
+        {
+            return true;
+        }
+
         try
         {
             using var process = Process.GetProcessById(pid);
@@ -372,17 +445,34 @@ internal static class AnnotateResidentTransport
         }
     }
 
-    private static void DeleteIfUnchanged(string path, ServeMarker marker)
+    internal static bool DeleteIfUnchanged(string path, string expectedContents)
     {
         try
         {
-            if (ReadMarker(path) == marker)
-            {
-                File.Delete(path);
-            }
+            using var gate = AcquireMarkerGate(path);
+            return DeleteIfUnchangedWhileGateHeld(path, expectedContents);
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
-        catch (JsonException) { }
+
+        return false;
+    }
+
+    internal static bool DeleteIfUnchangedWhileGateHeld(string path, string expectedContents)
+    {
+        try
+        {
+            if (!string.Equals(File.ReadAllText(path), expectedContents, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            File.Delete(path);
+            return true;
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        return false;
     }
 }
