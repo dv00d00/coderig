@@ -45,6 +45,7 @@ internal static class ImpactMapper
             AffectedEpCount: view.AffectedEpCount,
             BehavioralEpCount: view.BehavioralEpCount,
             HiddenIntrinsic: view.HiddenIntrinsic,
+            ExtractionCompatible: art.BaseProvenance.IsExtractionCompatibleWith(art.HeadProvenance),
             PerEp: view.PerEp.Select(p => new ImpactEpDeltaDto(
                     Kind: p.Kind,
                     Route: p.Route,
@@ -149,7 +150,13 @@ internal static class ImpactMapper
     }
 
     private static ImpactProvenanceDto Prov(StoreProvenance p) =>
-        new(Branch: p.Branch, Commit: p.ShortCommit, Label: p.ShortCommit is null ? p.Fallback : $"{p.Branch ?? "?"} ({p.ShortCommit})");
+        new(
+            Branch: p.Branch,
+            Commit: p.ShortCommit,
+            Label: p.ShortCommit is null ? p.Fallback : $"{p.Branch ?? "?"} ({p.ShortCommit})",
+            ExtractionVersions: p.ExtractionVersionsOrEmpty,
+            ProducingRigBuilds: p.ProducingRigBuildsOrEmpty
+        );
 
     private sealed record SourceLocation(string File, int Line);
 }

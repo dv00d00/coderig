@@ -208,6 +208,16 @@ internal static class ImpactCommand
         // (which also reads it for provenance + the cold derivation). Opening issues no query.
         await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation with { StoreRef = opts.HeadRef });
 
+        // Trust disclosure is deliberately FIRST: before deployments, cache decode, graph derivation, and
+        // filter validation. A later failure must never hide that the two persisted fact sets are incompatible.
+        var provenance = await ImpactEngine.ProbeProvenancePairAsync(
+            headContext: context,
+            ws: io.WorkspaceLocation,
+            baseRef: opts.BaseRef,
+            headRef: opts.HeadRef
+        );
+        var extractionCompatible = WriteExtractionVersionWarning(provenance.Base, provenance.Head, io.TextOutput.Error);
+
         // F4: load the DeploymentMap ONCE (render-only — the --structural chips). Not part of the diff, so it
         // stays here rather than in DiffAsync (which the web endpoint also calls, without deployment chrome).
         var deployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory, io.TextOutput.Error);
@@ -232,7 +242,8 @@ internal static class ImpactCommand
                     return Task.CompletedTask;
                 }
                 : null,
-            amplification: opts.Amplification
+            amplification: opts.Amplification,
+            provenance: provenance
         );
 
         // Validate the filter tokens against the effective rule set. Worth the extra rules load (json parse,
@@ -256,7 +267,6 @@ internal static class ImpactCommand
         // ImpactSchema bump and no cache fragmentation across filter combos (same contract as reaches/tree/derive).
         var view = ImpactEngine.Select(art.Diff, only: opts.Only, exclude: opts.Exclude, includeIntrinsic: opts.Intrinsic);
         WriteIntrinsicNote(view.HiddenIntrinsic, io.TextOutput.Error);
-        WriteGuardSkewWarning(view.Diff, io.TextOutput.Error);
 
         RenderImpact(
             output: io.TextOutput.Output,
@@ -277,7 +287,8 @@ internal static class ImpactCommand
         var guardExit = ExpectNoGuardNarrowingExit(
             opts.ExpectNoGuardNarrowing,
             ImpactEngine.NarrowedGuardCount(view.GuardConditions),
-            io.TextOutput.Error
+            io.TextOutput.Error,
+            extractionCompatible
         );
         return effectExit != 0 ? effectExit : guardExit;
     }
@@ -316,17 +327,50 @@ internal static class ImpactCommand
         );
     }
 
+    // ExtractionVersion is the deliberate compatibility contract for persisted facts. Build strings are
+    // included only to help diagnose which binary produced each side; they never decide compatibility.
+    internal static bool WriteExtractionVersionWarning(StoreProvenance baseProvenance, StoreProvenance headProvenance, TextWriter error)
+    {
+        if (baseProvenance.IsExtractionCompatibleWith(headProvenance))
+        {
+            return true;
+        }
+
+        static string Versions(StoreProvenance provenance) =>
+            provenance.ExtractionVersionsOrEmpty.Count == 0
+                ? "<missing>"
+                : string.Join(",", provenance.ExtractionVersionsOrEmpty.Select(v => $"v{v}"));
+        static string Builds(StoreProvenance provenance) =>
+            provenance.ProducingRigBuildsOrEmpty.Count == 0 ? "<unknown>" : string.Join(",", provenance.ProducingRigBuildsOrEmpty);
+
+        error.WriteLine(
+            $"WARNING: incompatible extraction versions: base {baseProvenance.Label} has [{Versions(baseProvenance)}] "
+                + $"(rig [{Builds(baseProvenance)}]); head {headProvenance.Label} has [{Versions(headProvenance)}] "
+                + $"(rig [{Builds(headProvenance)}]). A mixed or mismatched store pair cannot be compared safely. "
+                + "Re-index BOTH stores with the current rig before trusting impact or the --expect-no-guard-narrowing verdict."
+        );
+        return false;
+    }
+
     // The `--expect-no-guard-narrowing` CI gate. Narrowing = a call edge whose gating condition gained
     // conjuncts, so an effect it leads to now fires on strictly fewer paths. This is the class
     // --expect-no-effect-change structurally cannot catch: no call and no effect changed, only the predicate.
     //
     // Only NARROWED gates. Widened/Changed rows are reported for review but a gate tripping on them would fire
     // on ordinary feature work. The verdict goes to STDERR so a --format tsv stdout stays machine-clean.
-    internal static int ExpectNoGuardNarrowingExit(bool expect, int narrowedCount, TextWriter error)
+    internal static int ExpectNoGuardNarrowingExit(bool expect, int narrowedCount, TextWriter error, bool extractionCompatible = true)
     {
         if (!expect)
         {
             return 0;
+        }
+
+        if (!extractionCompatible)
+        {
+            error.WriteLine(
+                "--expect-no-guard-narrowing FAILED: extraction versions are mixed or mismatched, so the guard diff is not trustworthy. Re-index BOTH stores with the current rig. exit 1."
+            );
+            return 1;
         }
 
         if (narrowedCount > 0)

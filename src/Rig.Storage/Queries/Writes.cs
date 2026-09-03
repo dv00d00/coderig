@@ -1,5 +1,6 @@
 ﻿using System.Data;
 using System.Data.Common;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
@@ -82,6 +83,8 @@ public static class Writes
             SourceCommit = provenance?.Commit,
             SourceBranch = provenance?.Branch,
             SourceDirty = provenance?.Dirty ?? false,
+            ExtractionVersion = SchemaVersion.Extraction,
+            ProducingRigBuild = ProducingRigBuild(),
         };
 
         // Header rows first (small) — flushed and detached before the fact batches start clearing
@@ -110,6 +113,17 @@ public static class Writes
         // raw SQL on the same connection EF holds open. NOT a migration — a tripwire (see SchemaGate).
         await SchemaMeta.WriteIndexVersionAsync(connection, cancellationToken);
         return runId;
+    }
+
+    // Use a library owned by rig rather than EntryAssembly, which is the test host for in-process indexing.
+    // InformationalVersion carries the package version plus source revision when the SDK emits it.
+    private static string ProducingRigBuild()
+    {
+        var assembly = typeof(Writes).Assembly;
+        var informationalVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        return !string.IsNullOrWhiteSpace(informationalVersion)
+            ? informationalVersion
+            : assembly.GetName().Version?.ToString() ?? assembly.GetName().Name ?? "Rig.Storage";
     }
 
     // Populates the assembly registry + solution membership (docs/multi-solution-storage.md). An

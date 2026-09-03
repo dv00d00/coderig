@@ -105,6 +105,7 @@ internal static class FactCommands
                 output.WriteLine($"{detailIndent}commit={shortSha}{branch}{dirty}");
             }
 
+            output.WriteLine($"{detailIndent}extraction=v{run.ExtractionVersion} rig={run.ProducingRigBuild ?? "unknown"}");
             output.WriteLine($"{detailIndent}symbols={run.SymbolCount} references={run.ReferenceCount} di={run.DiRegistrationCount}");
         }
     }

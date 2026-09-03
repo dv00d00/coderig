@@ -36,10 +36,10 @@ public sealed class FileFindingsCacheSchemaTests
         // warm findings blob, on disk and (via /api/meta's derivationVersion) in the browser. Updating these
         // two lines is the deliberate edit that records it.
         // FindingViewSchema 1->2 (2026-09-03): the tier-3 anchor grain now carries its evidence.
-        QueryCacheKeys.DerivationSchemaToken().ShouldBe("2.8.4.5.8.2.1.2.3.3.6");
+        QueryCacheKeys.DerivationSchemaToken().ShouldBe("2.8.4.5.9.2.1.2.3.3.6");
         QueryCacheKeys
             .FileFindingsCacheKey("store", "rules", Path)
-            .ShouldBe("A526654D4A6413E1B7982956E42D683A062327F6ACCF773EBEA6056453FBDFAA");
+            .ShouldBe("5CE135FF42FE75DA820DBF45C21114B0A1E183CD11CA8B70BD6DF36B16BB87DC");
     }
 
     [Test]

@@ -173,9 +173,23 @@ internal static class ImpactCacheCodec
         }
     }
 
-    private static ProvenanceDto MapProv(StoreProvenance p) => new(Branch: p.Branch, ShortCommit: p.ShortCommit, Fallback: p.Fallback);
+    private static ProvenanceDto MapProv(StoreProvenance p) =>
+        new(
+            Branch: p.Branch,
+            ShortCommit: p.ShortCommit,
+            Fallback: p.Fallback,
+            ExtractionVersions: p.ExtractionVersionsOrEmpty,
+            ProducingRigBuilds: p.ProducingRigBuildsOrEmpty
+        );
 
-    private static StoreProvenance UnmapProv(ProvenanceDto p) => new(Branch: p.Branch, ShortCommit: p.ShortCommit, Fallback: p.Fallback);
+    private static StoreProvenance UnmapProv(ProvenanceDto p) =>
+        new(
+            Branch: p.Branch,
+            ShortCommit: p.ShortCommit,
+            Fallback: p.Fallback,
+            ExtractionVersions: p.ExtractionVersions,
+            ProducingRigBuilds: p.ProducingRigBuilds
+        );
 
     private static List<KindRouteDto> MapKindRoutes(IReadOnlyList<(string Kind, string Route)> items) =>
         items.Select(kr => new KindRouteDto(Kind: kr.Kind, Route: kr.Route)).ToList();
@@ -331,7 +345,13 @@ internal sealed record GuardConditionDeltaDto(
     IReadOnlyList<string> SampleRoutes
 );
 
-internal sealed record ProvenanceDto(string? Branch, string? ShortCommit, string Fallback);
+internal sealed record ProvenanceDto(
+    string? Branch,
+    string? ShortCommit,
+    string Fallback,
+    IReadOnlyList<int>? ExtractionVersions = null,
+    IReadOnlyList<string>? ProducingRigBuilds = null
+);
 
 internal sealed record KindRouteDto(string Kind, string Route);
 

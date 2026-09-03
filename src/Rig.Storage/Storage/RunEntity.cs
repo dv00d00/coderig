@@ -29,4 +29,10 @@ public sealed class RunEntity
     public string? SourceBranch { get; set; }
 
     public bool SourceDirty { get; set; }
+
+    // Trust provenance for the facts emitted by this run. ProducingRigBuild is diagnostic only; compatibility
+    // is decided exclusively by the deliberate ExtractionVersion stamp.
+    public int ExtractionVersion { get; set; }
+
+    public string ProducingRigBuild { get; set; } = "";
 }

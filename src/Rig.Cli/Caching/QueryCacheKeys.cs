@@ -135,7 +135,8 @@ internal static class QueryCacheKeys
     // the admitted external leaves, so a cached side is over a different node universe than a freshly computed
     // one and would report every library leaf as a reach GAIN. (First-party reachability itself is unchanged:
     // an admitted leaf has no successors.)
-    internal const int ImpactSchema = 8;
+    // v8->v9: cache extraction-version/build provenance so trust warnings and the guard gate survive warm hits.
+    internal const int ImpactSchema = 9;
 
     // NOT bumped for external-node admission, deliberately:
     //   * HazardEffectsSchema — the whole-store effect set is a per-METHOD fact derived from reference_facts

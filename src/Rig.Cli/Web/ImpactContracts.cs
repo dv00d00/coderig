@@ -5,7 +5,13 @@ namespace Rig.Cli.Web;
 // commits. Entry-point add/remove and the structural affected-EP COUNT ride along; the (large) structural
 // affected-EP list is summarized as a count for now.
 
-internal sealed record ImpactProvenanceDto(string? Branch, string? Commit, string Label);
+internal sealed record ImpactProvenanceDto(
+    string? Branch,
+    string? Commit,
+    string Label,
+    IReadOnlyList<int> ExtractionVersions,
+    IReadOnlyList<string> ProducingRigBuilds
+);
 
 internal sealed record ImpactEffectDto(string Provider, string Operation, string Resource, string Enclosing, string? File, int Line);
 
@@ -61,5 +67,6 @@ internal sealed record ImpactResponseDto(
     // so the default response withholds alloc/throw and the client cannot know that from the payload alone.
     // The count is the withheld effect ENTRIES across every EP (11,745 of 14,059 on the MedDBase pair) — a
     // view that hid 83% of its rows without saying so would read as "barely any change".
-    int HiddenIntrinsic = 0
+    int HiddenIntrinsic = 0,
+    bool ExtractionCompatible = false
 );

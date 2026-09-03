@@ -1,6 +1,6 @@
 ## Store does not record the rig build that produced it — cross-version `impact` diffs silently lie
 
-**Status:** todo
+**Status:** done — shipped 2026-09-03
 **Source:** demo prep, 2026-07-31 — found while assembling a peer demo on the MedDBase store
 **Triage:** ready-for-agent
 
@@ -59,3 +59,14 @@ WHERE (FromSym LIKE '%~λ%' OR ToSym LIKE '%~λ%')
 
 On the MedDBase store this cleanly separates the two clusters (~4.7k pre-fix vs ~11.9k post-fix). Only pair
 stores within a cluster.
+
+### Resolution
+
+Every indexed run now records a deliberately bumped extraction-version constant plus the producing rig
+informational build. `impact` checks all runs in each store before loading rules or deriving a diff: mixed or
+mismatched extraction versions produce an unconditional CLI warning, fail
+`--expect-no-guard-narrowing` closed, and remain visible on warm cache hits. The web impact view carries the
+same provenance and renders an alert banner. Producing build strings are diagnostic only, so recompiles with
+the same extraction contract remain compatible. The index schema moved to v10 and the impact cache schema to
+v9; storage round-trip, compatibility, cache-codec/cache-hit, early-warning, CLI and web mapping regressions
+are covered. Release build and all 1,429 main tests pass.

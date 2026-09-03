@@ -95,7 +95,9 @@ public static class Reads
                 SourceProjectPath: run.SourceProjectPath,
                 SourceCommit: run.SourceCommit,
                 SourceBranch: run.SourceBranch,
-                SourceDirty: run.SourceDirty
+                SourceDirty: run.SourceDirty,
+                ExtractionVersion: run.ExtractionVersion,
+                ProducingRigBuild: run.ProducingRigBuild
             ))
             .ToListAsync(cancellationToken);
     }

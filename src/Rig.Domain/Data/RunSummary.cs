@@ -14,5 +14,7 @@ public record RunSummary(
     // clean commit. See docs/design-impact-behavioral-diff.md §4.5.
     string? SourceCommit = null,
     string? SourceBranch = null,
-    bool SourceDirty = false
+    bool SourceDirty = false,
+    int ExtractionVersion = 0,
+    string? ProducingRigBuild = null
 );

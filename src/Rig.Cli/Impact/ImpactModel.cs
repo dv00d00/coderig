@@ -3,8 +3,25 @@ namespace Rig.Cli.Impact;
 // The source-control provenance of a store, condensed for the header: a short commit (12-char sha) +
 // branch when the store carries them, else a fallback label (the store-ref the user passed). Label is
 // ALWAYS non-empty so the header can name which side it is even on a pre-stamping store.
-internal sealed record StoreProvenance(string? Branch, string? ShortCommit, string Fallback)
+internal sealed record StoreProvenance(
+    string? Branch,
+    string? ShortCommit,
+    string Fallback,
+    IReadOnlyList<int>? ExtractionVersions = null,
+    IReadOnlyList<string>? ProducingRigBuilds = null
+)
 {
+    public IReadOnlyList<int> ExtractionVersionsOrEmpty => ExtractionVersions ?? [];
+
+    public IReadOnlyList<string> ProducingRigBuildsOrEmpty => ProducingRigBuilds ?? [];
+
+    // A trustworthy pair has exactly one extraction meaning on each side, and those meanings are identical.
+    // Empty provenance fails closed; multiple versions mean the store is internally mixed and also fails.
+    public bool IsExtractionCompatibleWith(StoreProvenance other) =>
+        ExtractionVersionsOrEmpty.Count == 1
+        && other.ExtractionVersionsOrEmpty.Count == 1
+        && ExtractionVersionsOrEmpty.SequenceEqual(other.ExtractionVersionsOrEmpty);
+
     // The header label for this side: "<branch> (<short>)" when both are known, "<branch>" / "(<short>)"
     // when only one is, else the fallback store-ref. The diff-summary uses the same short form.
     public string Label =>
@@ -22,6 +39,13 @@ internal sealed record StoreProvenance(string? Branch, string? ShortCommit, stri
         ShortCommit is { Length: > 0 } c ? c
         : Branch is { Length: > 0 } b ? b
         : Fallback;
+}
+
+// Lightweight trust header read before either graph is loaded. The CLI uses it before deployments and the
+// diff; the engine threads the same pair through cold/warm paths so provenance is read once per request.
+internal sealed record ImpactProvenancePair(StoreProvenance Base, StoreProvenance Head)
+{
+    public bool ExtractionCompatible => Base.IsExtractionCompatibleWith(Head);
 }
 
 // A derived entry point at a source site, with its deployment requirements — the unit the impact output

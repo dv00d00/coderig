@@ -27,7 +27,13 @@ public static class SchemaVersion
     // v8->v9: persist source_files.Dirty — the per-FILE record of whether this run indexed that file from
     //         uncommitted source (git status at index start and end, unioned). The run-level SourceDirty
     //         flag cannot say WHICH file is off-commit, so a review could not scope the caveat.
-    public const int Index = 9;
+    // v9->v10: persist each run's extraction-semantics version and producing rig build so two-store queries
+    //          can reject provenance-skewed facts instead of comparing them as if they meant the same thing.
+    public const int Index = 10;
+
+    // Bump whenever FactExtractor / extraction semantics change, even when the persisted DB shape does not.
+    // This is fact provenance, deliberately independent of Index (shape) and Graph (materialization shape).
+    public const int Extraction = 1;
 
     // Bump when the GRAPH shape changes (call_edges / dispatch_edges / nodes / the symbol_fts /
     // ref_target_fts virtual tables — all built by GraphMaterializer).

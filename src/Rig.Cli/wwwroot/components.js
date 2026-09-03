@@ -1009,6 +1009,13 @@ export function ImpactView(s, actions) {
         ? h("span", {}, `${d.perEp.length.toLocaleString()} with any delta`)
         : null,
     ),
+    d.extractionCompatible
+      ? null
+      : h(
+          "div",
+          { class: "impact-trust-warning", role: "alert" },
+          `⚠ incompatible extraction versions — base [${(d.base.extractionVersions || []).map((v) => `v${v}`).join(", ") || "missing"}] (${(d.base.producingRigBuilds || []).join(", ") || "unknown build"}); head [${(d.head.extractionVersions || []).map((v) => `v${v}`).join(", ") || "missing"}] (${(d.head.producingRigBuilds || []).join(", ") || "unknown build"}). Re-index both stores with the current rig before trusting this diff.`,
+        ),
     // MANDATORY DISCLOSURE: the effect selection is applied server-side now, so the default response has
     // already withheld alloc/throw. Same wording as the tree/reaches/hotspots notes, and it names the count
     // because a view that quietly dropped 83% of its rows would read as "barely any change".

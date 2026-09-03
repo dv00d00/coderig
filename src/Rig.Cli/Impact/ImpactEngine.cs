@@ -82,7 +82,10 @@ internal static class ImpactEngine
         // --no-amplification: drop the amplification tier from the per-EP delta (no ep_amplification_* rows).
         // Folded into the CACHE KEY — an amplified and a suppressed diff are DIFFERENT artifacts, and sharing one
         // slot would let a --no-amplification run poison the default view (the mistake --no-gate already avoids).
-        bool amplification = true
+        bool amplification = true,
+        // Optional early trust probe supplied by the CLI. The web/direct path probes here instead. In both
+        // cases current provenance replaces cached provenance on a hit, so a stale blob cannot hide skew.
+        ImpactProvenancePair? provenance = null
     )
     {
         var (rules, baseDbPath, cacheRaw, cacheKey) = ResolveStoresAndCache(
@@ -97,28 +100,6 @@ internal static class ImpactEngine
         );
         using var cache = cacheRaw;
 
-        // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → return WITHOUT loading the
-        // base graph or shaping/walking either graph.
-        if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
-        {
-            // The cached answer is still backed by BASE as well as the caller-owned HEAD context. This
-            // lightweight open exists only on a cache hit; the cold path discloses during its existing
-            // provenance/base-compute opens.
-            if (StoreAnswerDisclosure.IsActive)
-            {
-                await using var baseContext = new RigDbContext(baseDbPath, readOnly: true);
-                await SchemaGate.AssertReadableAsync(baseContext);
-                await StoreAnswerDisclosure.DiscloseCurrentAsync(baseContext, baseDbPath, baseRef);
-            }
-
-            if (onPhase is not null)
-            {
-                await onPhase("cache hit", 0);
-            }
-
-            return art;
-        }
-
         var sw = System.Diagnostics.Stopwatch.StartNew();
         async Task Tick(string name)
         {
@@ -130,8 +111,28 @@ internal static class ImpactEngine
             sw.Restart();
         }
 
-        var headProv = await ReadProvenanceAsync(headContext, headRef);
-        var baseProv = await ResolveBaseProvenanceAsync(baseDbPath: baseDbPath, baseRef: baseRef);
+        var provenancePair =
+            provenance
+            ?? await ReadProvenancePairAsync(headContext: headContext, headRef: headRef, baseDbPath: baseDbPath, baseRef: baseRef);
+
+        // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → return WITHOUT loading the
+        // base graph or shaping/walking either graph.
+        if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
+        {
+            if (onPhase is not null)
+            {
+                await onPhase("cache hit", 0);
+            }
+
+            // Trust metadata is cheap and current, unlike the cached graph-derived payload. The probe also
+            // performs the same base-store answer disclosure that the old warm-only open performed.
+            return art with
+            {
+                BaseProvenance = provenancePair.Base,
+                HeadProvenance = provenancePair.Head,
+            };
+        }
+
         await Tick("provenance");
         var headData = await LoadHeadSideDataAsync(headContext, rules, gate: gate);
         await Tick("head: load graph + derive effects");
@@ -149,8 +150,13 @@ internal static class ImpactEngine
         );
         await Tick("base: load + derive + diff");
         var fqnSites = branchSide.IdBySite;
-        TrySaveDiffToCache(cache, cacheKey, impactDiff, baseProv, headProv, fqnSites);
-        return new ImpactCacheArtifact(Diff: impactDiff, BaseProvenance: baseProv, HeadProvenance: headProv, FqnSites: fqnSites);
+        TrySaveDiffToCache(cache, cacheKey, impactDiff, provenancePair.Base, provenancePair.Head, fqnSites);
+        return new ImpactCacheArtifact(
+            Diff: impactDiff,
+            BaseProvenance: provenancePair.Base,
+            HeadProvenance: provenancePair.Head,
+            FqnSites: fqnSites
+        );
     }
 
     // The HEAD (branch) store data needed by the per-EP computations: the shaped graph, the entry points,
@@ -722,15 +728,59 @@ internal static class ImpactEngine
     internal static int NarrowedGuardCount(IReadOnlyList<GuardConditionDelta> deltas) =>
         deltas.Count(d => d.Verdict == GuardVerdict.Narrowed);
 
-    // Read a store's provenance from its own run row (the run with the most symbols — the primary index).
-    // Short sha = first 12 chars, matching `rig runs`. Fallback is the store-ref the user passed.
+    // The CLI calls this immediately after opening HEAD, before deployments or any derivation. Direct/web
+    // callers get the same probe inside DiffAsync. BASE is resolved independently and disclosed exactly as on
+    // the former cold/warm provenance paths; HEAD is read from the already-open caller-owned context.
+    internal static async Task<ImpactProvenancePair> ProbeProvenancePairAsync(
+        RigDbContext headContext,
+        WorkspaceLocation ws,
+        string baseRef,
+        string headRef
+    )
+    {
+        var baseDir = StoreLayout.ResolveReadStoreDir(ws with { StoreRef = baseRef });
+        return await ReadProvenancePairAsync(
+            headContext: headContext,
+            headRef: headRef,
+            baseDbPath: Path.Combine(baseDir, StoreLayout.DbFileName),
+            baseRef: baseRef
+        );
+    }
+
+    private static async Task<ImpactProvenancePair> ReadProvenancePairAsync(
+        RigDbContext headContext,
+        string headRef,
+        string baseDbPath,
+        string baseRef
+    )
+    {
+        var head = await ReadProvenanceAsync(headContext, headRef);
+        var @base = await ResolveBaseProvenanceAsync(baseDbPath: baseDbPath, baseRef: baseRef);
+        return new ImpactProvenancePair(Base: @base, Head: head);
+    }
+
+    // Read display provenance from the primary run, but extraction trust provenance from EVERY run. A
+    // multi-project store can contain several runs; one stale append makes the whole fact set mixed.
     private static async Task<StoreProvenance> ReadProvenanceAsync(RigDbContext context, string storeRef)
     {
         var runs = await Reads.ListRunsAsync(context);
         var primary = runs.OrderByDescending(r => r.SymbolCount).FirstOrDefault();
         var commit = primary?.SourceCommit;
         var shortSha = commit is { Length: > 0 } ? (commit.Length >= 12 ? commit[..12] : commit) : null;
-        return new StoreProvenance(Branch: primary?.SourceBranch, ShortCommit: shortSha, Fallback: storeRef);
+        var extractionVersions = runs.Select(r => r.ExtractionVersion).Distinct().Order().ToArray();
+        var producingRigBuilds = runs.Select(r => r.ProducingRigBuild)
+            .Where(b => !string.IsNullOrWhiteSpace(b))
+            .Select(b => b!)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        return new StoreProvenance(
+            Branch: primary?.SourceBranch,
+            ShortCommit: shortSha,
+            Fallback: storeRef,
+            ExtractionVersions: extractionVersions,
+            ProducingRigBuilds: producingRigBuilds
+        );
     }
 
     // The base store's provenance — opened read-only for just its run row.
