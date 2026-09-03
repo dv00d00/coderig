@@ -8,6 +8,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# FAIL FAST on the tool-store lock. A running `rig` (typically `rig serve`) holds
+# ~/.dotnet/tools/.store/rig/<version>, so the install step below cannot swap the binary. That step is the
+# LAST thing this script does, so without this check the lock costs a full build plus every test lane —
+# ~10 minutes with -FullTests — before throwing. The uninstall is deliberately swallowed (Continue +
+# *> $null) so it does not even fail at the first opportunity. Checked here instead: same diagnosis, zero
+# work wasted. -SkipToolInstall never publishes, so it is exempt by construction.
+if (-not $SkipToolInstall) {
+    $holding = @(Get-Process -Name rig -ErrorAction SilentlyContinue)
+    if ($holding.Count -gt 0) {
+        throw ("rig is already running (PID " + ($holding.Id -join ", ") + ") and holds the global tool store, " +
+            "so the install step at the end of this script would fail. Stop it and re-run, or pass " +
+            "-SkipToolInstall to build and test without publishing the tool.")
+    }
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $solution = Join-Path $repoRoot "RuntimeIntelligenceGraph.slnx"
 $toolProject = Join-Path $repoRoot "src/Rig.Cli/Rig.Cli.csproj"
