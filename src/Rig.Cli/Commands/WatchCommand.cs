@@ -189,7 +189,9 @@ internal static class WatchCommand
         {
             bootWatch.Stop();
             output.WriteLine(
-                $"watch: cold boot in {bootWatch.Elapsed.TotalSeconds:F1}s — {host.ProjectCount} project(s), workspace retained"
+                FormattableString.Invariant(
+                    $"watch: cold boot in {bootWatch.Elapsed.TotalSeconds:F1}s — {host.ProjectCount} project(s), workspace retained"
+                )
             );
             // --query: one answer off the freshly booted facts. Printed BEFORE the watch loop starts so
             // `--once --query …` is a complete boot-answer-exit, and a plain `--query …` seeds the session
@@ -1157,7 +1159,7 @@ internal sealed class WatchHost : IAsyncDisposable
             var watch = Stopwatch.StartNew();
             if (await _reconcile(cancellationToken))
             {
-                _output.WriteLine($"live: reconciled {owed} project(s) in {watch.Elapsed.TotalSeconds:F2}s");
+                _output.WriteLine(FormattableString.Invariant($"live: reconciled {owed} project(s) in {watch.Elapsed.TotalSeconds:F2}s"));
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -1365,7 +1367,7 @@ internal sealed class WatchHost : IAsyncDisposable
         }
 
         var body = $"{applied} file(s) applied | {string.Join(" | ", segments)}";
-        return _lastEditSeconds < 0 ? body : $"{body} | last edit {_lastEditSeconds:F2}s";
+        return _lastEditSeconds < 0 ? body : FormattableString.Invariant($"{body} | last edit {_lastEditSeconds:F2}s");
     }
 
     internal static string? CascadeGateStatusSegment(FactSnapshot snapshot) =>
