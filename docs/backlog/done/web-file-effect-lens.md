@@ -36,7 +36,7 @@ effect families they reach.
 ## Known limits
 
 - Extraction stores source lines but not columns, so two calls on one line remain ambiguous; this is tracked in
-  [call-site facts have no column](../todo/call-site-facts-no-column-same-line-calls-collapse.md).
+  [call-site column facts](./call-site-facts-no-column-same-line-calls-collapse.md).
 - The first resident semantic request can still pay a whole-graph warm-up. The generation-owned projection is
   process-cached, so this is host-startup cost rather than a per-file N+1.
 - Concrete witness paths deliberately stay out of the ready model; the on-demand contract is tracked in

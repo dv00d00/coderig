@@ -1,6 +1,6 @@
 # CLI/web collapse onto one engine per question — wayfinder
 
-**Status:** todo · wayfinder map · 6 children, none started · **Designed:** 2026-09-02, no code written ·
+**Status:** todo · wayfinder map · 6 children, child 1 shipped and children 2-6 remain · **Designed:** 2026-09-02 ·
 **Family:** query correctness / CLI-web parity
 
 ## Shared root cause
@@ -146,9 +146,9 @@ taking `RigDbContext` rather than `IQueryFactSource` is acceptable for a two-sto
 **Absorbed by child 1** — same defect, two viewpoints. Both cards stay where they are, with the cross-reference
 added in both directions:
 
-- [CLI/web `impact` behavioral count differs by one](./cli-web-parity-2-impact-behavioral-count.md) — its root
+- [CLI/web `impact` behavioral count differs by one](../done/cli-web-parity-2-impact-behavioral-count.md) — its root
   cause is child 1's optional-statics problem.
-- [Web Impact has no effect filter](./impact-web-effect-filters-client-side.md) — the same omission seen from
+- [Web Impact has no effect filter](../done/impact-web-effect-filters-client-side.md) — the same omission seen from
   the web side.
 
 **Relates, not superseded:**
@@ -157,7 +157,7 @@ added in both directions:
   [Seed, effect and filter disclosure on `/api/*`](./cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md)
   — this family removes the mechanism by which those gaps appear; the individual disclosures it names are
   still their own work.
-- [`/api/meta` `derivationVersion` carries no store identity](./cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md)
+- [`/api/meta` `derivationVersion` carries no store identity](../done/cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md)
   — a client-cache axis, untouched here. That file changed on 2026-09-02, so it is read current.
 - [Two surfaces, one store, disagree on a derivation input — wayfinder](./question-vs-plan-map.md) and its
   children [1](./question-vs-plan-1-baked-call-edges-ignore-rules-edits.md),
@@ -173,4 +173,4 @@ added in both directions:
 | --- | --- |
 | the thesis verdict, and the accident/legitimate/temporary classification | verified against read code |
 | line-count estimates on child 2 | approximate, read from ranges |
-| the extra `echoactor …Inbox` row's attribution, intrinsic-only versus hazard-only | UNSETTLED; the procedure is on [cli-web-parity-2](./cli-web-parity-2-impact-behavioral-count.md) |
+| the extra `echoactor …Inbox` row's attribution, intrinsic-only versus hazard-only | UNSETTLED; the procedure is on [impact-extra-row-attribution](./impact-extra-row-attribution.md) |

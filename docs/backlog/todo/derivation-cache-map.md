@@ -1,6 +1,6 @@
 # Caching and live derivation — wayfinder
 
-**Status:** wayfinder map · 6 children, none started · **Opened:** 2026-09-02, consolidating five open cards ·
+**Status:** wayfinder map · 6 children, child 4 retired as already fixed and five remain · **Opened:** 2026-09-02 ·
 **Family:** performance / query cache / live index
 
 ## Shared root cause

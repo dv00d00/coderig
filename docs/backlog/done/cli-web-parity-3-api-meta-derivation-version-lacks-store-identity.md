@@ -5,6 +5,10 @@ signal; the CLI is unaffected so the two surfaces disagree on the same store) ·
 patch audit, during the [live-background-index](../done/live-background-index.md) spike pool) ·
 **Family:** web / cache-invalidation
 
+**Terminal note — 2026-09-03:** shipped in `b59b6aba`. `/api/meta` now resolves the selected store first and
+folds that store's `QueryCacheKeys.StoreKey` into `derivationVersion`, so a same-commit reindex invalidates
+IndexedDB just as it invalidates the server disk cache.
+
 ## The bug
 
 The web client keys its IndexedDB cache on `derivationVersion` from `/api/meta`. That value is computed
@@ -37,7 +41,7 @@ impact — forever, with no staleness signal.**
 - The **server** side is correctly hedged: every disk cache key folds in `QueryCacheKeys.StoreKey` (rig.db
   size + mtime), so `rig` on the CLI returns fresh results from the same store. Only the browser is stale, so
   the two surfaces silently disagree — the exact failure class as
-  [web-api-seed-and-effect-disclosure-parity](cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md).
+  [web-api-seed-and-effect-disclosure-parity](../todo/cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md).
 - It is hit by an ordinary workflow: re-index a commit after an extraction fix (which is precisely when the
   facts you care about changed) and the web view keeps the old answer.
 - CLAUDE.md's cache section documents store identity as one of the three load-bearing axes. The client is
@@ -67,7 +71,7 @@ actually read, not unconditionally the LATEST one.
 - Blocks nothing in [live-background-index](../done/live-background-index.md), but a live/mutable store
   makes this permanent rather than occasional, so it should land before any resident-index work ships to the
   web surface.
-- [CLI/web collapse onto one engine per question](./cli-web-collapse-map.md) — relates only. That family
+- [CLI/web collapse onto one engine per question](../todo/cli-web-collapse-map.md) — relates only. That family
   collapses duplicated compute; this is a client-cache axis and survives it untouched. One overlap: the
   collapse family's child 1 is the only slice that edits `RigApiEndpoints.cs`, which is where
   `DerivationVersion` lives.

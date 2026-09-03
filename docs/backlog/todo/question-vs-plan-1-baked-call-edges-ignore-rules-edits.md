@@ -73,7 +73,7 @@ it* above). What is not chosen is the shape:
 
 ## Related
 
-- Third instance of the same family in two days: [`/api/meta` derivationVersion](cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md)
+- Third instance of the same family in two days: [`/api/meta` derivationVersion](../done/cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md)
   (client vs server) and [bounded reach inputs dropping `EnclosingScopes`](../done/bounded-reach-inputs-drop-enclosing-scopes-shipped.md)
   (bounded vs whole-store). Each is "two surfaces, one store, different answers"; the common cause is a
   derivation input that one path folds in and another does not.

@@ -7,7 +7,7 @@
 "D1's mechanism — resolved" below for the measurement that withdrew it.
 
 Shared rationale, inventory and the three renderer rules are on
-[the wayfinder map](./cli-web-collapse-map.md). This card carries scope, ownership, verification and status only.
+[the wayfinder map](../todo/cli-web-collapse-map.md). This card carries scope, ownership, verification and status only.
 
 ## Scope
 
@@ -61,7 +61,7 @@ intent always said should happen.
 
 **This changes a number on the wire.** `impact_summary behavioral_eps` will differ under `--intrinsic` from
 what it prints today, so the verification below must capture the new value deliberately rather than assert
-byte-identical output the way [child 2](./cli-web-collapse-2-callers-engine.md) could. Under the DEFAULT
+byte-identical output the way [child 2](../todo/cli-web-collapse-2-callers-engine.md) could. Under the DEFAULT
 filter the two counts already agree, so the default-filter output is expected to stay unchanged — that part
 is still a byte-identical check, and a diff there means the collapse changed something it should not have.
 
@@ -176,8 +176,8 @@ byte identity re-checked against a baseline captured BEFORE dispatch, and the D4
 
 **Not done, each now its own card:**
 
-- [The impact location memo trades a cold fast path for the warm hit](./impact-location-memo-cold-cost.md)
-- [Two web surfaces still call `perEp.length` "behavioral"](./web-impact-mislabels-per-ep-count-as-behavioral.md)
+- [The impact location memo trades a cold fast path for the warm hit](../todo/impact-location-memo-cold-cost.md)
+- [Two web surfaces still call `perEp.length` "behavioral"](../todo/web-impact-mislabels-per-ep-count-as-behavioral.md)
 
 The four selection statics (`FilterPerEpEffects`, `EffectChangedEpCount`, `ClassifyStructuralCause`,
 `FilterGuardConditions`) remain `internal` rather than private: four existing test classes call them

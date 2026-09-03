@@ -50,5 +50,5 @@ than a heuristic — which would be the honest fix, with the name/path heuristic
 
 ## Related
 
-Surfaced by [live-index-serves-confident-answers-from-a-broken-compilation](live-index-serves-confident-answers-from-a-broken-compilation.md)'s
+Surfaced by [live-index-serves-confident-answers-from-a-broken-compilation](../done/live-index-serves-confident-answers-from-a-broken-compilation-shipped.md)'s
 calibration: the disclosure's healthy-tree noise floor is partly this leak rather than real compile breakage.

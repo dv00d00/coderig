@@ -1,9 +1,8 @@
 # Web source navigation — go-to-declaration, find-usages and tree-from-any-symbol over rendered source
 
 **Status:** todo · **Found:** 2026-09-02, auditing what the web surface can already answer · **Family:** web / navigation
-**Triage:** needs-info (the ambiguity-picker UX is undecided; everything else is in place)
-**Blocked by:** [call-site-facts-no-column-same-line-calls-collapse](./call-site-facts-no-column-same-line-calls-collapse.md)
-— for the **exact-column** option only. The agreed line+token approach below is not blocked by it.
+**Triage:** needs-info (column facts shipped; the ambiguity-picker and exact-column interaction are undecided)
+**Depends on shipped substrate:** [call-site column facts](../done/call-site-facts-no-column-same-line-calls-collapse.md).
 
 ## The ask
 
@@ -17,9 +16,10 @@ usages, or open a tree rooted at it.
   not a graph walk.
 - `/api/tree?from=` is now disk-cached, so **tree-from-any-symbol** is already affordable.
 - Full-file source rendering shipped 2026-09-02 (`GET /api/review-source`, revision-native, Git-blob exact) —
-  see [web-review-effect-gutter-and-delta](../progress/web-review-effect-gutter-and-delta.md).
+  see [web-review-effect-gutter-and-delta](../done/web-review-effect-gutter-and-delta.md).
 
-The missing piece is **resolving which symbol was clicked**, because `reference_facts` has **no `Column`**.
+Store schema v8 now records the reference column. The remaining product question is how exact-column
+resolution and the ambiguity picker compose when source/token coordinates are stale or incomplete.
 
 ## Agreed approach
 
@@ -38,11 +38,9 @@ choice is remembered (if at all). That is the reason this card is `needs-info` r
 
 ## The exact-column option, and why it is not the plan
 
-Recording a column on call-site facts would make click resolution exact and would also fix same-line call
-collapse — see
-[call-site-facts-no-column-same-line-calls-collapse](./call-site-facts-no-column-same-line-calls-collapse.md).
-It is a write-side change and implies a re-index, so it is the better long-term answer and the worse next
-step.
+Recording a column on call-site facts was the long-term answer and shipped in store schema v8 — see
+[call-site column facts](../done/call-site-facts-no-column-same-line-calls-collapse.md). Decide whether an exact
+column match bypasses the picker or merely ranks its candidates; either way, ambiguity must still fail closed.
 
 ## What counts as finishing
 

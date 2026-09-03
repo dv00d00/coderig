@@ -4,6 +4,10 @@
 filter and returns the identical payload) · **Found:** 2026-09-02, CLI-vs-web audit · **Family:** web / disclosure-parity
 **Triage:** ready-for-agent
 
+**Terminal note — 2026-09-03:** shipped in `b59b6aba`. Both controls and their false refetch path are gone;
+the real server/cache-axis question remains on
+[CLI/web parity child 1](../todo/cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md).
+
 ## The defect, with anchors
 
 - Both segmented controls are labelled **"CHANGES THE QUERY, refetches"** —
@@ -31,7 +35,7 @@ how this survived an audit; leaving it in place invites the next reader to trust
 
 This card owns the **stopgap only**. The real fix — a cache-key axis for `intrinsic`/`async` on the
 file-effects projection, which the endpoint's own comment anticipates — stays as §7 of
-[cli-web-parity-1](./cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md), and it shares the
+[cli-web-parity-1](../todo/cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md), and it shares the
 toggle-versus-cache-key answer that card's §2 fork needs. Do not build the axis here.
 
 ## Acceptance

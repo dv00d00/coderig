@@ -87,5 +87,5 @@ Rejected alternatives (revisit only if the editor proves O1 wrong):
 ## Out of scope
 
 - Mining columns so two calls on one line can be told apart — separate card
-  ([call-site facts carry no column](../todo/call-site-facts-no-column-same-line-calls-collapse.md)).
+  ([call-site column facts](./call-site-facts-no-column-same-line-calls-collapse.md)).
 - The lambda-owner gap (effects inside lambdas absent from the file model) — separate card.

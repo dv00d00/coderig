@@ -2,6 +2,8 @@
 
 **Status:** todo · **Family:** web review / diff navigation
 **Triage:** ready-for-agent
+**Extracted from:** [the shipped Web Review delivery record](../done/web-review-effect-gutter-and-delta.md),
+2026-09-03. Full-file reading shipped separately and does not replace ranged expansion inside the diff.
 
 ## Problem
 

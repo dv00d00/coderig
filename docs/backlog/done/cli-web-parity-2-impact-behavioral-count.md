@@ -3,6 +3,11 @@
 **Status:** todo
 **Source:** demo prep, 2026-07-31
 
+**Terminal note — 2026-09-03:** the count divergence shipped as part of
+[CLI/web collapse child 1](./cli-web-collapse-1-impact-selection-into-the-engine.md) in `cacb5d92`.
+The unavailable historical row's attribution was split into
+[impact-extra-row-attribution](../todo/impact-extra-row-attribution.md).
+
 ### Repro
 
 ```powershell
@@ -79,6 +84,6 @@ make this class of bug testable.
 - **ABSORBED BY** [Impact selection moves into the engine as one view](../done/cli-web-collapse-1-impact-selection-into-the-engine.md)
   — this card's root cause IS that card's optional-statics problem, and the fix lands there as one
   `ImpactEngine.Select` consumed by every surface. Family rationale on
-  [the CLI/web collapse map](./cli-web-collapse-map.md). What stays here: the attribution of the extra
+  [the CLI/web collapse map](../todo/cli-web-collapse-map.md). What stays here: the attribution of the extra
   `echoactor MedDBase.Pathways.Processes.Admin.Catalogues.Inbox` row, intrinsic-only versus hazard-only, which
   is still unsettled, along with the procedure for settling it on a live store pair.

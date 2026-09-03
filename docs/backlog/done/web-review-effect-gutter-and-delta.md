@@ -13,6 +13,12 @@ collapsed onto service-credits-overrides), 2026-09-02. Six reader complaints fro
 independent design consultations. Every code claim below was verified against the source at the time of
 writing; line numbers are `src/Rig.Cli/WebClient/src/file-diff.{tsx,css}` unless stated.
 
+**Terminal note — 2026-09-03:** the shipped review surface is now a terminal delivery record. Its independent
+remainders were split into [findings delta](../todo/web-review-findings-delta.md),
+[path-compressed file-tree rollups](../todo/web-review-path-compressed-file-tree.md),
+[ranged context expansion](../todo/web-review-expand-context.md), and
+[File-view progressive painting](../todo/web-file-effects-paint-before-findings.md).
+
 ### What the reader actually hit
 
 `AppointmentBookingBase.cs` in that MR carries 175 base-side and 180 head-side marks — 294

@@ -2,6 +2,12 @@
 
 **Status:** todo · **Found:** 2026-08-31 · **Family:** extraction / graph model
 
+**Terminal note — 2026-09-03:** L1 and L2 shipped (`50827d03`, `213221d3`). External rule-relevant and
+non-framework call targets now enter the query-side graph as leaves without a reindex. The independent
+external-interface dispatch gap was split into
+[external-interface-dispatch-targets](../todo/external-interface-dispatch-targets.md); first-party binary
+decompilation remains in `needs-review`.
+
 ## What happens
 
 An effect observed at a call into a referenced assembly — for example `DbConnection.BeginTransactionAsync`,

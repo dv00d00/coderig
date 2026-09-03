@@ -2,6 +2,10 @@
 
 **Status:** todo · **Found:** 2026-08-31, during the Rider plugin backend spike · **Family:** extraction / Rider integration
 
+**Terminal note — 2026-09-03:** shipped in `b59b6aba` with store schema v8. Call-site facts now carry column
+coordinates; the renderer follow-on remains
+[`tree --full` exact leaf suppression](../todo/tree-full-suppresses-call-leaves-sharing-a-line-with-an-effect.md).
+
 ## What happens
 
 Extraction mines a call edge down to a **line**, not a column, so `Use(Read(), Fetch())` — two different
@@ -35,8 +39,7 @@ schema bump before any warm store reflects it).
 
 ## Related
 
-- [`tree --full` suppresses a distinct call leaf sharing a line with an effect](./tree-full-suppresses-call-leaves-sharing-a-line-with-an-effect.md)
+- [`tree --full` suppresses a distinct call leaf sharing a line with an effect](../todo/tree-full-suppresses-call-leaves-sharing-a-line-with-an-effect.md)
   — a second surface with the same root cause, blocked on this card. `TreeCommand.cs:693,707,708` key
   suppression and dedup on `(Enclosing, Line)` and `(Enclosing, Target, Line)`; both keys widen to include the
   column once it exists.
-

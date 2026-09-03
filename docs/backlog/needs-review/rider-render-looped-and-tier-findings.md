@@ -25,7 +25,7 @@ The web review surface already settled this presentation problem at density: a f
 versus reached as filled versus hollow, dispatch uncertainty retained, loop amplification as a lower edge,
 and tier-2 findings worded as *an effect inside iteration* while tier-3 findings are worded as *downstream
 reach from an iterating call* — **candidate wording, never a claim of runtime N+1, query count or polynomial
-degree**. See [web-review-effect-gutter-and-delta](../progress/web-review-effect-gutter-and-delta.md).
+degree**. See [web-review-effect-gutter-and-delta](../done/web-review-effect-gutter-and-delta.md).
 
 Also carried from that work: CodeRig's own rules do not enable tier 3, so a store can legitimately answer
 `crossMethodAvailable: false`. The editor must render that as "not enabled", not as "none found".

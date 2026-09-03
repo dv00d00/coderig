@@ -2,8 +2,7 @@
 
 **Status:** todo · **Family:** file lens / explanation
 **Triage:** ready-for-agent
-**Blocked by:** [the method-row join fix](./file-lens-grain-1-emits-a-marked-line-with-no-owning-method-row.md)
-— a witness is requested against a badge snapshot, so the read model it explains has to be stable first.
+**Depends on shipped substrate:** [the method-row join fix](../done/file-lens-grain-1-emits-a-marked-line-with-no-owning-method-row.md).
 
 ## Problem
 

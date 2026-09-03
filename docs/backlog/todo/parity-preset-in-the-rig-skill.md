@@ -27,8 +27,8 @@ writes `AuditLog`; `PrintLetter` checks `CanViewDocuments`, which `SaveLetter` s
 
 ## Where it goes
 
-The canonical skill is **in this repo** at `.claude/skills/rig/` (`SKILL.md` + `REFERENCE.md`). Edit the
-repo copy; the installed copy at `~/.claude/skills/rig/` is disposable and is refreshed by a CLI copy that
+The canonical skill is **in this repo** at `.agents/skills/rig/` (`SKILL.md` + `REFERENCE.md`). Edit the
+repo copy; the installed copy at `~/.codex/skills/rig/` is disposable and is refreshed by a CLI copy that
 deletes the destination first. Never hand-edit the installed copy.
 
 ## What counts as finishing

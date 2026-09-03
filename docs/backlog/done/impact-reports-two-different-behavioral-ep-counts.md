@@ -64,7 +64,7 @@ Either way, one selection helper computes the count and both the header and the 
   — the slice that has to consume whichever definition wins here, across three surfaces. Its recommendation,
   recorded as a recommendation: `Select` keeps EPs with any hazard, amplification or guard delta in `PerEp` and
   reports `BehavioralEpCount` separately, which is O2 above. The decision stays on this card. Family rationale
-  on [the CLI/web collapse map](./cli-web-collapse-map.md).
+  on [the CLI/web collapse map](../todo/cli-web-collapse-map.md).
 
 ## Resolved 2026-09-03 — O2, implemented and verified
 

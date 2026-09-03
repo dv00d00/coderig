@@ -26,7 +26,7 @@ RabbitMQ 0 · MediatR 0 · Elasticsearch 0 · Nest. 0 · Azure.Search 0 · Searc
 
 Structurally unreachable, so a reader shown `6/8` is being told the site sits at 75% of a ceiling it can
 never reach. (This also retires the `rig derive --only bus` / `--only search` follow-up proposed on
-[the severity card](./effect-severity-mark-compute-the-distribution-first.md) — the rule sets and the ref
+[the severity card](../todo/effect-severity-mark-compute-the-distribution-first.md) — the rule sets and the ref
 counts answer it outright.)
 
 ## The server already does this; the client ignores it
@@ -78,7 +78,7 @@ the choice is the product owner's:
   Needs a store read the legend does not currently do.
 - **let a repo's rules opt out of builtin families** — explicit and cheap, but someone maintains the list.
 
-Recorded on [the severity card](./effect-severity-mark-compute-the-distribution-first.md), which owns the
+Recorded on [the severity card](../todo/effect-severity-mark-compute-the-distribution-first.md), which owns the
 mark and cannot ship until this is answered.
 
 ## Acceptance

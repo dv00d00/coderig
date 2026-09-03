@@ -37,7 +37,7 @@ effectively empty. The `0` is not "nothing calls this method". It is "there was 
 1. **No failed-compilation disclosure.** The boot proceeds, the status line claims all projects reconciled, and
    every subsequent answer is served as though the facts were sound. This is the disclosure work specced in
    `docs/spikes/failed-compilation-disclosure-spec.md` and filed as
-   [failed-compilation-disclosure](failed-compilation-disclosure.md) — it was approved and never implemented.
+   [failed-compilation-disclosure](../todo/failed-compilation-disclosure.md) — it was approved and never implemented.
    **This run is the argument for doing it before any further query-surface work:** every live answer on a tree
    that does not build is currently untrustworthy and silent about it.
 2. **Error output is uncapped and unrouted.** 2,387,334 lines / **528 MB** written to raw stdout
@@ -69,12 +69,12 @@ health belongs in the same line.
 
 ## Related
 
-- [failed-compilation-disclosure](failed-compilation-disclosure.md) — the design; this item is the real-data
+- [failed-compilation-disclosure](../todo/failed-compilation-disclosure.md) — the design; this item is the real-data
   evidence and the resident-specific requirements.
 - The recurring family this program keeps hitting: a disclosure computed from an artefact of the query plan
   rather than from the answer ([intrinsic hint](intrinsic-hint-counted-before-reachability-filter.md),
-  [baked call_edges](question-vs-plan-1-baked-call-edges-ignore-rules-edits.md),
-  [path disclosures](question-vs-plan-2-path-disclosures-computed-off-the-loaded-subgraph.md)). This one is worse in kind: the
+  [baked call_edges](../todo/question-vs-plan-1-baked-call-edges-ignore-rules-edits.md),
+  [path disclosures](../todo/question-vs-plan-2-path-disclosures-computed-off-the-loaded-subgraph.md)). This one is worse in kind: the
   disclosure is not merely mis-scoped, it is absent while a health claim is made in its place.
 
 ## SHIPPED 2026-08-21 — commit `78581485`
@@ -117,6 +117,6 @@ identical evidence on both broken phases — and a clean-tree arm asserting NO d
 - The store-side half: `source_files`/`runs` columns, the per-line `~compile-error` chip joined on `FilePath`,
   `rig files --compile-errors`. Vocabulary is reserved, not spent. This slice gives COMPLETENESS (it fires for
   blind spots a chip cannot reach — a lost dispatch edge has no file to flag); the chip gives LOCALITY.
-- [`--exclude-tests` matches on project NAME only](test-project-exclusion-is-name-only-and-leaks.md), surfaced by
+- [`--exclude-tests` matches on project NAME only](../todo/test-project-exclusion-is-name-only-and-leaks.md), surfaced by
   this calibration.
 - Generated documents' diagnostics are still unobserved (spec row 7a).

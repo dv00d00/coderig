@@ -66,7 +66,7 @@ disclosed as dispatch-only, with no line carrying it because no markable call pr
 A method's badge families should be a subset of the union of (its own lines' families) ∪ (families reachable
 through calls the lens marks). Today nothing enforces that, and it is the cheap structural check that catches
 this whole class — the probe agents used it by hand to find both this and
-[the marked line with no owning method row](./file-lens-grain-1-emits-a-marked-line-with-no-owning-method-row.md).
+[the marked line with no owning method row](../done/file-lens-grain-1-emits-a-marked-line-with-no-owning-method-row.md).
 
 Add it as a read-model test over a synthetic graph AND as an optional `--strict` self-check on real files, so a
 future regression surfaces without a second audit.

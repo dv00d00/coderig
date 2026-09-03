@@ -4,6 +4,10 @@
 verified · **Found:** 2026-09-01 by a probe agent auditing `rig annotate` · **Family:** file lens (read model)
 **Triage:** ready-for-agent
 
+**Terminal note — 2026-09-03:** the reverse seed expansion and invariant coverage shipped in `b59b6aba`.
+The one remaining acceptance step is now its own human-run card:
+[verify the LocationsHandler case on the MedDBase store](../todo/file-lens-grain-1-real-store-verification.md).
+
 ## Outcome
 
 The projection now seeds isolated direct owners and derives a method-family row from every emitted call-site,

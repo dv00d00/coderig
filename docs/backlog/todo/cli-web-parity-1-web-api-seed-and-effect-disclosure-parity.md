@@ -47,7 +47,7 @@ itself filters render-side (`ImpactCommand.cs:238-252`), so no cache key on eith
 an input, and the response payload already carries `Provider`/`Operation` per effect row
 (`ImpactContracts.cs:10`). A filter that refetched would also make toggling intrinsics cost a full re-derive.
 The Impact slice of this decision is now its own `ready-for-agent` card —
-[impact-web-effect-filters-client-side](./impact-web-effect-filters-client-side.md). This section retains the
+[impact-web-effect-filters-client-side](../done/impact-web-effect-filters-client-side.md). This section retains the
 question for the OTHER endpoints (`/api/tree`, `/api/reaches`, `/api/path`, `/api/callers`, `/api/hotspots`),
 where `intrinsic` IS a server parameter folded into `EffectFilterSignature` and the cache-key constraint is
 real.
@@ -55,7 +55,7 @@ real.
 ### 2.1 `/api/impact` has no effect filter axis at all (added 2026-09-02; EXTRACTED 2026-09-02)
 
 **This section has moved to its own card:**
-[impact-web-effect-filters-client-side](./impact-web-effect-filters-client-side.md) (`ready-for-agent`). What
+[impact-web-effect-filters-client-side](../done/impact-web-effect-filters-client-side.md) (terminal). What
 follows is the original finding, kept for provenance; the card supersedes it, including its cache-key
 reasoning, which D1 replaced with a client-side filter.
 
@@ -133,7 +133,7 @@ to have worked.
 
 Agreed immediate action: **hide the toggles**. A control that lies is worse than a missing one, and hiding is
 minutes. That stopgap is now its own card —
-[hide-the-dead-file-lens-toggles](./hide-the-dead-file-lens-toggles.md), `ready-for-agent`, and it also owns
+[hide-the-dead-file-lens-toggles](../done/hide-the-dead-file-lens-toggles.md), and it also owns
 correcting the `filelens.js:254` comment. **This section keeps the real fix**: a cache-key axis for
 `intrinsic`/`async` on the file-effects projection, which the endpoint's own comment anticipates. It is the
 follow-on, and it shares the toggle-versus-cache-key answer #2 needs.

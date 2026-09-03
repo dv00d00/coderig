@@ -1,6 +1,6 @@
 # File-lens grain — wayfinder
 
-**Status:** wayfinder map · 6 children, none started · **Opened:** 2026-09-02, consolidating five open cards ·
+**Status:** wayfinder map · child 1 shipped; children 2-6 remain · **Opened:** 2026-09-02, consolidating five open cards ·
 **Family:** file lens (read model)
 
 ## Shared root cause
@@ -19,8 +19,9 @@ such a case. Fix the join first; everything downstream reads this read model.
 
 ## Children, in dependency order
 
-1. [Fix the method-row join](./file-lens-grain-1-emits-a-marked-line-with-no-owning-method-row.md) — a marked
-   line whose owning method has no method row. Reopened; the fallback reached the owner, not its callers.
+1. [Fix the method-row join](../done/file-lens-grain-1-emits-a-marked-line-with-no-owning-method-row.md) —
+   shipped in `b59b6aba`; the real MedDBase rerun is isolated on
+   [its verification card](./file-lens-grain-1-real-store-verification.md).
 2. [Widen to provider grain](./file-lens-grain-2-provider-grain.md) — `Provider` on the aggregate, family kept
    as grouping metadata, chunked so 66 providers fit a 64-label bitmask pass.
 3. [Assert the badge/line invariant](./file-lens-grain-3-method-badge-with-no-line-that-admits-it.md) — the
@@ -40,9 +41,8 @@ such a case. Fix the join first; everything downstream reads this read model.
   `~mono⟨…⟩` node, effects seed from a BASE id (`FileEffectReadModelIndex.cs:136-146`), and
   `ReachedByLabelledSeeds` (`FactPathFinder.cs:1228-1243`) seeds only the id it is given — so the reverse walk
   stops at depth 0 while the line still marks off `BaseOf` (`:546`, `:585`). Full evidence on child 1's card.
-- Reproduced on `LocationsHandler.cs`: 0 method rows beside 1 correct marked line. The isolated-owner fallback
-  now yields `GetList db:1`, but its two callers (`GetData`, `ValueToJson`) still have neither a method row nor
-  a line badge, at a real `d2` per `rig reaches`.
+- The original `LocationsHandler.cs` failure and its monomorphization cause are preserved on child 1's terminal
+  record. Synthetic reverse-seed and method/line invariants now pass; only the real-store rerun remains.
 - The mirror case is explained: after the dispatch-disclosure fix `ImageEdit.Save` reads `echo:2?`, disclosed as
   dispatch-only — no line carried it because no markable call proved it.
 - The invariant that caught both defects: a marked line's families are a subset of its owning method row's, and

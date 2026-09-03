@@ -7,6 +7,11 @@ control to remove it; the CLI has had the filter since 2026-07-27) · **Found:**
 **Decision:** D1, 2026-09-02 — match the CLI (intrinsics hidden by default, a toggle to restore), and apply
 the filter CLIENT-SIDE. See "Why client-side" below; it is the whole reason this card is specifiable.
 
+**Terminal note — 2026-09-03:** superseded in mechanism and shipped by
+[CLI/web collapse child 1](./cli-web-collapse-1-impact-selection-into-the-engine.md) in `cacb5d92`.
+The intent survived; selection moved server-side through the shared engine view rather than being reimplemented
+client-side.
+
 ## The gap
 
 `rig impact` gained `--only` / `--exclude` / `--intrinsic` / `--structural` on 2026-07-27
@@ -87,7 +92,7 @@ Add to the web Impact view, in the CLI's grammar and vocabulary:
 
 ## Provenance
 
-Section 2.1 of [cli-web-parity-1](./cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md), extracted
+Section 2.1 of [cli-web-parity-1](../todo/cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md), extracted
 2026-09-02 when D1 resolved the §2 fork. That card keeps §2's cross-endpoint intrinsic question and §7's
 file-effects cache-key axis; this one owns the Impact slice only.
 
@@ -98,4 +103,4 @@ file-effects cache-key axis; this one owns the Impact slice only.
   its option B applies the shared view server-side post-cache via `?only=&exclude=&intrinsic=` and is
   recommended there on the ground that A is a third implementation of the selection in JS. Option B reverses
   D1's mechanism while keeping D1's intent, so it is the product owner's call and that card is blocked on it.
-  Family rationale on [the CLI/web collapse map](./cli-web-collapse-map.md).
+  Family rationale on [the CLI/web collapse map](../todo/cli-web-collapse-map.md).

@@ -31,7 +31,7 @@ Recorded so the choice is made from the list rather than re-invented:
 - a **squiggly underline**;
 - an **exclamation mark in its own dedicated gutter lane** — the dull, clear option, and the one that does not
   compete with the existing eight-slot effect lane (see
-  [web-review-effect-gutter-and-delta](../progress/web-review-effect-gutter-and-delta.md), where the lane
+  [web-review-effect-gutter-and-delta](../done/web-review-effect-gutter-and-delta.md), where the lane
   geometry and its horizontal budget are already settled).
 
 Also open: whether the mark appears in one place or several — the effect lane, a separate gutter mark, and a
@@ -82,7 +82,7 @@ sets plus the ref counts answer it outright.
 **D2, 2026-09-03:** the family list is **config-defined and of arbitrary size** — no hardcoded eight
 anywhere, and anything outside the declared set renders in its own `other` lane rather than being promoted to
 a pseudo-family. That decision and its scope live on
-[family-list-comes-from-rules-not-a-client-hardcode](./family-list-comes-from-rules-not-a-client-hardcode.md),
+[family-list-comes-from-rules-not-a-client-hardcode](../done/family-list-comes-from-rules-not-a-client-hardcode.md),
 which also records that the web client currently hand-copies the list (`filelens.js:33-42`) even though
 `/api/providers` already serves it.
 

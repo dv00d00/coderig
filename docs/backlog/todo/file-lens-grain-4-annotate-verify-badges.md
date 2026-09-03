@@ -5,9 +5,8 @@
 **Family:** CLI / reachability verification
 
 **Depends on:** [the documented file-lens depth convention](../done/file-lens-method-depth-disagrees-with-reaches.md).
-**Blocked by:** [the method-row join fix](./file-lens-grain-1-emits-a-marked-line-with-no-owning-method-row.md)
-— family-membership parity is the minimum contract here, and it cannot be asserted while a rendered method
-can be missing its row entirely.
+**Depends on shipped substrate:** [the method-row join fix](../done/file-lens-grain-1-emits-a-marked-line-with-no-owning-method-row.md).
+The design decision below, rather than that implementation, is now the blocker.
 
 ## Problem
 

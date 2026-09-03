@@ -46,7 +46,7 @@ from the answer, or from whatever the loader happened to hand us?*
 
 ## Same family, filed elsewhere
 
-- [`/api/meta` `derivationVersion` lacks store identity](./cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md)
+- [`/api/meta` `derivationVersion` lacked store identity](../done/cli-web-parity-3-api-meta-derivation-version-lacks-store-identity.md)
   — a fourth instance (client cache versus server cache); it lives under the CLI/web parity wayfinder for
   audience reasons, since the reader who hits it is a web user.
 - [The `--intrinsic` hint counted before the reachability filter](../done/intrinsic-hint-counted-before-reachability-filter.md)

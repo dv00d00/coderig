@@ -1,11 +1,11 @@
 # Next chunk — the entry point for the next session
 
-**Status:** wayfinder map · 5 items, in order; items 1 and 2 are closed, so item 3 is next · **Opened:**
+**Status:** wayfinder map · 5 items, in order; items 1-3 are closed, while items 4-5 are decision-gated · **Opened:**
 2026-09-02 from the day's audits · **Family:** wayfinding
 
 Every item below is a VERIFIED finding with its anchors carried, not a proposal. This is a map, not a second
 index: each item is a normal card and the directory listing is still the index. No `**Triage:**` line —
-items 3-5 still carry product decisions.
+items 4-5 still carry product decisions.
 
 ## Decide first
 
@@ -13,8 +13,8 @@ Each open decision lives on the TICKET it gates, with its options and their cost
 short block naming what is settled and what is only recommended. Resolve them there, not here.
 
 1. ~~CLI/web parity — child 1's §2 fork.~~ **DECIDED 2026-09-02 (D1): match the CLI — intrinsics hidden by
-   default, and the filter applied CLIENT-SIDE.** The Impact slice is now its own `ready-for-agent` card,
-   [impact-web-effect-filters-client-side](./impact-web-effect-filters-client-side.md). The same question for
+   default.** The original client-side mechanism was superseded by the shared server-side view and shipped in
+   [the terminal Impact filter record](../done/impact-web-effect-filters-client-side.md). The same question for
    the five endpoints where `intrinsic` IS a server parameter stays open in §2 of
    [cli-web-parity-1](./cli-web-parity-1-web-api-seed-and-effect-disclosure-parity.md).
 2. ~~[Caching and live derivation](./derivation-cache-map.md) — ordering and subsumption.~~ **RESOLVED
@@ -41,21 +41,20 @@ short block naming what is settled and what is only recommended. Resolve them th
    [`done/`](../done/derivation-cache-1-ep-derivation-uncached-outside-callers.md). All four EP-record call
    sites (`CallersCommand.cs:581`, `CallersQueryService.cs:200`, `EntryPointService.cs:32`,
    `EntryPointsCommand.cs:71`) already route through `LoadOrDeriveEntryPointRecordsAsync`. The card's
-   3.5-4.9s per call was not re-measured, so the win is inferred, not observed. **The next actionable item in
-   this chunk is item 3.**
-3. **[Web Impact effect filters, client-side](./impact-web-effect-filters-client-side.md)** — *why third:*
+   3.5-4.9s per call was not re-measured, so the win is inferred, not observed.
+3. ~~**[Web Impact effect filters](../done/impact-web-effect-filters-client-side.md)**~~ — **DONE 2026-09-03**
+   through the shared server-side `ImpactEngine.Select` view in `cacb5d92`. *Why it was third:*
    intrinsics are **91.3% of all effects** (243,391 `alloc` + 79,508 `throw` against ~30,619 for the other 49
    providers), so the web Impact view shows roughly 9% signal on a large merge request. D1 resolved the §2
-   fork on 2026-09-02 — match the CLI, filter client-side — and the card is now `ready-for-agent`.
+   fork on 2026-09-02 — match the CLI. D1's client-side mechanism was withdrawn after measuring the warm
+   server path; the terminal record carries that decision.
 4. **[Compute the effect-severity distribution](./effect-severity-mark-compute-the-distribution-first.md)** —
-   *why fourth:* already decided — measure the family-breadth distribution across the real store before
-   choosing a mark or a threshold. The measurement IS the work; the rendering choice follows it.
+   *why fourth:* the distribution is now measured; the remaining decision is the denominator —
+   declared-and-present families, explicit builtin opt-outs, or rejecting family breadth as incomplete for
+   the 25 unmapped providers. No rendering lands before that choice.
 5. **[Web source navigation](./web-source-navigation.md)** — *why last:* the biggest capability step and the
-   only one with an open UX question. `symbol_facts` has `SymbolId`/`FilePath`/`Line`, `reference_facts` is
-   indexed on `TargetSymbolId` (2.44M rows) and `/api/tree?from=` is disk-cached, so everything exists
-   EXCEPT resolving which symbol was clicked — `reference_facts` has no `Column`. Agreed approach: line +
-   token-text match with a line-picker fallback when ambiguous, never the match alone. Rider's PSI-reference
-   fallback (`RigEffectDaemonStage.cs:193,217-227`) does not port; there is no semantic model in the browser.
+   only one with an open UX question. Column facts now exist in store v8, but the ambiguity-picker interaction
+   remains undecided; the card must be resolved before implementation.
 
 ## Not in this chunk, and why
 
