@@ -63,7 +63,14 @@ internal static class EntryPointContext
     )> DeriveEntryPointsAsync(RigDbContext context, FactEntryPointDeriver.FactEntryPointData epData, RuleSet rules)
     {
         var derived = FactEntryPointDeriver.Derive(epData, rules.EntryPoints, rules.ClassInheritance);
-        var classifiedHandoffs = (await Reads.DeriveHandoffEntryPointsAsync(context, int.MaxValue, rules.Handoff))
+        var classifiedHandoffs = (
+            await Reads.DeriveHandoffEntryPointsAsync(
+                context,
+                int.MaxValue,
+                rules.Handoff,
+                expectedRulesFingerprint: rules.EffectiveFingerprint
+            )
+        )
             .Where(h => h.Dispatcher is not null)
             .ToList();
         var promoted = PromoteHandoffOrigins(classifiedHandoffs, derived);

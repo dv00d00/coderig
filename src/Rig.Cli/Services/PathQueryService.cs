@@ -60,7 +60,7 @@ public static class PathQueryService
     {
         var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules ?? [], loadedPaths: out _);
         // --raw parity: zero the graph-shaping rules so the search runs over the exact unfiltered graph.
-        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [], MaterializedGraphCompatible = false } : rules;
 
         await using var context = await OpenReadContextGatedAsync(
             new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)

@@ -10,6 +10,7 @@ namespace Rig.Storage.Queries;
 // system: these helpers only STAMP and READ a version — an old store is re-indexed, never transformed.
 //
 //   meta(id=0, index_schema_version, graph_schema_version)
+//   graph_build_meta(id=0, rules_fingerprint)
 //
 // graph_schema_version NULL = no/stale graph (a --no-graph index, a pre-graph store, or a post-append
 // store whose graph the append left stale). NULL vs SchemaVersion.Graph IS the "current stage" indicator
@@ -21,6 +22,13 @@ internal static class SchemaMeta
           id                   INTEGER PRIMARY KEY CHECK (id = 0),
           index_schema_version INTEGER NOT NULL,
           graph_schema_version INTEGER
+        );
+        """;
+
+    private const string CreateGraphBuildMetaSql = """
+        CREATE TABLE IF NOT EXISTS graph_build_meta (
+          id                INTEGER PRIMARY KEY CHECK (id = 0),
+          rules_fingerprint TEXT NOT NULL
         );
         """;
 
@@ -44,10 +52,21 @@ internal static class SchemaMeta
     // runs over an indexed store). Leaves index_schema_version untouched. Upserts the id=0 row defensively
     // (the index path stamps it first, but BuildAsync re-graph over a legacy store may find no meta row;
     // in that case stamp the current index version too, since the graph build proves the store is current).
-    public static async Task WriteGraphVersionAsync(DbConnection connection, CancellationToken cancellationToken)
+    public static Task WriteGraphVersionAsync(DbConnection connection, CancellationToken cancellationToken) =>
+        WriteGraphVersionAsync(connection, rulesFingerprint: null, cancellationToken: cancellationToken);
+
+    public static async Task WriteGraphVersionAsync(DbConnection connection, string? rulesFingerprint, CancellationToken cancellationToken)
     {
         await EnsureTableAsync(connection, cancellationToken);
+        await using (var createFingerprint = connection.CreateCommand())
+        {
+            createFingerprint.CommandText = CreateGraphBuildMetaSql;
+            await createFingerprint.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO meta (id, index_schema_version, graph_schema_version)
             VALUES (0, $index, $graph)
@@ -56,6 +75,65 @@ internal static class SchemaMeta
         AddParam(command, "$index", SchemaVersion.Index);
         AddParam(command, "$graph", SchemaVersion.Graph);
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var fingerprint = connection.CreateCommand();
+        fingerprint.Transaction = transaction;
+        if (string.IsNullOrEmpty(rulesFingerprint))
+        {
+            fingerprint.CommandText = "DELETE FROM graph_build_meta WHERE id = 0;";
+        }
+        else
+        {
+            fingerprint.CommandText = """
+                INSERT INTO graph_build_meta (id, rules_fingerprint)
+                VALUES (0, $rules)
+                ON CONFLICT(id) DO UPDATE SET rules_fingerprint = $rules;
+                """;
+            AddParam(fingerprint, "$rules", rulesFingerprint);
+        }
+        await fingerprint.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    // Withdraw the published graph stamp before GraphMaterializer mutates any derived table. Version and
+    // fingerprint are cleared in one transaction, so a failed/partial rebuild can never leave readers
+    // trusting the previous stamp over newly-created or partially-populated tables.
+    public static async Task InvalidateGraphAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
+        await EnsureTableAsync(connection, cancellationToken);
+        await using (var createFingerprint = connection.CreateCommand())
+        {
+            createFingerprint.CommandText = CreateGraphBuildMetaSql;
+            await createFingerprint.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var version = connection.CreateCommand())
+        {
+            version.Transaction = transaction;
+            version.CommandText = "UPDATE meta SET graph_schema_version = NULL WHERE id = 0;";
+            await version.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var fingerprint = connection.CreateCommand())
+        {
+            fingerprint.Transaction = transaction;
+            fingerprint.CommandText = "DELETE FROM graph_build_meta WHERE id = 0;";
+            await fingerprint.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public static async Task<string?> ReadGraphRulesFingerprintAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
+        if (!await StorageProbes.TableExistsAsync(connection, "graph_build_meta", cancellationToken))
+        {
+            return null;
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT rules_fingerprint FROM graph_build_meta WHERE id = 0 LIMIT 1;";
+        return (string?)await command.ExecuteScalarAsync(cancellationToken);
     }
 
     // (index_schema_version, graph_schema_version) from the id=0 row, or (null, null) when meta is absent

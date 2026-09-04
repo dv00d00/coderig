@@ -89,17 +89,20 @@ internal static class TraversalGraphLoader
         IReadOnlyList<FactRedirectRule> redirectRules,
         // EXTERNAL-NODE ADMISSION policy, threaded to BOTH branches so the bounded SQL path and the EF
         // fallback admit the same external leaves (see ExternalNodeAdmission).
-        ExternalNodeAdmission? externalNodes = null
+        ExternalNodeAdmission? externalNodes = null,
+        string? expectedRulesFingerprint = null,
+        bool materializedGraphCompatible = true
     )
     {
         // F3: one stopwatch over whichever branch runs, recorded under a name that DISCLOSES the branch
         // (only when a TraversalLoadTiming scope is open — otherwise nothing is allocated).
         var watch = TraversalLoadTiming.IsActive ? Stopwatch.StartNew() : null;
 
-        // SQL path: call_edges already carry the persisted handoff classification (from `rig graph`),
-        // so the bounded graph is classified by construction. EF fallback: classify the loaded graph
-        // with the rules so the in-memory traversal sees the same handoff edges.
-        if (SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context))
+        // SQL path: call_edges already carry the persisted handoff/factory classification (from `rig graph`),
+        // so the bounded graph is classified by construction. A query projection that deliberately removed
+        // an edge-creating rule is not materialized-graph-compatible even with the same fingerprint. EF
+        // fallback classifies/shapes the loaded facts with the query's actual rules.
+        if (SqlFastPathEnabled && materializedGraphCompatible && await SqlReachability.HasGraphAsync(context, expectedRulesFingerprint))
         {
             var bounded = await SqlReachability.LoadBoundedGraphAsync(
                 context,
@@ -138,7 +141,9 @@ internal static class TraversalGraphLoader
             direction,
             rules.Handoff,
             rules.Redirect,
-            ExternalNodeAdmission.FromRules(rules)
+            ExternalNodeAdmission.FromRules(rules),
+            rules.EffectiveFingerprint,
+            rules.MaterializedGraphCompatible
         );
         // F3: the shaping half, timed apart from the load above (which records its own sub-phase) so
         // `--time` can attribute the wall to one or the other. Same reused-stopwatch idiom, same gate.
@@ -165,7 +170,10 @@ internal static class TraversalGraphLoader
         // `sql` so the recorded phase name discloses WHICH branch produced the number; the calls, their
         // arguments and their order are unchanged.
         var watch = TraversalLoadTiming.IsActive ? Stopwatch.StartNew() : null;
-        var sql = SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context);
+        var sql =
+            SqlFastPathEnabled
+            && rules.MaterializedGraphCompatible
+            && await SqlReachability.HasGraphAsync(context, rules.EffectiveFingerprint);
         var inputs = sql
             ? await SqlReachability.LoadReachInputsAsync(
                 context,

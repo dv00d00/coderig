@@ -287,7 +287,7 @@ internal static class LiveQueryRunner
         bool deploymentsConfigured
     )
     {
-        var shaped = options.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var shaped = options.Raw ? rules with { Factory = [], Cut = [], Context = [], MaterializedGraphCompatible = false } : rules;
         return BuildDemand(
             ExactForwardQueryKind.Path,
             options.FromPattern,
@@ -328,7 +328,7 @@ internal static class LiveQueryRunner
         bool deploymentsConfigured
     )
     {
-        var shaped = options.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var shaped = options.Raw ? rules with { Factory = [], Cut = [], Context = [], MaterializedGraphCompatible = false } : rules;
         var wholeDebt = deploymentsConfigured || string.Equals(options.View, "hazards", StringComparison.OrdinalIgnoreCase);
         return BuildDemand(
             ExactForwardQueryKind.Tree,

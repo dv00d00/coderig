@@ -1,10 +1,27 @@
 # A `handoffDispatchers` edit without a re-index changes `derive` but NOT `reaches`/`tree`/`path` — and can half-apply inside ONE command
 
-**Status:** todo · **Priority: HIGH** (same store, same rules, two different answers — and no signal to the user;
+**Status:** done · **Priority: HIGH** (same store, same rules, two different answers — and no signal to the user;
 the reach set itself moves, not just an annotation) · **Found:** 2026-08-21, while single-sourcing the fact
 projections ([live-background-index](../done/live-background-index.md)) · **Family:** cache-invalidation /
 query correctness
-**Triage:** needs-info — choose O1 fail-closed, O2 documented rematerialisation, or O3 both.
+**Triage:** shipped 2026-09-04 — O1 fail-closed: stamp the effective rules fingerprint at graph materialization
+and disable every baked-edge fast path on mismatch, falling back to current-rule fact derivation.
+
+## Resolution — 2026-09-04
+
+- `RuleSetLoader` fingerprints the exact bytes it deserialized; `rig index` and `rig graph` stamp that value
+  beside graph schema v2 only after the complete derived graph is built.
+- Rebuilds withdraw the old graph stamp before mutating any derived table. A failed or partial rebuild stays
+  unavailable instead of exposing new tables under the previous rules fingerprint.
+- Bounded traversal/effect inputs and the handoff-entry-point fast path require the current fingerprint.
+  A mismatch or legacy missing stamp falls back to fact derivation, so `derive` cannot half-apply two rule sets.
+- `--raw` tree/path/callers explicitly bypass a factory-rewritten materialized graph even when the underlying
+  rule-file fingerprint matches. Graph-independent FTS readers retain the schema-only availability check.
+- Regression coverage pins A→B handoff edits, failed rebuild invalidation, legacy stamps, `RIG_TRUST_GRAPH`,
+  raw factory parity, and loader fingerprint equivalence. Full `scripts/mini-ci.ps1 -FullTests` passed: 1,452
+  main tests, 83 shared integration tests (+1 known skip), all 18 independent classes, and 33 live tests.
+  MedDBase validation was unavailable on this Mac; the fixture exercises the same materialize→bounded/fallback
+  seam directly.
 
 ## The bug
 

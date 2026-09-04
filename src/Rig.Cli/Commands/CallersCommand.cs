@@ -168,7 +168,7 @@ internal static class CallersCommand
     // redirect remains load-bearing: it retains/rebinds an otherwise external convenience overload to the
     // first-party virtual hatch and was intentionally never part of raw's bypass.
     internal static RuleSet ShapeRules(Options opts, RuleSet rules) =>
-        opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        opts.Raw ? rules with { Factory = [], Cut = [], Context = [], MaterializedGraphCompatible = false } : rules;
 
     // The two mutually-exclusive flags plus their flag-less default, as the ONE lens value the engine takes.
     internal static CallersQueryService.CallersMode Lens(Options opts) =>

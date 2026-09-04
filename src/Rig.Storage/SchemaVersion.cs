@@ -38,5 +38,6 @@ public static class SchemaVersion
 
     // Bump when the GRAPH shape changes (call_edges / dispatch_edges / nodes / the symbol_fts /
     // ref_target_fts virtual tables — all built by GraphMaterializer).
-    public const int Graph = 1;
+    // v1->v2: stamp the effective rules fingerprint that shaped the materialized call graph.
+    public const int Graph = 2;
 }

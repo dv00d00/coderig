@@ -172,7 +172,8 @@ internal static class DeriveCommand
             context: context,
             limit: int.MaxValue,
             handoffRules: rules.Handoff,
-            graph: shapedGraph
+            graph: shapedGraph,
+            expectedRulesFingerprint: rules.EffectiveFingerprint
         );
         var classifiedHandoffs = handoffs.Where(h => h.Dispatcher is not null).ToList();
         var unclassifiedHandoffCount = handoffs.Count - classifiedHandoffs.Count;

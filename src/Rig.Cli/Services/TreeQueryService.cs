@@ -76,7 +76,7 @@ public static class TreeQueryService
             loadedPaths: out var loadedRulePaths
         );
         // --raw parity: zero the graph-shaping rules so the tree is the exact unfiltered structure.
-        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [], MaterializedGraphCompatible = false } : rules;
 
         // The web host is a STORE consumer: same schema-gated read-only open as before, now expressed as the
         // store arm of the fact-source seam so the shared compute below has exactly one implementation.

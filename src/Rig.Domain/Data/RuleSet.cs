@@ -15,6 +15,16 @@ namespace Rig.Domain.Data;
 // XmlDiFiles) are consumed by the index/extraction pass in their authoring form.
 public sealed record RuleSet
 {
+    // Content fingerprint of the effective rule cascade that produced this projection. Production rule
+    // loads always set it; hand-built RuleSet instances may leave it null, which deliberately disables
+    // the persisted-graph rules gate for tests and rule-independent callers.
+    public string? EffectiveFingerprint { get; init; }
+
+    // False when a query projection intentionally removes an EDGE-CREATING rule (currently --raw clearing
+    // Factory). The persisted call_edges graph was built with the full effective RuleSet and is therefore
+    // not an equivalent input even though its fingerprint still matches; store loaders must use facts.
+    public bool MaterializedGraphCompatible { get; init; } = true;
+
     public IReadOnlyList<FactHandoffRule> Handoff { get; init; } = [];
 
     // External-virtual-override-orphan redirects (docs/backlog.md): rewrite a call to an external convenience

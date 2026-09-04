@@ -34,6 +34,16 @@ public static class SqlReachability
         return await SchemaGate.GraphAvailableAsync(connection, cancellationToken);
     }
 
+    public static async Task<bool> HasGraphAsync(
+        RigDbContext context,
+        string? expectedRulesFingerprint,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        return await SchemaGate.GraphAvailableAsync(connection, expectedRulesFingerprint, cancellationToken);
+    }
+
     // The transitive set reachable from (Forward) / reaching (Reverse) the given seed symbols, over
     // call_edges ∪ dispatch_edges. Seeds are matched by EXACT SymbolId. The result INCLUDES the seeds
     // themselves (mirrors FactPathFinder.ReachableFromAll / the depth-0 start nodes). Cycles terminate

@@ -139,7 +139,7 @@ public static class CallersQueryService
         // rule-fingerprint axis instead of re-running the merge to re-discover the same files.
         var rules = RuleSetLoader.Load(workingDirectory, extraRules ?? [], loadedPaths: out var loadedRulePaths);
         // --raw parity: zero the graph-shaping rules so the reverse walk runs over the exact unfiltered graph.
-        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [], MaterializedGraphCompatible = false } : rules;
         await using var source = await StoreQueryFactSource.OpenAsync(
             new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
         );

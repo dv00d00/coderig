@@ -306,7 +306,7 @@ internal static class TreeCommand
             loadedPaths: out var loadedRulePaths
         );
         PrepareFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
-        var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [], MaterializedGraphCompatible = false } : rules;
         var renderRules = opts.Raw ? FactRenderRules.Empty : rules.Render;
 
         await using var source = await openSource();

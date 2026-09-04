@@ -68,7 +68,8 @@ internal static class IndexCommands
                         // The `redirectRules` section bakes external-virtual-override redirects into call_edges.
                         redirectRules: ruleSet.Redirect,
                         // ...and external-node admission bakes the admitted library/BCL leaf edges in.
-                        externalNodes: ExternalNodeAdmission.FromRules(ruleSet)
+                        externalNodes: ExternalNodeAdmission.FromRules(ruleSet),
+                        rulesFingerprint: ruleSet.EffectiveFingerprint
                     );
                     output.WriteLine(
                         $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
@@ -535,7 +536,8 @@ internal static class IndexCommands
             symbols: result.Symbols,
             references: result.References,
             // The `deliveryRules` section drives the publish→consumer delivery edges (data, not hardcoded).
-            deliveryRules: rules.Delivery
+            deliveryRules: rules.Delivery,
+            rulesFingerprint: rules.EffectiveFingerprint
         );
         output.WriteLine(
             $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "

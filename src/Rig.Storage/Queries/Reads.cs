@@ -1007,7 +1007,8 @@ public static class Reads
         int limit,
         IReadOnlyList<FactHandoffRule>? handoffRules = null,
         CancellationToken cancellationToken = default,
-        FactGraphData? graph = null
+        FactGraphData? graph = null,
+        string? expectedRulesFingerprint = null
     )
     {
         var rules = handoffRules ?? [];
@@ -1020,7 +1021,7 @@ public static class Reads
         // (~3.7s). call_edges.Kind is the SAME classification the rest of the SQL query path already trusts,
         // so this is equivalence-preserving; the classifier still attaches kind/requires from the passed
         // rules by HandoffDispatcher id.
-        if (await SchemaGate.GraphAvailableAsync(connection, cancellationToken))
+        if (await SchemaGate.GraphAvailableAsync(connection, expectedRulesFingerprint, cancellationToken))
         {
             var edges = new List<CallEdge>();
             await using var command = connection.CreateCommand();

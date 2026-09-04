@@ -12,8 +12,9 @@ namespace Rig.Storage.Queries;
 // reachability path traverses. Decoupled from indexing: it reads only facts already in the .rig
 // (reference_facts / type_relation_facts / symbol_facts, via Reads.LoadFactGraphAsync) and is fully
 // idempotent — rerun it any time (after a dispatch-logic change, a re-mine, or just to rebuild) with
-// NO Roslyn and NO rescan. The whole rebuild runs in one transaction, so a crash leaves the previous
-// derived tables (or none) intact; the facts are never touched.
+// NO Roslyn and NO rescan. Publication is fail-closed: the old graph stamp is withdrawn before the first
+// derived-table mutation and the new schema+rules stamp appears only after every phase succeeds. A crash can
+// leave partial derived tables, but readers treat them as unavailable and the facts are never touched.
 //
 // Why precompute: the graph queries (reaches/callers/tree/dead) otherwise load the entire 1.4M-row
 // reference set into process memory and rebuild the adjacency + synthetic dispatch edges on EVERY
@@ -40,7 +41,8 @@ public static class GraphMaterializer
         // EXTERNAL-NODE ADMISSION: bakes the admitted external leaf EDGES into call_edges, so the bounded
         // SQL reader sees the same graph the in-memory oracle computes. The MARKER is re-derived from the
         // facts on the bounded read (SqlReachability), since call_edges has no assembly column.
-        ExternalNodeAdmission? externalNodes = null
+        ExternalNodeAdmission? externalNodes = null,
+        string? rulesFingerprint = null
     )
     {
         progress?.Invoke("Loading facts");
@@ -55,7 +57,15 @@ public static class GraphMaterializer
             cancellationToken: cancellationToken,
             externalNodes: externalNodes
         );
-        return await BuildFromGraphAsync(context, graph, factoryRules, progress, cancellationToken, deliveryRules: deliveryRules);
+        return await BuildFromGraphAsync(
+            context,
+            graph,
+            factoryRules,
+            progress,
+            cancellationToken,
+            deliveryRules: deliveryRules,
+            rulesFingerprint: rulesFingerprint
+        );
     }
 
     // Materialize the derived tables from a graph ALREADY built in memory (FactGraphProjection.FromAnalysis at
@@ -77,7 +87,8 @@ public static class GraphMaterializer
         CancellationToken cancellationToken = default,
         IReadOnlyList<SymbolFact>? symbols = null,
         IReadOnlyList<ReferenceFact>? references = null,
-        IReadOnlyList<DeliveryRule>? deliveryRules = null
+        IReadOnlyList<DeliveryRule>? deliveryRules = null,
+        string? rulesFingerprint = null
     )
     {
         // Bake generic-factory monomorphization into the persisted edges — the SAME RewriteGenericFactories
@@ -111,6 +122,11 @@ public static class GraphMaterializer
         }
 
         await ApplyGraphPragmasAsync(connection, cancellationToken);
+
+        // Withdraw the old publication BEFORE EnsureSchema drops/recreates any derived table. A rebuild is
+        // not atomic across edges + nodes + FTS + ANALYZE; if any later phase fails, both schema-only and
+        // rules-sensitive readers must see graph-unavailable rather than an A stamp over partial B tables.
+        await SchemaMeta.InvalidateGraphAsync(connection, cancellationToken);
 
         await EnsureSchemaAsync(connection, cancellationToken);
 
@@ -156,7 +172,7 @@ public static class GraphMaterializer
         // store whose graph this build didn't (re)stamp reads as graph-absent and callers degrade. On a
         // re-graph over a legacy store with no meta row, WriteGraphVersionAsync also stamps the current
         // index version (the graph build proves the store is current-shaped).
-        await SchemaMeta.WriteGraphVersionAsync(connection, cancellationToken);
+        await SchemaMeta.WriteGraphVersionAsync(connection, rulesFingerprint, cancellationToken);
 
         return new GraphStats(CallEdges: callCount, DispatchEdges: dispatchCount, Nodes: nodeCount, HeuristicDispatchEdges: heuristicCount);
     }

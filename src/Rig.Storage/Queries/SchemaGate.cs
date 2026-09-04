@@ -73,7 +73,14 @@ public static class SchemaGate
     // available — a dev bypass to skip a regraph after a graph-shape bump. It NEVER bypasses the index gate
     // (a present graph version implies the index version was stamped) and has no effect when the graph is
     // absent (NULL).
-    public static async Task<bool> GraphAvailableAsync(DbConnection connection, CancellationToken cancellationToken = default)
+    public static Task<bool> GraphAvailableAsync(DbConnection connection, CancellationToken cancellationToken = default) =>
+        GraphAvailableAsync(connection, expectedRulesFingerprint: null, cancellationToken);
+
+    public static async Task<bool> GraphAvailableAsync(
+        DbConnection connection,
+        string? expectedRulesFingerprint,
+        CancellationToken cancellationToken = default
+    )
     {
         var (_, graph) = await SchemaMeta.ReadAsync(connection, cancellationToken);
         if (graph is null)
@@ -81,12 +88,22 @@ public static class SchemaGate
             return false;
         }
 
-        if (graph == SchemaVersion.Graph)
+        if (graph != SchemaVersion.Graph && !TrustGraphEnvSet())
+        {
+            return false;
+        }
+
+        // The dev escape hatch may bypass a graph-SHAPE mismatch, but never a rules mismatch: baked
+        // handoff/factory/delivery edges are query answers, so trusting them under different current rules
+        // would be a correctness bug. Legacy graphs have no fingerprint and therefore fail closed whenever
+        // a production RuleSet supplies an expected one.
+        if (expectedRulesFingerprint is null)
         {
             return true;
         }
 
-        return TrustGraphEnvSet();
+        var builtRulesFingerprint = await SchemaMeta.ReadGraphRulesFingerprintAsync(connection, cancellationToken);
+        return string.Equals(builtRulesFingerprint, expectedRulesFingerprint, StringComparison.Ordinal);
     }
 
     private static bool TrustGraphEnvSet()

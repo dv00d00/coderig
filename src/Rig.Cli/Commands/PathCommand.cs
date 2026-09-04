@@ -114,7 +114,7 @@ internal static class PathCommand
         // --raw bypasses all shaping (the exact unfiltered plumbing); else monomorphize factories + cut +
         // context-narrow, honoured symmetrically by the reverse/forward traversal.
         var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
-        var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [], MaterializedGraphCompatible = false } : rules;
 
         await using var source = await openSource();
         StoreAnswerDisclosure.WriteCompilationHealth();

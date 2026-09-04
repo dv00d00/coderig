@@ -10,6 +10,8 @@ namespace Rig.Analysis.Rules;
 // content — no need to re-implement the resolution.
 public static class RulesFingerprint
 {
+    internal sealed record FileSnapshot(string Path, byte[] Bytes);
+
     public static string Compute(string workingDirectory, IReadOnlyList<string>? extraRulesPaths = null)
     {
         var loadedPaths = RuleSetLoader.ResolveLoadedPaths(workingDirectory, extraRulesPaths);
@@ -34,6 +36,22 @@ public static class RulesFingerprint
             {
                 // A file that vanished mid-run just contributes its path; recompute is harmless.
             }
+            sha.AppendData([0]);
+        }
+        return Convert.ToHexString(sha.GetHashAndReset());
+    }
+
+    // Hash the exact bytes RuleSetLoader deserialized. This is deliberately separate from
+    // ComputeFromPaths: a load must not reopen a rules file after projection and accidentally stamp a
+    // fingerprint for bytes that did not produce the RuleSet.
+    internal static string ComputeFromSnapshots(IReadOnlyList<FileSnapshot> snapshots)
+    {
+        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var snapshot in snapshots.OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
+        {
+            sha.AppendData(Encoding.UTF8.GetBytes(snapshot.Path));
+            sha.AppendData([0]);
+            sha.AppendData(snapshot.Bytes);
             sha.AppendData([0]);
         }
         return Convert.ToHexString(sha.GetHashAndReset());

@@ -27,19 +27,19 @@ public static class RuleSetLoader
     // colocated rig.rules.json on top of the global (~/.rig) + built-in cascade; --rules paths append last.
     public static RuleSet Load(string workingDirectory, IReadOnlyList<string>? extraRules = null)
     {
-        var merged = LoadMergedDocument(Anchor(workingDirectory), extraRules, out _);
-        return Project(merged);
+        var merged = LoadMergedDocument(Anchor(workingDirectory), extraRules, out var snapshots);
+        return Project(merged, RulesFingerprint.ComputeFromSnapshots(snapshots));
     }
 
     // Load variant that ALSO surfaces the files the cascade resolved (built-in + global + local + extras), in
     // load order — the SAME list ResolveLoadedPaths returns. A caller needing both the projected RuleSet AND
-    // the fingerprint paths (e.g. `rig derive`) takes this overload to avoid a second cascade merge just to
-    // re-resolve the paths. Pass `loadedPaths` to RulesFingerprint.ComputeFromPaths.
+    // paths for an adjacent cache key (e.g. `rig derive`) takes this overload to avoid a second cascade merge.
+    // EffectiveFingerprint itself is already computed from the exact bytes deserialized during this load.
     public static RuleSet Load(string workingDirectory, IReadOnlyList<string>? extraRules, out IReadOnlyList<string> loadedPaths)
     {
-        var merged = LoadMergedDocument(Anchor(workingDirectory), extraRules, out var paths);
-        loadedPaths = paths;
-        return Project(merged);
+        var merged = LoadMergedDocument(Anchor(workingDirectory), extraRules, out var snapshots);
+        loadedPaths = snapshots.Select(snapshot => snapshot.Path).ToArray();
+        return Project(merged, RulesFingerprint.ComputeFromSnapshots(snapshots));
     }
 
     // Load rooted at a real solution/project path (rather than the working dir): the cascade keys rule
@@ -48,23 +48,24 @@ public static class RuleSetLoader
     // AnalysisRuleSet.LoadForSolution did.
     public static RuleSet LoadForSolution(string solutionPath, IReadOnlyList<string>? extraRules = null)
     {
-        var merged = LoadMergedDocument(solutionPath, extraRules, out _);
-        return Project(merged);
+        var merged = LoadMergedDocument(solutionPath, extraRules, out var snapshots);
+        return Project(merged, RulesFingerprint.ComputeFromSnapshots(snapshots));
     }
 
     // The files the cascade actually resolved (built-in + global + local + extras that exist), in load
     // order. RulesFingerprint hashes these by path + content for cache keys without paying the projection.
     public static IReadOnlyList<string> ResolveLoadedPaths(string workingDirectory, IReadOnlyList<string>? extraRules = null)
     {
-        _ = LoadMergedDocument(Anchor(workingDirectory), extraRules, out var loadedPaths);
-        return loadedPaths;
+        _ = LoadMergedDocument(Anchor(workingDirectory), extraRules, out var snapshots);
+        return snapshots.Select(snapshot => snapshot.Path).ToArray();
     }
 
     private static string Anchor(string workingDirectory) => Path.Combine(workingDirectory, "_factrules_.slnx");
 
-    private static RuleSet Project(AnalysisRulesDocument doc) =>
+    private static RuleSet Project(AnalysisRulesDocument doc, string effectiveFingerprint) =>
         new()
         {
+            EffectiveFingerprint = effectiveFingerprint,
             Handoff = FactHandoffRuleProvider.Project(doc),
             Redirect = FactRedirectRuleProvider.Project(doc),
             ExternalNodes = FactExternalNodeRuleProvider.Project(doc),
@@ -97,14 +98,14 @@ public static class RuleSetLoader
     private static AnalysisRulesDocument LoadMergedDocument(
         string anchorPath,
         IReadOnlyList<string>? extraRulesPaths,
-        out List<string> loadedPaths
+        out List<RulesFingerprint.FileSnapshot> loadedSnapshots
     )
     {
-        loadedPaths = [];
-        var merged = LoadBuiltIn(loadedPaths);
+        loadedSnapshots = [];
+        var merged = LoadBuiltIn(loadedSnapshots);
 
         var globalRulesPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".rig", "rig.rules.json");
-        merged = MergeWithFile(merged, globalRulesPath, loadedPaths);
+        merged = MergeWithFile(merged, globalRulesPath, loadedSnapshots);
 
         var solutionDirectory = Path.GetDirectoryName(anchorPath) ?? Directory.GetCurrentDirectory();
         var isProjectFile =
@@ -119,7 +120,7 @@ public static class RuleSetLoader
                 var candidate = Path.Combine(dir, "rig.rules.json");
                 if (File.Exists(candidate))
                 {
-                    merged = MergeWithFile(merged, candidate, loadedPaths);
+                    merged = MergeWithFile(merged, candidate, loadedSnapshots);
                     break;
                 }
                 dir = Path.GetDirectoryName(dir);
@@ -127,21 +128,21 @@ public static class RuleSetLoader
         }
         else
         {
-            merged = MergeWithFile(merged, Path.Combine(solutionDirectory, "rig.rules.json"), loadedPaths);
+            merged = MergeWithFile(merged, Path.Combine(solutionDirectory, "rig.rules.json"), loadedSnapshots);
         }
 
         if (extraRulesPaths is not null)
         {
             foreach (var path in extraRulesPaths)
             {
-                merged = MergeWithFile(merged, path, loadedPaths);
+                merged = MergeWithFile(merged, path, loadedSnapshots);
             }
         }
 
         return merged;
     }
 
-    private static AnalysisRulesDocument LoadBuiltIn(List<string> loadedPaths)
+    private static AnalysisRulesDocument LoadBuiltIn(List<RulesFingerprint.FileSnapshot> loadedSnapshots)
     {
         var candidates = new[]
         {
@@ -152,35 +153,49 @@ public static class RuleSetLoader
         var rulesPath =
             candidates.FirstOrDefault(File.Exists) ?? throw new InvalidOperationException("Could not find built-in analysis rules.");
 
-        using var stream = File.OpenRead(rulesPath);
-        var document =
-            JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions)
-            ?? throw new InvalidOperationException($"Built-in analysis rules are invalid: {rulesPath}");
+        var normalizedPath = Path.GetFullPath(rulesPath);
+        var bytes = File.ReadAllBytes(normalizedPath);
+        var document = Deserialize(bytes) ?? throw new InvalidOperationException($"Built-in analysis rules are invalid: {rulesPath}");
 
-        loadedPaths.Add(Path.GetFullPath(rulesPath));
+        loadedSnapshots.Add(new RulesFingerprint.FileSnapshot(normalizedPath, bytes));
         return document;
     }
 
     // Merge a single rules file into the accumulator. A missing file is a no-op; a path already loaded is
     // skipped (so a global path that equals the local one isn't double-counted), preserving the original
     // LoadedRulesPaths dedup.
-    private static AnalysisRulesDocument MergeWithFile(AnalysisRulesDocument acc, string rulesPath, List<string> loadedPaths)
+    private static AnalysisRulesDocument MergeWithFile(
+        AnalysisRulesDocument acc,
+        string rulesPath,
+        List<RulesFingerprint.FileSnapshot> loadedSnapshots
+    )
     {
         var normalizedPath = Path.GetFullPath(rulesPath);
-        if (!File.Exists(normalizedPath) || loadedPaths.Contains(normalizedPath, StringComparer.OrdinalIgnoreCase))
+        if (
+            !File.Exists(normalizedPath)
+            || loadedSnapshots.Any(snapshot => string.Equals(snapshot.Path, normalizedPath, StringComparison.OrdinalIgnoreCase))
+        )
         {
             return acc;
         }
 
-        using var stream = File.OpenRead(normalizedPath);
-        var document = JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions);
+        var bytes = File.ReadAllBytes(normalizedPath);
+        var document = Deserialize(bytes);
         if (document is null)
         {
             return acc;
         }
 
-        loadedPaths.Add(normalizedPath);
+        loadedSnapshots.Add(new RulesFingerprint.FileSnapshot(normalizedPath, bytes));
         return Merge(acc, document);
+    }
+
+    // Stream deserialization preserves System.Text.Json's UTF-8 BOM handling while still consuming the
+    // exact in-memory byte snapshot retained for the fingerprint (the file itself is never reopened).
+    private static AnalysisRulesDocument? Deserialize(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        return JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions);
     }
 
     // Fold `next` into `acc`: list sections concatenate, the emoji map is last-write-wins, and string
